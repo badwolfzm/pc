@@ -1,0 +1,24 @@
+name: Game probe G0
+
+on:
+  pull_request:
+    paths:
+      - 'tools/game-probe/**'
+      - '.github/workflows/game-probe-g0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  game-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Optimized freestanding core and host regression
+        run: make -C tools/game-probe clean test
+      - name: Sanitizer regression
+        run: |
+          make -C tools/game-probe clean
+          make -C tools/game-probe CFLAGS='-std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all' test

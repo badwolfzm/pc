@@ -38,6 +38,9 @@ const SLOT_PERSONALITY: usize = 1;
 const SLOT_REPLY: usize = 2;
 const SLOT_UNTYPED: usize = 3;
 const SRV_SLOT_REPLY0: usize = 4;
+/// Boot-time scratch slot for a freshly created endpoint's full-rights root;
+/// emptied again before the thread runs.
+const SLOT_SCRATCH: usize = 15;
 /// Untyped memory each program starts with. The loader charges the image,
 /// the stack, the IPC buffer and the four page-table frames against it
 /// before the thread runs; what is left is what the program may retype.
@@ -107,11 +110,7 @@ pub fn setup(k: &mut Kernel) {
     loader_checks(k);
 
     let mut boot = CSpace::new(16);
-    // Root of the personality endpoint: queue room for every client, native
-    // and Linux, and the server.
     let n_clients = APPS.len() + crate::linux::N_APPS;
-    let ep = k.caps.create_root(&mut boot, 0, warden_caps::ObjectKind::Endpoint, Rights::ALL, 0).expect("root");
-    k.endpoints.insert(ep.0, thread::Endpoint::with_capacity(n_clients + 1));
 
     let srv_img = loader::load(&mut k.frames, PERSONALITY).expect("personality server image");
     let mut srv_as = srv_img.aspace;
@@ -120,9 +119,27 @@ pub fn setup(k: &mut Kernel) {
     }
     let srv = k.spawn("personality server", srv_img.entry, STACK_TOP, 50, Death::Exited(0), srv_as);
     thread::root_endpoint(k, srv, SLOT_CONSOLE, Rights::WRITE, 1);
-    grant(k, &boot, 0, srv, SLOT_PERSONALITY, Rights::READ, 0);
     let srv_charge = loaded_bytes(srv_img.pages, 0);
     thread::root_cap(k, srv, SLOT_UNTYPED, warden_caps::ObjectKind::Untyped, Rights::ALL, PROGRAM_UNTYPED - srv_charge);
+    // The personality endpoint is the server's object: created from, and
+    // paid for by, the server's own untyped memory, queues included (room
+    // for every client, native and Linux, plus the server). The server keeps
+    // only READ; a WRITE|GRANT copy in the boot CSpace hands out the badged
+    // client copies and is deleted below.
+    let ep_capacity = (n_clients + 1) as u64;
+    let before = (k.caps.budget(&k.threads[srv].cspace, SLOT_UNTYPED).unwrap(), k.endpoints.len(), k.caps.live_objects());
+    let refused = thread::create_endpoint(k, srv, SLOT_UNTYPED, SLOT_SCRATCH, warden_caps::ENDPOINT_MAX_QUEUE + 1);
+    check(k, "pricing: personality endpoint with an over-budget queue refused, nothing charged",
+        refused == Err(warden_caps::CapError::OutOfBudget)
+            && before == (k.caps.budget(&k.threads[srv].cspace, SLOT_UNTYPED).unwrap(), k.endpoints.len(), k.caps.live_objects()));
+    thread::create_endpoint(k, srv, SLOT_UNTYPED, SLOT_SCRATCH, ep_capacity).expect("personality endpoint");
+    let paid = before.0 - k.caps.budget(&k.threads[srv].cspace, SLOT_UNTYPED).unwrap();
+    check(k, "pricing: personality endpoint cost its queues plus one node from the server's untyped",
+        paid == warden_caps::endpoint_bytes(ep_capacity) + warden_caps::NODE_BYTES);
+    k.caps.mint_self(&mut k.threads[srv].cspace, SLOT_SCRATCH, SLOT_PERSONALITY, Rights::READ, 0).expect("server READ copy");
+    let srv_cs = k.threads[srv].cspace.clone();
+    k.caps.mint(&srv_cs, SLOT_SCRATCH, &mut boot, 0, Rights::WRITE.union(Rights::GRANT), 0).expect("boot copy");
+    k.caps.delete(&mut k.threads[srv].cspace, SLOT_SCRATCH).expect("drop scratch root");
 
     for (i, app) in APPS.iter().enumerate() {
         let badge = i as u64 + 1;
@@ -137,24 +154,31 @@ pub fn setup(k: &mut Kernel) {
             k.threads[srv].aspace.map_frame(frame, SRV_BUF_BASE + i as u64 * BUF_SIZE + p * PAGE, Perm::Rw).expect("server view of buffer");
         }
         let t = k.spawn(app.name, img.entry, STACK_TOP, 50, app.expect, a);
-        // Reply endpoint: root in the boot CSpace, READ to the app, WRITE to the server.
-        let rep = k.caps.create_root(&mut boot, 1 + i, warden_caps::ObjectKind::Endpoint, Rights::ALL, 0).expect("root");
-        k.endpoints.insert(rep.0, thread::Endpoint::with_capacity(2));
-        grant(k, &boot, 1 + i, t, SLOT_REPLY, Rights::READ, 0);
-        grant(k, &boot, 1 + i, srv, SRV_SLOT_REPLY0 + i, Rights::WRITE, 0);
-        grant(k, &boot, 0, t, SLOT_PERSONALITY, Rights::WRITE, badge);
         // Phase 3 rule: memory is paid for. The frames the loader just
         // took come out of the program's untyped before it runs.
         let charge = loaded_bytes(img.pages, BUF_SIZE / PAGE);
         thread::root_cap(k, t, SLOT_UNTYPED, warden_caps::ObjectKind::Untyped, Rights::ALL, PROGRAM_UNTYPED - charge);
+        // Reply endpoint: the app's own object, paid from its untyped (two
+        // queue slots). The app keeps READ, the server gets WRITE, and the
+        // full-rights root is dropped so neither side can widen it.
+        let budget_before = k.caps.budget(&k.threads[t].cspace, SLOT_UNTYPED).unwrap();
+        thread::create_endpoint(k, t, SLOT_UNTYPED, SLOT_SCRATCH, 2).expect("reply endpoint");
+        let paid = budget_before - k.caps.budget(&k.threads[t].cspace, SLOT_UNTYPED).unwrap();
+        check(k, "pricing: reply endpoint cost its queues plus one node from the app's untyped",
+            paid == warden_caps::endpoint_bytes(2) + warden_caps::NODE_BYTES);
+        k.caps.mint_self(&mut k.threads[t].cspace, SLOT_SCRATCH, SLOT_REPLY, Rights::READ, 0).expect("app READ copy");
+        thread::mint_to(k, t, SLOT_SCRATCH, srv, SRV_SLOT_REPLY0 + i, Rights::WRITE, 0);
+        k.caps.delete(&mut k.threads[t].cspace, SLOT_SCRATCH).expect("drop scratch root");
+        grant(k, &boot, 0, t, SLOT_PERSONALITY, Rights::WRITE, badge);
         if app.console {
             thread::root_endpoint(k, t, SLOT_CONSOLE, Rights::WRITE, 1);
         }
-        crate::kprintln!("loaded {:<10} {} KiB image, {} pages, entry {:#x}, badge {}, {} KiB charged to its untyped, {} KiB left",
-            app.name, app.image.len() / 1024, img.pages, img.entry, badge, charge / 1024, (PROGRAM_UNTYPED - charge) / 1024);
+        let left = k.caps.budget(&k.threads[t].cspace, SLOT_UNTYPED).unwrap();
+        crate::kprintln!("loaded {:<10} {} KiB image, {} pages, entry {:#x}, badge {}, {} KiB charged to its untyped, {} bytes for its reply endpoint, {} KiB left",
+            app.name, app.image.len() / 1024, img.pages, img.entry, badge, charge / 1024, paid, left / 1024);
     }
-    crate::kprintln!("loaded personality server: {} KiB image, {} pages, entry {:#x}, {} KiB charged, {} KiB left",
-        PERSONALITY.len() / 1024, srv_img.pages, srv_img.entry, srv_charge / 1024, (PROGRAM_UNTYPED - srv_charge) / 1024);
+    crate::kprintln!("loaded personality server: {} KiB image, {} pages, entry {:#x}, {} KiB charged, {} bytes for its endpoint, {} KiB left",
+        PERSONALITY.len() / 1024, srv_img.pages, srv_img.entry, srv_charge / 1024, paid, k.caps.budget(&k.threads[srv].cspace, SLOT_UNTYPED).unwrap() / 1024);
     // The Linux programs: real static binaries on the `syscall` ABI, served
     // by the same personality server through the same protocol.
     crate::linux::setup(k, &mut boot, srv);

@@ -38,7 +38,7 @@ kernel was built without `CONFIG_SECCOMP_FILTER`; update WSL
 ## Phase 1 (kernel) under QEMU
 
 ```sh
-tests/kernel/run.sh        # builds, boots in QEMU, runs 191 in-guest checks
+tests/kernel/run.sh        # builds, boots in QEMU, runs 196 in-guest checks
 ```
 
 The script picks **KVM** when `/dev/kvm` is writable and falls back to

@@ -1,0 +1,28 @@
+name: Linux ELF preflight tests
+
+on:
+  pull_request:
+    paths:
+      - 'tools/linux-compat/**'
+      - '.github/workflows/elf-compat-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Python regression suite
+        run: python3 -m unittest discover -v -s tools/linux-compat -p 'test_*.py'
+      - name: Check common host executable classification
+        run: |
+          python3 tools/linux-compat/preflight.py /bin/true > /tmp/elf-result.json || test $? -eq 1
+          python3 - <<'PY'
+          import json
+          obj = json.load(open('/tmp/elf-result.json'))
+          assert obj['classification'] in ('blocked', 'static_elf_loader_candidate')
+          assert 'Preflight only' in obj['note']
+          PY

@@ -1,0 +1,587 @@
+{
+  "schema": "mxsb-manifest",
+  "version": "2.0.2",
+  "status": "draft",
+  "date": "2026-11-05",
+  "depends_on": {
+    "warden-abi": "0.2",
+    "file": "kernel/abi/warden-abi.json"
+  },
+  "magic": "MXSB",
+  "endianness": "little",
+  "header": {
+    "size": 64,
+    "fields": [
+      {
+        "name": "magic",
+        "offset": 0,
+        "size": 4,
+        "type": "bytes",
+        "value": "MXSB"
+      },
+      {
+        "name": "ver_major",
+        "offset": 4,
+        "size": 1,
+        "type": "u8",
+        "value": 2
+      },
+      {
+        "name": "ver_minor",
+        "offset": 5,
+        "size": 1,
+        "type": "u8",
+        "value": 0
+      },
+      {
+        "name": "header_size",
+        "offset": 6,
+        "size": 2,
+        "type": "u16",
+        "min": 64
+      },
+      {
+        "name": "flags",
+        "offset": 8,
+        "size": 4,
+        "type": "u32"
+      },
+      {
+        "name": "section_count",
+        "offset": 12,
+        "size": 4,
+        "type": "u32",
+        "min": 1,
+        "max": 64
+      },
+      {
+        "name": "section_table_off",
+        "offset": 16,
+        "size": 8,
+        "type": "u64",
+        "align": 16
+      },
+      {
+        "name": "entry_off",
+        "offset": 24,
+        "size": 8,
+        "type": "u64",
+        "inside": "TEXT"
+      },
+      {
+        "name": "caps_summary",
+        "offset": 32,
+        "size": 8,
+        "type": "u64"
+      },
+      {
+        "name": "file_size",
+        "offset": 40,
+        "size": 8,
+        "type": "u64"
+      },
+      {
+        "name": "reserved",
+        "offset": 48,
+        "size": 16,
+        "type": "bytes",
+        "value": "zero"
+      }
+    ],
+    "flags": {
+      "PIE": 1,
+      "DETERMINISTIC_ONLY": 2,
+      "DEBUG_SECTIONS": 4,
+      "reserved_mask": "0xFFFFFFF8"
+    }
+  },
+  "section_entry": {
+    "size": 32,
+    "align": 16,
+    "fields": [
+      {
+        "name": "type",
+        "offset": 0,
+        "size": 4,
+        "type": "u32"
+      },
+      {
+        "name": "flags",
+        "offset": 4,
+        "size": 4,
+        "type": "u32"
+      },
+      {
+        "name": "offset",
+        "offset": 8,
+        "size": 8,
+        "type": "u64",
+        "align": 16
+      },
+      {
+        "name": "size",
+        "offset": 16,
+        "size": 8,
+        "type": "u64"
+      },
+      {
+        "name": "reserved",
+        "offset": 24,
+        "size": 8,
+        "type": "u64",
+        "value": 0
+      }
+    ],
+    "flags": {
+      "R": 1,
+      "W": 2,
+      "X": 4
+    }
+  },
+  "section_types": [
+    {
+      "name": "MANIFEST",
+      "id": 1,
+      "required": true,
+      "unique": true,
+      "content": "utf8-manifest"
+    },
+    {
+      "name": "TEXT",
+      "id": 2,
+      "required": true,
+      "unique": true,
+      "content": "code",
+      "flags": [
+        "R",
+        "X"
+      ]
+    },
+    {
+      "name": "DATA",
+      "id": 3,
+      "required": false,
+      "unique": true,
+      "content": "data",
+      "flags": [
+        "R",
+        "W"
+      ]
+    },
+    {
+      "name": "BSS",
+      "id": 4,
+      "required": false,
+      "unique": true,
+      "content": "size-only",
+      "offset_must_be": 0
+    },
+    {
+      "name": "SUPEROPS",
+      "id": 5,
+      "required": false,
+      "unique": true,
+      "content": "u32[]"
+    },
+    {
+      "name": "SIGNATURE",
+      "id": 6,
+      "required": true,
+      "unique": true,
+      "content": "key_id[32] || ed25519_sig[64]",
+      "size": 96
+    },
+    {
+      "name": "BUILD_INFO",
+      "id": 7,
+      "required": false,
+      "unique": true,
+      "content": "utf8-kv"
+    },
+    {
+      "name": "VENDOR",
+      "id_min": 32768,
+      "required": false,
+      "unique": false,
+      "content": "opaque"
+    }
+  ],
+  "manifest": {
+    "schema_line": "mxsb-manifest 1",
+    "fields": {
+      "name": {
+        "regex": "^[A-Za-z0-9._-]{1,64}$",
+        "required": true
+      },
+      "abi": {
+        "enum": [
+          "native",
+          "linux-compat"
+        ],
+        "required": true
+      },
+      "build_id": {
+        "regex": "^[0-9a-f]{64}$",
+        "required": true,
+        "rule": "sha256(TEXT || DATA)"
+      },
+      "require": {
+        "repeat": true,
+        "format": "<perm>[=<scope>]"
+      }
+    },
+    "normalisation": [
+      "trim lines",
+      "collapse whitespace",
+      "drop comments and blanks",
+      "sort require lines bytewise",
+      "drop duplicate lines"
+    ],
+    "permissions": [
+      {
+        "name": "load",
+        "scope": "none",
+        "source": "warden-abi",
+        "family_bit": 9
+      },
+      {
+        "name": "fs.read",
+        "scope": "abs-path-prefix",
+        "source": "warden-abi",
+        "family_bit": 0
+      },
+      {
+        "name": "fs.write",
+        "scope": "abs-path-prefix",
+        "source": "warden-abi",
+        "family_bit": 1
+      },
+      {
+        "name": "exec",
+        "scope": "abs-path-prefix",
+        "source": "warden-abi",
+        "family_bit": 7
+      },
+      {
+        "name": "net.connect",
+        "scope": "host:port",
+        "source": "warden-abi",
+        "family_bit": 2,
+        "wildcard_in_binary": false
+      },
+      {
+        "name": "net.listen",
+        "scope": "host:port",
+        "source": "warden-abi",
+        "family_bit": 2
+      },
+      {
+        "name": "proc.spawn",
+        "scope": "none",
+        "source": "warden-abi",
+        "family_bit": 8
+      },
+      {
+        "name": "render",
+        "scope": "none",
+        "source": "warden-abi-0.2",
+        "family_bit": 3,
+        "replaces": "MX_CAP_GPU"
+      },
+      {
+        "name": "superop",
+        "scope": "superop-name",
+        "source": "warden-abi-0.2",
+        "family_bit": 4,
+        "replaces": "MX_CAP_SUPEROP",
+        "names_from": "matrixos/contracts/gpu-commands.md"
+      },
+      {
+        "name": "clock",
+        "scope": "enum:coarse|precise",
+        "source": "warden-abi-0.2",
+        "family_bit": 5,
+        "replaces": "MX_CAP_CLOCK"
+      },
+      {
+        "name": "random",
+        "scope": "none",
+        "source": "warden-abi-0.2",
+        "family_bit": 6,
+        "replaces": "MX_CAP_RANDOM"
+      },
+      {
+        "name": "memory.max",
+        "scope": "size[KMG]",
+        "source": "mxsb-manifest",
+        "kind": "budget"
+      },
+      {
+        "name": "cpu.max_cores",
+        "scope": "uint",
+        "source": "mxsb-manifest",
+        "kind": "budget"
+      }
+    ]
+  },
+  "caps_summary": {
+    "width": 64,
+    "authoritative": false,
+    "bits": [
+      {
+        "bit": 0,
+        "family": "fs.read",
+        "v1_flag": "MX_CAP_FS_READ"
+      },
+      {
+        "bit": 1,
+        "family": "fs.write",
+        "v1_flag": "MX_CAP_FS_WRITE"
+      },
+      {
+        "bit": 2,
+        "family": "net",
+        "v1_flag": "MX_CAP_NET"
+      },
+      {
+        "bit": 3,
+        "family": "render",
+        "v1_flag": "MX_CAP_GPU"
+      },
+      {
+        "bit": 4,
+        "family": "superop",
+        "v1_flag": "MX_CAP_SUPEROP"
+      },
+      {
+        "bit": 5,
+        "family": "clock",
+        "v1_flag": "MX_CAP_CLOCK"
+      },
+      {
+        "bit": 6,
+        "family": "random",
+        "v1_flag": "MX_CAP_RANDOM"
+      },
+      {
+        "bit": 7,
+        "family": "exec",
+        "v1_flag": null
+      },
+      {
+        "bit": 8,
+        "family": "proc.spawn",
+        "v1_flag": null
+      },
+      {
+        "bit": 9,
+        "family": "load",
+        "v1_flag": null
+      }
+    ],
+    "reserved_bits": "10..63"
+  },
+  "digest": {
+    "algorithm": "SHA-256",
+    "covers": [
+      "header[0..header_size]",
+      "section_table",
+      "all sections in table order except SIGNATURE"
+    ],
+    "excludes": [
+      "SIGNATURE"
+    ]
+  },
+  "signature": {
+    "algorithm": "Ed25519",
+    "key_id": "SHA-256(public_key)",
+    "layout": "key_id[32] || sig[64]",
+    "unsigned_allowed_when": "container manifest allow_unsigned = true AND digest is in approvals"
+  },
+  "version_policy": {
+    "major": "meaning change of an existing field, digest rule or manifest grammar; reader refuses unknown major",
+    "minor": "additive: new section types, flags bits, require names, BUILD_INFO keys; reader accepts higher minor, skips unknown section types, refuses unknown require names and unknown flags bits",
+    "v1": "decoded by tools, refused by the loader with MXSB_E_VERSION"
+  },
+  "container_manifest_mapping": [
+    {
+      "require": "fs.read",
+      "toml": "grants.fs.read",
+      "rule": "prefix"
+    },
+    {
+      "require": "fs.write",
+      "toml": "grants.fs.write",
+      "rule": "prefix"
+    },
+    {
+      "require": "exec",
+      "toml": "grants.exec",
+      "rule": "prefix"
+    },
+    {
+      "require": "net.connect",
+      "toml": "grants.net.connect",
+      "rule": "host-port-match"
+    },
+    {
+      "require": "net.listen",
+      "toml": "grants.net.listen",
+      "rule": "exact"
+    },
+    {
+      "require": "proc.spawn",
+      "toml": "grants.process.spawn.max",
+      "rule": "gt-zero"
+    },
+    {
+      "require": "render",
+      "toml": "grants.render",
+      "rule": "true",
+      "new_field": true
+    },
+    {
+      "require": "superop",
+      "toml": "grants.superops",
+      "rule": "listed",
+      "new_field": true
+    },
+    {
+      "require": "clock",
+      "toml": "grants.clock",
+      "rule": "at-least-as-precise"
+    },
+    {
+      "require": "random",
+      "toml": "grants.random",
+      "rule": "true",
+      "new_field": true,
+      "default": false,
+      "note": "no ambient authority; must be written explicitly"
+    },
+    {
+      "require": "memory.max",
+      "toml": "grants.memory.max",
+      "rule": "lte"
+    },
+    {
+      "require": "cpu.max_cores",
+      "toml": "grants.cpu.max_cores",
+      "rule": "lte"
+    }
+  ],
+  "errors": [
+    {
+      "name": "MXSB_E_MAGIC",
+      "code": 1
+    },
+    {
+      "name": "MXSB_E_VERSION",
+      "code": 2
+    },
+    {
+      "name": "MXSB_E_HEADER",
+      "code": 3
+    },
+    {
+      "name": "MXSB_E_TABLE",
+      "code": 4
+    },
+    {
+      "name": "MXSB_E_BOUNDS",
+      "code": 5
+    },
+    {
+      "name": "MXSB_E_OVERLAP",
+      "code": 6
+    },
+    {
+      "name": "MXSB_E_MISSING_SECTION",
+      "code": 7
+    },
+    {
+      "name": "MXSB_E_DUP_SECTION",
+      "code": 8
+    },
+    {
+      "name": "MXSB_E_ENTRY",
+      "code": 9
+    },
+    {
+      "name": "MXSB_E_DIGEST",
+      "code": 10
+    },
+    {
+      "name": "MXSB_E_SIGNATURE",
+      "code": 11
+    },
+    {
+      "name": "MXSB_E_UNTRUSTED_KEY",
+      "code": 12
+    },
+    {
+      "name": "MXSB_E_MANIFEST_SYNTAX",
+      "code": 13
+    },
+    {
+      "name": "MXSB_E_MANIFEST_VERSION",
+      "code": 14
+    },
+    {
+      "name": "MXSB_E_UNKNOWN_PERM",
+      "code": 15
+    },
+    {
+      "name": "MXSB_E_BAD_SCOPE",
+      "code": 16
+    },
+    {
+      "name": "MXSB_E_BUILD_ID",
+      "code": 17
+    },
+    {
+      "name": "MXSB_E_CAPS_SUMMARY",
+      "code": 18
+    },
+    {
+      "name": "MXSB_E_NOT_GRANTED",
+      "code": 19
+    }
+  ],
+  "validation": {
+    "spec_section": "9a",
+    "order": "V1..V26, stop at first failure",
+    "limits": {
+      "header_size_max": 4096,
+      "section_count_max": 64,
+      "bss_size_max": 1073741824,
+      "mapped_total_max": 4294967296,
+      "manifest_size_max": 65536,
+      "build_info_size_max": 65536,
+      "manifest_lines_max": 4096,
+      "manifest_line_bytes_max": 1024,
+      "signature_size": 96
+    },
+    "arithmetic": "u64, every add checked; overflow = failure of that check",
+    "allocation": "single allocation after V18 for TEXT.size+DATA.size+BSS.size rounded to page size, never from file_size or unchecked fields",
+    "decoder": "all buffer reads through a bounds-checked accessor (buf,len,offset,width); failure leaves output zeroed",
+    "emitter": "runs V1..V25 on its own output before writing"
+  },
+  "changelog": [
+    {
+      "version": "2.0.0",
+      "date": "2026-11-05",
+      "note": "first draft"
+    },
+    {
+      "version": "2.0.1",
+      "date": "2026-11-05",
+      "note": "added explicit validation rules V1..V26 and limits (security review finding 7)"
+    },
+    {
+      "version": "2.0.2",
+      "date": "2026-11-05",
+      "note": "random defaults to false; new names are warden-abi 0.2"
+    }
+  ]
+}

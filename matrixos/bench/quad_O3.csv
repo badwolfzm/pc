@@ -1,0 +1,6 @@
+evidence_id,metric,runs,warmup_runs,median_ns,p95_ns,timer_floor_ns,value,unit
+EV-BENCH-CLK-001,core_clock_dep_add_chain,11,2,314604423,357717113,22,3.179,GHz
+EV-BENCH-MEM-COPY-4T,dram_copy_512MiB_4thr,11,2,26621153,28477157,22,40.334,GB/s
+EV-BENCH-MEM-READ-4T,dram_read_512MiB_4thr,11,2,14921523,15820319,22,35.980,GB/s
+EV-BENCH-MEM-WRITE-4T,dram_write_512MiB_4thr,11,2,19038576,20167630,22,28.199,GB/s
+EV-BENCH-MEM-TRIAD-4T,dram_triad_512MiB_4thr,11,2,33607555,35775512,22,47.924,GB/s

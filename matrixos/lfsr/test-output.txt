@@ -1,0 +1,22 @@
+mx_lift v2 tests
+  algebra: 1600 checks so far, 0 failed
+  lift vs naive: 25368 checks so far, 0 failed
+  probe-mode limit: almost-affine function -> ok (expected to be accepted; the IR path is the proof path)
+  probe mode: 25478 checks so far, 0 failed
+  rejections: 26091 checks so far, 0 failed
+  fuzz linear-only: 20000 lifted, 0 rejected; 286091 checks so far, 0 failed
+  fuzz with nonlinear ops: 9002 lifted (all verified against naive), 10998 rejected; 394115 checks so far, 0 failed
+bench
+  timer floor 21 ns, N=10000000, 21 runs after 3 warmup, median / p95
+  naive loop (v1 C)                    median     13183474 ns   p95     13330294 ns
+  v1 lifted (accumulator compose)      median         7961 ns   p95         8868 ns
+  v2 mx_aff_jump (one-off n)           median         6375 ns   p95         7193 ns
+  v2 plan jump (precomputed 2^k)       median          149 ns   p95          158 ns  (near timer floor)
+  plan build (64 squarings, 32-bit)           19141 ns each
+  consumed-output hash 0x00000000000000ec
+RESULT: 394115 passed, 0 failed
+exit=0
+gcc 13 -O1 -fsanitize=address,undefined --no-bench:
+RESULT: 394115 passed, 0 failed
+clang 18.1.3 -O3 --no-bench:
+RESULT: 394115 passed, 0 failed

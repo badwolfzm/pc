@@ -76,7 +76,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let mut k = Kernel {
         caps: warden_caps::CapTable::new(), frames, endpoints: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
-        cap_nodes_baseline: 0, expected_mints: 2, heap_baseline: 0, // tests 4 and 13 each mint once
+        cap_nodes_baseline: 0, expected_mints: 2, heap_baseline: 0, host_object: None, // tests 4 and 13 each mint once
     };
     // One address space per thread: a private copy of the user code, one
     // private data page, and a 64 KiB stack, all at the same virtual

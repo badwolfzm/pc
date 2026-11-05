@@ -12,6 +12,15 @@
 //! Growing toward full Linux ABI compatibility means moving entries from
 //! `Unimplemented` to `Mediated` (or `Pass`), one family at a time.
 #![forbid(unsafe_code)]
+#![no_std]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 mod linux_x86_64;
 pub use linux_x86_64::SYSCALLS;

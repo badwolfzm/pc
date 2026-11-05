@@ -591,6 +591,24 @@ impl CapTable {
     }
 
     /// Remaining budget of the untyped in `slot` (any rights).
+    /// Pay `bytes` of kernel memory from an untyped capability without
+    /// creating an object: the personality's accounting for a Linux
+    /// process's pages, which are kernel-internal and die with the process.
+    /// Needs WRITE; refuses, charging nothing, when the budget is short.
+    pub fn pay(&mut self, cs: &CSpace, slot: usize, bytes: u64) -> Result<u64, CapError> {
+        let idx = self.get(cs, slot)?;
+        let n = &self.nodes[idx];
+        let obj = n.object;
+        if self.objects[obj].kind != ObjectKind::Untyped {
+            return Err(CapError::WrongKind);
+        }
+        if !n.rights.contains(Rights::WRITE) {
+            return Err(CapError::InsufficientRights);
+        }
+        self.charge(Some(obj), bytes)?;
+        Ok(self.objects[obj].free)
+    }
+
     pub fn budget(&self, cs: &CSpace, slot: usize) -> Result<u64, CapError> {
         let idx = self.get(cs, slot)?;
         let o = &self.objects[self.nodes[idx].object];
@@ -740,6 +758,33 @@ mod tests {
         let mut ro = CSpace::new(2);
         t.mint(&cs, 1, &mut ro, 0, Rights::READ, 0).unwrap();
         assert_eq!(t.retype(&mut ro, 0, ObjectKind::Notification, 0, 1), Err(CapError::InsufficientRights));
+    }
+
+    #[test]
+    fn pay_charges_untyped_without_an_object() {
+        let mut t = CapTable::new();
+        let mut cs = CSpace::new(8);
+        t.create_root(&mut cs, 0, ObjectKind::Dir, Rights::ALL, 0).unwrap();
+        t.create_root(&mut cs, 1, ObjectKind::Untyped, Rights::ALL, 3 * 4096).unwrap();
+        // Paying creates nothing: the object and node counts stay put.
+        let (objs, nodes) = (t.live_objects(), t.live_nodes());
+        assert_eq!(t.pay(&cs, 1, 4096), Ok(2 * 4096));
+        assert_eq!(t.pay(&cs, 1, 2 * 4096), Ok(0));
+        assert_eq!((t.live_objects(), t.live_nodes()), (objs, nodes));
+        // Short budget: refused, nothing charged.
+        assert_eq!(t.pay(&cs, 1, 1), Err(CapError::OutOfBudget));
+        assert_eq!(t.budget(&cs, 1), Ok(0));
+        // Wrong kind, wrong rights, empty slot.
+        assert_eq!(t.pay(&cs, 0, 1), Err(CapError::WrongKind));
+        let mut ro = CSpace::new(2);
+        t.mint(&cs, 1, &mut ro, 0, Rights::READ, 0).unwrap();
+        assert_eq!(t.pay(&ro, 0, 0), Err(CapError::InsufficientRights));
+        assert_eq!(t.pay(&cs, 5, 1), Err(CapError::InvalidSlot));
+        // What was paid comes back when the untyped is deleted and recreated.
+        t.delete(&mut ro, 0).unwrap();
+        t.delete(&mut cs, 1).unwrap();
+        t.create_root(&mut cs, 1, ObjectKind::Untyped, Rights::ALL, 4096).unwrap();
+        assert_eq!(t.pay(&cs, 1, 4096), Ok(0));
     }
 
     #[test]

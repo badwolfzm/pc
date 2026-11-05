@@ -166,8 +166,35 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (107, "rogue: host-exit via reply endpoint (READ only)", E_RIGHTS),
     (108, "rogue: slots 4..0xFFFF name nothing", 0),
     (109, "rogue: 13 descriptors then EMFILE", 13),
-    (110, "personality: HTTP connections accepted", 60),
-    (111, "personality: exit_group from every client", 3),
+    (110, "personality: HTTP connections accepted", 62), // 60 native + 2 Linux
+    (111, "personality: exit_group from every client", 6),
+    // Linux personality (src/linux.rs): real static Linux binaries on the
+    // `syscall` ABI, served by the same personality server. Reported as
+    // `CHECK <id> <value>` lines on their stdout, which the kernel reads.
+    (140, "linux httpd: socket, bind 8081, listen", 1),
+    (141, "linux httpd: requests served", 2),
+    (142, "linux client: GET /index.html status", 200),
+    (143, "linux client: body length", 265),
+    (144, "linux client: GET /missing status", 404),
+    (145, "linux client: openat without fs.read is EACCES", -(13i64) as u64),
+    (146, "linux client: uname says Linux x86_64", 1),
+    (147, "linux client: brk grows a usable heap", 1),
+    (148, "linux client: mmap anonymous memory is usable", 1),
+    (149, "linux client: munmap then mmap again reuses the range", 1),
+    (150, "linux hostile: ptrace is EPERM (denied tier)", -(1i64) as u64),
+    (151, "linux hostile: openat /etc/passwd without fs.read is EACCES", -(13i64) as u64),
+    (152, "linux hostile: socket without net grant is EACCES", -(13i64) as u64),
+    (153, "linux hostile: write from kernel memory is EFAULT", -(14i64) as u64),
+    (154, "linux hostile: mmap 64 MiB from a 1 MiB budget is ENOMEM", -(12i64) as u64),
+    (155, "linux hostile: mprotect RWX is EACCES (W^X)", -(13i64) as u64),
+    (156, "linux hostile: MAP_FIXED over the kernel is EINVAL", -(22i64) as u64),
+    (157, "linux hostile: syscall 999 is ENOSYS", -(38i64) as u64),
+    (158, "linux hostile: brk into the stack is refused", 1),
+    (159, "linux hostile: bpf is EPERM (denied tier)", -(1i64) as u64),
+    (160, "linux hostile: write to an unopened fd is EBADF", -(9i64) as u64),
+    (161, "linux hostile: read of fd 3 (not open) is EBADF", -(9i64) as u64),
+    (162, "linux hostile: 1 MiB write from a 64-byte buffer is EFAULT", -(14i64) as u64),
+    (163, "linux hostile: 5000 bad syscalls, all ENOSYS, still alive", 1),
     (112, "rogue: its own buffer is read/write", 0xB0B),
 ];
 
@@ -849,7 +876,8 @@ pub const CASES: &[Case] = &[
     Case { name: "jump into kernel code", entry: hostile_callkernel, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
     Case { name: "mov cr3", entry: hostile_cr3, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
     Case { name: "rdmsr", entry: hostile_rdmsr, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
-    Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::Fault(6), budget: 50, untyped: 1 << 20 },
+    // `syscall` is the Linux entry; a native thread using it is killed.
+    Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::WrongAbi, budget: 50, untyped: 1 << 20 },
     Case { name: "stack outside partition", entry: hostile_stack_outside, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
     Case { name: "write own code (W^X)", entry: hostile_write_code, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
     Case { name: "execute data page (NX)", entry: hostile_exec_data, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },

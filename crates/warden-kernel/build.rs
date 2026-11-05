@@ -5,6 +5,10 @@ use std::process::Command;
 /// The Phase 2b user programs, built from `user/` with the host C compiler
 /// into static, non-PIE ELF images the kernel embeds and loads at boot.
 const PROGRAMS: &[&str] = &["personality", "httpd", "fetch", "rogue"];
+/// The Linux programs, built from `linux/` as ordinary static Linux
+/// executables (the `syscall` ABI, SSE allowed, linked at 0x400000) and
+/// served by the Linux personality.
+const LINUX_PROGRAMS: &[&str] = &["httpd", "client", "hostile"];
 
 fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -39,6 +43,26 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WARDEN_CC");
     for entry in std::fs::read_dir(&user).expect("user/ directory") {
         println!("cargo:rerun-if-changed={}", entry.unwrap().path().display());
+    }
+    let linux = dir.join("linux");
+    for entry in std::fs::read_dir(&linux).expect("linux/ directory") {
+        println!("cargo:rerun-if-changed={}", entry.unwrap().path().display());
+    }
+    for prog in LINUX_PROGRAMS {
+        let elf = out.join(format!("linux_{prog}.elf"));
+        let st = Command::new(&cc)
+            .args([
+                "-std=gnu11", "-O2", "-Wall", "-Wextra",
+                "-ffreestanding", "-nostdlib", "-nostartfiles", "-static", "-no-pie", "-fno-pie",
+                "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-fno-builtin", "-fcf-protection=none",
+                "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-z,max-page-size=4096", "-s",
+            ])
+            .arg("-o")
+            .arg(&elf)
+            .arg(linux.join(format!("{prog}.c")))
+            .status()
+            .unwrap_or_else(|e| panic!("{cc} not found ({e}); set WARDEN_CC to a C compiler"));
+        assert!(st.success(), "{cc} failed on linux/{prog}.c");
     }
     for prog in PROGRAMS {
         let elf = out.join(format!("{prog}.elf"));

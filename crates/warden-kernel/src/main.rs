@@ -8,6 +8,7 @@ extern crate alloc;
 mod apps;
 mod arch;
 mod heap;
+mod linux;
 mod loader;
 mod mm;
 mod pong;
@@ -77,30 +78,29 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     assert!(us >= tests::USER_BASE && ue <= tests::USER_BASE + (1 << 20), "user code must sit in the user page");
 
     arch::init();
+    arch::init_syscall();
 
-    // Review finding: a refused mapping must not consume a frame.
-    let frames_before = frames.used;
-    let mm_ok = mm::self_test(&mut frames);
-    kprintln!("{} mm self-test: refused mappings allocate nothing ({} frames for the probe space)", if mm_ok { "PASS" } else { "FAIL" }, frames.used - frames_before);
+    // Review finding: a refused mapping must not consume a frame. The mm
+    // self-test checks that and the rest of the mapping rules (W^X bits,
+    // user copies, teardown), one PASS/FAIL line each.
+    let (mm_checks, mm_fails) = mm::self_test(&mut frames);
     let user_code = unsafe { core::slice::from_raw_parts(us as *const u8, (ue - us) as usize) };
     let mut k = Kernel {
         caps: warden_caps::CapTable::with_capacity(256, 128), frames, endpoints: alloc::collections::BTreeMap::new(),
         user_frames: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
         cap_nodes_baseline: 0, heap_baseline: 0, heap_carved_baseline: 0, frames_baseline: 0,
-        frames_high_water_baseline: 0, host_object: None,
+        frames_high_water_baseline: 0, host_object: None, linux_run_frames: 0,
     };
-    k.checks += 1;
-    if !mm_ok {
-        k.failures += 1;
-    }
+    k.checks += mm_checks;
+    k.failures += mm_fails;
     // One address space per thread: a private copy of the user code, one
     // private data page, and a 64 KiB stack, all at the same virtual
     // addresses in every thread.
     for c in tests::CASES {
         let mut a = mm::AddressSpace::new(&mut k.frames).expect("page tables");
         // W^X: code is read-only and executable, data and stack never execute.
-        a.load(&mut k.frames, mm::USER_BASE, user_code, mm::Perm::Rx).expect("user code");
+        a.load(&mut k.frames, tests::USER_BASE, user_code, mm::Perm::Rx).expect("user code");
         a.map_user(&mut k.frames, tests::DATA_PAGE, mm::Perm::Rw).expect("data page");
         for i in 0..16 {
             a.map_user(&mut k.frames, tests::STACK_TOP - (i + 1) * mm::PAGE, mm::Perm::Rw).expect("stack");
@@ -190,12 +190,14 @@ pub fn finish(k: &mut Kernel) -> ! {
     }
     k.checks += 1;
     const FRAME_PEAK: u64 = 8;
-    let fresh = k.frames.high_water() - k.frames_high_water_baseline;
+    // Linux programs grow a heap and mmap during the run; those frames are
+    // back in the pool (checked above) but were taken fresh.
+    let fresh = (k.frames.high_water() - k.frames_high_water_baseline).saturating_sub(k.linux_run_frames);
     if fresh <= FRAME_PEAK {
-        kprintln!("PASS {fresh} fresh frames taken during the run (limit {FRAME_PEAK}; freed frames were reused)");
+        kprintln!("PASS {fresh} fresh frames taken during the run beyond the {} Linux heap/mmap pages (limit {FRAME_PEAK}; freed frames were reused)", k.linux_run_frames);
     } else {
         k.failures += 1;
-        kprintln!("FAIL {fresh} fresh frames taken during the run (limit {FRAME_PEAK})");
+        kprintln!("FAIL {fresh} fresh frames taken during the run beyond the {} Linux heap/mmap pages (limit {FRAME_PEAK})", k.linux_run_frames);
     }
     // Net heap: thousands of create/delete cycles ran; what remains is the
     // allocator's own bookkeeping (the frame free-list vector).

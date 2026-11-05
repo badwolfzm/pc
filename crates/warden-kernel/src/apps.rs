@@ -98,22 +98,20 @@ fn loader_checks(k: &mut Kernel) {
     check(k, "five refused images allocated no frame", k.frames.used == before);
 }
 
-/// Mint from a boot-time CSpace that no thread ever sees: the roots of the
-/// personality and reply endpoints live there with full rights, and every
-/// program gets only the attenuated copy it needs.
-fn grant(k: &mut Kernel, boot: &CSpace, from_slot: usize, to: usize, to_slot: usize, mask: Rights, badge: u64) {
-    let mut dst = k.threads[to].cspace.clone();
-    k.caps.mint(boot, from_slot, &mut dst, to_slot, mask, badge).expect("grant");
-    k.threads[to].cspace = dst;
-}
+// The roots of the personality and reply endpoints live in a boot-time
+// CSpace that no thread ever sees, and every program gets only the
+// attenuated copy it needs (thread::grant).
+use crate::thread::grant;
 
 pub fn setup(k: &mut Kernel) {
     loader_checks(k);
 
     let mut boot = CSpace::new(8);
-    // Root of the personality endpoint: queue room for every client and the server.
+    // Root of the personality endpoint: queue room for every client, native
+    // and Linux, and the server.
+    let n_clients = APPS.len() + crate::linux::N_APPS;
     let ep = k.caps.create_root(&mut boot, 0, warden_caps::ObjectKind::Endpoint, Rights::ALL, 0).expect("root");
-    k.endpoints.insert(ep.0, thread::Endpoint::with_capacity(APPS.len() + 1));
+    k.endpoints.insert(ep.0, thread::Endpoint::with_capacity(n_clients + 1));
 
     let srv_img = loader::load(&mut k.frames, PERSONALITY).expect("personality server image");
     let mut srv_as = srv_img.aspace;
@@ -157,6 +155,9 @@ pub fn setup(k: &mut Kernel) {
     }
     crate::kprintln!("loaded personality server: {} KiB image, {} pages, entry {:#x}, {} KiB charged, {} KiB left",
         PERSONALITY.len() / 1024, srv_img.pages, srv_img.entry, srv_charge / 1024, (PROGRAM_UNTYPED - srv_charge) / 1024);
+    // The Linux programs: real static binaries on the `syscall` ABI, served
+    // by the same personality server through the same protocol.
+    crate::linux::setup(k, &mut boot, srv);
     // The boot CSpace's roots are gone now: every endpoint object lives
     // exactly as long as the programs holding a capability to it, so the
     // end-of-run check "nothing survives its holders" covers them too.

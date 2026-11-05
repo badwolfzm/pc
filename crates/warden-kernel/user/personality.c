@@ -85,9 +85,12 @@ static const struct {
     {"httpd", PERM_FS_READ | PERM_NET_LISTEN},
     {"fetch", PERM_NET_CONNECT},
     {"rogue", 0},
-    {"spare", 0},
+    /* Linux programs, forwarded by the kernel (same protocol, same rules). */
+    {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN},
+    {"lfetch", PERM_NET_CONNECT},
+    {"lrogue", 0},
 };
-#define N_EXPECTED_CLIENTS 3
+#define N_EXPECTED_CLIENTS 6
 
 static struct ofile ofiles[MAX_OPEN];
 static struct listener listeners[MAX_LISTEN];
@@ -557,6 +560,7 @@ static long dispatch(struct client *c, long nr, const long *a) {
     case NR_write:
         return do_write(c, a[0], (size_t)a[2]);
     case NR_open:
+    case NR_openat: /* the kernel marshals openat like open */
         return do_open(c, (int)a[1], (size_t)a[2]);
     case NR_close:
         return do_close(c, a[0]);
@@ -567,6 +571,7 @@ static long dispatch(struct client *c, long nr, const long *a) {
     case NR_connect:
         return do_connect(c, a[0], (size_t)a[2]);
     case NR_accept:
+    case NR_accept4:
         return do_accept(c, a[0]);
     case NR_bind:
         return do_bind(c, a[0], (size_t)a[2]);

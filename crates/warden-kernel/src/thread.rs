@@ -6,6 +6,7 @@
 //! continuation, so there is nothing to preempt inside the kernel.
 
 use crate::arch;
+use crate::linux;
 use crate::mm::{AddressSpace, FrameAlloc, Perm};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -69,6 +70,17 @@ impl Endpoint {
     }
 }
 
+/// Which syscall ABI a thread speaks. A thread has exactly one; using the
+/// other entry (`syscall` from a native thread, `int 0x80` from a Linux
+/// thread) kills it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Personality {
+    /// Warden ABI on `int 0x80`: capability invocations.
+    Native,
+    /// Linux x86-64 ABI on `syscall`, served by `linux.rs`.
+    Linux,
+}
+
 /// Why a thread stopped. Compared against each test thread's expectation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Death {
@@ -77,6 +89,8 @@ pub enum Death {
     Fault(u8),
     /// Used its whole CPU budget without yielding.
     Budget,
+    /// Used the other personality's syscall entry.
+    WrongAbi,
 }
 
 impl fmt::Display for Death {
@@ -88,6 +102,7 @@ impl fmt::Display for Death {
             Death::Fault(14) => write!(f, "#PF page fault"),
             Death::Fault(v) => write!(f, "exception {v}"),
             Death::Budget => write!(f, "budget exhausted"),
+            Death::WrongAbi => write!(f, "killed: wrong syscall ABI"),
         }
     }
 }
@@ -105,6 +120,12 @@ pub struct Thread {
     pub death: Option<Death>,
     pub expect: Death,
     pub logs: u32,
+    pub personality: Personality,
+    /// FS base (Linux TLS), loaded into the MSR before the thread runs.
+    pub fs_base: u64,
+    /// SSE/x87 state, saved on every trap and restored before every run.
+    pub fx: arch::FxArea,
+    pub linux: linux::Proc,
 }
 
 /// Kernel-side state of a Frame object a thread created from untyped memory.
@@ -138,6 +159,10 @@ pub struct Kernel {
     /// The one machine-control object, if any was ever created. Phase 2a
     /// creates none, so no capability can stop the machine.
     pub host_object: Option<warden_caps::ObjectId>,
+    /// Frames Linux programs mapped with brk/mmap during the run. They are
+    /// freed again, but the ones taken fresh count against the high-water
+    /// mark, so the end-of-run check allows for them.
+    pub linux_run_frames: u64,
 }
 
 pub static mut KERNEL: Option<Kernel> = None;
@@ -157,6 +182,7 @@ impl Kernel {
         self.threads.push(Thread {
             name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(),
             budget, budget_period: budget, death: None, expect, logs: 0,
+            personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), linux: linux::Proc::new(),
         });
         self.threads.len() - 1
     }
@@ -170,8 +196,14 @@ impl Kernel {
         self.threads.iter().any(|t| t.death.is_none())
     }
 
-    /// Deliver `msg` into a receiver's registers and make it runnable.
+    /// Deliver `msg` into a receiver's registers and make it runnable. For a
+    /// Linux thread the message is the server's answer to its syscall.
     fn deliver(&mut self, to: usize, msg: Msg) {
+        if self.threads[to].personality == Personality::Linux {
+            linux::complete(self, to, msg);
+            self.threads[to].state = State::Runnable;
+            return;
+        }
         let f = &mut self.threads[to].frame;
         f.rax = 0;
         f.rdi = msg.badge;
@@ -240,6 +272,9 @@ impl Kernel {
 
     fn kill(&mut self, idx: usize, how: Death) {
         self.unqueue(idx);
+        if self.threads[idx].personality == Personality::Linux {
+            linux::on_death(self, idx, how);
+        }
         // A dead thread's capabilities go with it, and with them every
         // object nobody else holds: its untyped memory, frames, endpoints.
         for slot in 0..self.threads[idx].cspace.len() {
@@ -256,13 +291,18 @@ impl Kernel {
         crate::kprintln!("{} thread {:<22} stopped: {} (expected {})", if ok { "PASS" } else { "FAIL" }, t.name, how, t.expect);
     }
 
+    /// Enter thread `i` with its FS base and SSE state.
+    fn run(&mut self, i: usize) -> ! {
+        self.current = i;
+        arch::set_fs_base(self.threads[i].fs_base);
+        arch::fxrstor(&self.threads[i].fx);
+        unsafe { enter_user(&self.threads[i].frame, self.threads[i].aspace.cr3) }
+    }
+
     /// Run the next live thread, or finish when none is left.
     fn schedule(&mut self) -> ! {
         match self.pick_next() {
-            Some(i) => {
-                self.current = i;
-                unsafe { enter_user(&self.threads[i].frame, self.threads[i].aspace.cr3) }
-            }
+            Some(i) => self.run(i),
             None if self.any_alive() => {
                 // Everyone is blocked on IPC with nobody to pair with: a
                 // deadlock. Report it as a budget death of each blocked thread.
@@ -319,13 +359,16 @@ fn err(e: CapError) -> u64 {
 }
 
 /// What the syscall path does with the caller afterwards.
-enum After {
+pub enum After {
     /// Resume the caller with rax = value.
     Resume(u64),
     /// The caller is blocked; run someone else.
     Block,
     /// The caller yielded; run someone else, rax = 0.
     Yield,
+    /// The caller yielded and will issue the same instruction again
+    /// (a Linux sleep that has not elapsed).
+    Restart,
 }
 
 fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
@@ -517,6 +560,8 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
                         k.threads[from].state = State::Runnable;
                     }
                 }
+                // A dead Linux thread's exit notice: nobody to wake.
+                _ if k.threads[from].death.is_some() => {}
                 _ => k.threads[from].state = State::Runnable,
             }
             k.deliver(cur, msg);
@@ -574,6 +619,7 @@ pub extern "C" fn trap(frame: *mut TrapFrame) -> ! {
     }
     let cur = k.current;
     k.threads[cur].frame = f;
+    arch::fxsave(&mut k.threads[cur].fx);
     match f.vector {
         arch::VEC_TIMER => {
             k.ticks += 1;
@@ -585,22 +631,34 @@ pub extern "C" fn trap(frame: *mut TrapFrame) -> ! {
             }
             // Time slice: always rotate.
         }
-        arch::VEC_SYSCALL => match syscall(k, &f) {
-            Ok(After::Resume(v)) => {
-                // deliver() may have filled the frame; only rax is set here,
-                // and for a completed RECV it is already 0.
-                if !(f.rax == SYS_RECV && v == 0) {
-                    k.threads[cur].frame.rax = v;
+        arch::VEC_SYSCALL | linux::VEC_LINUX => {
+            // Each thread has one syscall ABI; the other entry kills it.
+            let r = match (f.vector, k.threads[cur].personality) {
+                (arch::VEC_SYSCALL, Personality::Native) => syscall(k, &f),
+                (linux::VEC_LINUX, Personality::Linux) => linux::syscall(k, &f),
+                _ => Err(Death::WrongAbi),
+            };
+            match r {
+                Ok(After::Resume(v)) => {
+                    // deliver() may have filled the frame; only rax is set here,
+                    // and for a completed RECV it is already 0.
+                    if !(f.vector == arch::VEC_SYSCALL && f.rax == SYS_RECV && v == 0) {
+                        k.threads[cur].frame.rax = v;
+                    }
+                    // Run-to-completion for the caller: resume it directly.
+                    k.run(cur)
                 }
-                // Run-to-completion for the caller: resume it directly.
-                k.current = cur;
-                unsafe { enter_user(&k.threads[cur].frame, k.threads[cur].aspace.cr3) }
+                Ok(After::Yield) => k.threads[cur].frame.rax = 0,
+                Ok(After::Restart) => {
+                    let t = &mut k.threads[cur];
+                    t.budget = t.budget_period;
+                    t.frame.rip -= 2; // back onto the `syscall`
+                }
+                // Blocking in IPC gives the CPU up as surely as a yield does.
+                Ok(After::Block) => k.threads[cur].budget = k.threads[cur].budget_period,
+                Err(d) => k.kill(cur, d),
             }
-            Ok(After::Yield) => k.threads[cur].frame.rax = 0,
-            // Blocking in IPC gives the CPU up as surely as a yield does.
-            Ok(After::Block) => k.threads[cur].budget = k.threads[cur].budget_period,
-            Err(d) => k.kill(cur, d),
-        },
+        }
         v => {
             if v == 14 {
                 let cr2: u64;
@@ -639,5 +697,56 @@ pub fn mint_to(k: &mut Kernel, from: usize, from_slot: usize, to: usize, to_slot
     let src = k.threads[from].cspace.clone();
     let mut dst = k.threads[to].cspace.clone();
     k.caps.mint(&src, from_slot, &mut dst, to_slot, mask, badge).expect("mint");
+    k.threads[to].cspace = dst;
+}
+
+/// CALL on behalf of `cur` (a Linux thread whose syscall the kernel is
+/// forwarding): deliver `msg` to a waiting receiver of endpoint `ep_id` and
+/// park `cur` on reply endpoint `rep`, or queue the message. The same steps
+/// `ipc` takes for SYS_CALL. False when a queue is full; nothing changed.
+pub fn call(k: &mut Kernel, cur: usize, ep_id: u32, rep: u32, msg: Msg) -> bool {
+    if !k.endpoints.contains_key(&rep) {
+        return false;
+    }
+    let Some(ep) = k.endpoints.get(&ep_id) else { return false };
+    if let Some(&to) = ep.receivers.first() {
+        if !k.wait_for_reply(cur, rep) {
+            return false;
+        }
+        k.endpoints.get_mut(&ep_id).unwrap().receivers.remove(0);
+        k.deliver(to, msg);
+        return true;
+    }
+    let ep = k.endpoints.get_mut(&ep_id).unwrap();
+    if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
+        return false;
+    }
+    k.threads[cur].pending = msg;
+    k.threads[cur].state = State::CallBlocked(rep);
+    true
+}
+
+/// A one-way message from thread `t`, which may already be dead (a Linux
+/// thread's exit notice): delivered now if the server waits, queued
+/// otherwise. False when the queue is full.
+pub fn notify(k: &mut Kernel, t: usize, ep_id: u32, msg: Msg) -> bool {
+    let Some(ep) = k.endpoints.get_mut(&ep_id) else { return false };
+    if !ep.receivers.is_empty() {
+        let to = ep.receivers.remove(0);
+        k.deliver(to, msg);
+        return true;
+    }
+    if !Endpoint::enqueue(&mut ep.senders, ep.capacity, t) {
+        return false;
+    }
+    k.threads[t].pending = msg;
+    k.threads[t].state = State::SendBlocked(ep_id);
+    true
+}
+
+/// Mint from a boot-time CSpace that no thread ever sees into thread `to`.
+pub fn grant(k: &mut Kernel, boot: &CSpace, from_slot: usize, to: usize, to_slot: usize, mask: Rights, badge: u64) {
+    let mut dst = k.threads[to].cspace.clone();
+    k.caps.mint(boot, from_slot, &mut dst, to_slot, mask, badge).expect("grant");
     k.threads[to].cspace = dst;
 }

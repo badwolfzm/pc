@@ -37,7 +37,7 @@ import pathlib, re, sys
 guest = pathlib.Path(sys.argv[1]).read_text(errors="replace")
 host = pathlib.Path(sys.argv[2]).read_text()
 gm = re.search(r"^report game-probe 41 ([0-9]+)$", guest, re.MULTILINE)
-hm = re.search(r"\\bdigest=([0-9a-fA-F]{16})\\b", host)
+hm = re.search(r"\bdigest=([0-9a-fA-F]{16})\b", host)
 if gm is None or hm is None:
     raise SystemExit("missing guest or host digest: FAIL")
 got, expected = int(gm.group(1)), int(hm.group(1), 16)

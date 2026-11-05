@@ -165,7 +165,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (106, "rogue: host-exit via personality endpoint", E_KIND),
     (107, "rogue: host-exit via reply endpoint (READ only)", E_RIGHTS),
     (108, "rogue: slots 4..0xFFFF name nothing", 0),
-    (109, "rogue: 13 descriptors then EMFILE", 13),
+    (109, "rogue: 8 epoll objects then namespace quota", 8),
     (110, "personality: HTTP connections accepted", 62), // 60 native + 2 Linux
     (111, "personality: exit_group from every client", 6),
     // Linux personality (src/linux.rs): real static Linux binaries on the

@@ -41,6 +41,10 @@ const CODE_BASE: u64 = 0x80_0000;
 const DATA_BASE: u64 = 0x84_0000;
 const HEAP_END: u64 = 0x9E_0000;
 const STACK_LOW: u64 = 0x9F_0000;
+/// The guest layout is pinned to 0x800000..0xA00000 (where the kernel's own
+/// `.user` partition sits) whatever the user window's current bounds are.
+const STACK_TOP: u64 = 0xA0_0000;
+const HOSTILE_CODE: u64 = 0x80_0000;
 const MAX_THREADS: usize = 8;
 
 static PONG_TEXT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pong_text.bin"));
@@ -427,12 +431,12 @@ pub fn boot(mem_upper_kib: u32) -> ! {
         a.load(&mut k.frames, DATA_BASE, PONG_DATA, Perm::Rw).expect("pong data");
     }
     map_rw_range(&mut a, &mut k.frames, DATA_BASE, HEAP_END);
-    map_rw_range(&mut a, &mut k.frames, STACK_LOW, mm::USER_END);
+    map_rw_range(&mut a, &mut k.frames, STACK_LOW, STACK_TOP);
     if disp.real {
         map_lfb_into(a.cr3, unsafe { LFB_PD }, disp.lfb);
     }
     let pong_frames = k.frames.used;
-    let pong = k.spawn("pong", CODE_BASE, mm::USER_END, 50, Death::Exited(0), a);
+    let pong = k.spawn("pong", CODE_BASE, STACK_TOP, 50, Death::Exited(0), a);
     unsafe { PONG_THREAD = pong };
     thread::root_endpoint(&mut k, pong, 0, Rights::WRITE, 1);
     disp.object = Some(thread::root_cap(&mut k, pong, 1, ObjectKind::Frame, Rights::READ.union(Rights::WRITE), 0));
@@ -448,14 +452,14 @@ pub fn boot(mem_upper_kib: u32) -> ! {
     ];
     for (name, entry, expect, budget) in hostiles {
         let mut a = AddressSpace::new(&mut k.frames).expect("page tables");
-        a.load(&mut k.frames, mm::USER_BASE, user_code, Perm::Rx).expect("user code");
+        a.load(&mut k.frames, HOSTILE_CODE, user_code, Perm::Rx).expect("user code");
         for i in 0..16 {
-            a.map_user(&mut k.frames, mm::USER_END - (i + 1) * mm::PAGE, Perm::Rw).expect("stack");
+            a.map_user(&mut k.frames, STACK_TOP - (i + 1) * mm::PAGE, Perm::Rw).expect("stack");
         }
         if disp.real {
             map_lfb_into(a.cr3, unsafe { LFB_PD }, disp.lfb);
         }
-        let t = k.spawn(name, entry as usize as u64, mm::USER_END, budget, expect, a);
+        let t = k.spawn(name, entry as usize as u64, STACK_TOP, budget, expect, a);
         thread::root_endpoint(&mut k, t, 0, Rights::WRITE, 1);
     }
     k.cap_nodes_baseline = k.caps.len();

@@ -18,7 +18,6 @@ void probe_render(unsigned int frame, unsigned int pixels[PROBE_WIDTH * PROBE_HE
     const long long ox = 3LL * FP + FP / 2;
     const long long oy = (3LL * FP + FP / 2) + ((long long)(frame % 80U) - 40LL) * 256LL;
     for (unsigned int x = 0; x < PROBE_WIDTH; ++x) {
-        const long long dx = FP;
         const long long dy = ((long long)x - (long long)(PROBE_WIDTH / 2U)) * 256LL;
         const long long ady = dy < 0 ? -dy : dy;
         int mx = (int)(ox / FP), my = (int)(oy / FP);

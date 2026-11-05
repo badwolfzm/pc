@@ -7,5 +7,7 @@ game-frame-probe: main.c render.c render.h
 	$(CC) $(WARN) $(CFLAGS) -o $@ main.c render.c
 test: game-frame-probe
 	python3 test_probe.py ./game-frame-probe
+	$(CC) $(WARN) $(CFLAGS) -o game-frame-motion-test test_camera_motion.c render.c
+	./game-frame-motion-test
 clean:
-	rm -f game-frame-probe
+	rm -f game-frame-probe game-frame-motion-test

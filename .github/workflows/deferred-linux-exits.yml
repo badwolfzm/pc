@@ -1,0 +1,26 @@
+name: Warden bounded deferred Linux exits
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/thread.rs'
+      - 'tests/security/test_deferred_exit.py'
+      - '.github/workflows/deferred-linux-exits.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exit-notice:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source regression
+        run: python3 -m unittest discover -s tests/security -p 'test_deferred_exit.py' -v
+      - name: Install QEMU and NASM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install bare-metal target
+        run: rustup target add x86_64-unknown-none
+      - name: Guest integration tests
+        run: bash tests/kernel/run.sh

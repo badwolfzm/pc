@@ -200,7 +200,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {
     k.checks += 1;
-    match EXPECT.iter().find(|(i, _, _)| *i == id) {
+    match EXPECT.iter().chain(crate::tests_simd::EXPECT).find(|(i, _, _)| *i == id) {
         Some((_, name, want)) if *want == observed => crate::kprintln!("PASS {name:<40} got {}", observed as i64),
         Some((_, name, want)) => {
             k.failures += 1;

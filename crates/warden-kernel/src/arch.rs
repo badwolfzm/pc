@@ -66,6 +66,8 @@ extern "C" {
     fn trap_32(); fn trap_128();
 }
 
+/// #NM: an SSE/x87/AVX instruction ran with CR0.TS set.
+pub const VEC_NM: u64 = 7;
 pub const VEC_TIMER: u64 = 32;
 pub const VEC_SYSCALL: u64 = 128;
 
@@ -148,28 +150,97 @@ pub fn init_syscall() {
     }
 }
 
-/// SSE/x87 state of one thread, saved with fxsave on every trap.
-#[repr(C, align(16))]
+/// Vector state of one thread: the legacy FXSAVE image (x87, SSE) and, when
+/// the CPU has XSAVE, the XSAVE header and the AVX upper halves after it.
+/// 1024 bytes covers x87 | SSE | AVX in the standard format (832 bytes);
+/// `init_fpu` refuses to enable any state that would not fit.
+#[repr(C, align(64))]
 #[derive(Clone, Copy)]
-pub struct FxArea(pub [u8; 512]);
+pub struct FxArea(pub [u8; 1024]);
 
 impl FxArea {
-    /// Power-on defaults: FCW 0x037F, MXCSR 0x1F80 (all exceptions masked).
+    /// Power-on defaults: FCW 0x037F, MXCSR 0x1F80 (all exceptions masked),
+    /// XSTATE_BV = x87 | SSE so XRSTOR loads exactly these values and puts
+    /// the AVX upper halves in their init state (zero).
     pub const fn initial() -> Self {
-        let mut a = [0u8; 512];
+        let mut a = [0u8; 1024];
         a[0] = 0x7F;
         a[1] = 0x03;
         a[24] = 0x80;
         a[25] = 0x1F;
+        a[512] = 0x03;
         FxArea(a)
     }
 }
 
-pub fn fxsave(a: &mut FxArea) {
-    unsafe { core::arch::asm!("fxsave64 [{}]", in(reg) a.0.as_mut_ptr(), options(nostack, preserves_flags)) }
+/// XCR0 the kernel enabled, or 0 when the CPU has no XSAVE and the kernel
+/// falls back to FXSAVE (SSE only). AVX-512 state (XCR0 bits 5..7) is never
+/// enabled: the target CPU has none, and its 2 KiB of state is not worth
+/// carrying for a CPU that might.
+static mut XCR0: u64 = 0;
+
+fn cpuid(leaf: u32, sub: u32) -> (u32, u32, u32, u32) {
+    let (a, b, c, d): (u32, u32, u32, u32);
+    // rbx is reserved by LLVM; move it through a scratch register.
+    unsafe {
+        core::arch::asm!("mov {t:r}, rbx", "cpuid", "xchg {t:r}, rbx", t = out(reg) b,
+                         inlateout("eax") leaf => a, inlateout("ecx") sub => c, out("edx") d,
+                         options(nostack, preserves_flags));
+    }
+    (a, b, c, d)
 }
+
+/// Turn on XSAVE and AVX for ring 3 when the CPU has them. Called once at
+/// boot after CR4.OSFXSR (boot.asm). Returns the enabled XCR0 (0 = FXSAVE
+/// only) and the XSAVE area size the CPU reports for it.
+pub fn init_fpu() -> (u64, u32) {
+    let (_, _, c1, _) = cpuid(1, 0);
+    let has_xsave = c1 & (1 << 26) != 0;
+    let has_avx = c1 & (1 << 28) != 0;
+    if !has_xsave {
+        return (0, 512);
+    }
+    let want: u64 = 0b011 | if has_avx { 0b100 } else { 0 };
+    unsafe {
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+        cr4 |= 1 << 18; // OSXSAVE
+        core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") want as u32, in("edx") (want >> 32) as u32,
+                         options(nomem, nostack, preserves_flags));
+    }
+    // CPUID.(0xD,0).EBX: bytes XSAVE needs for the features now in XCR0.
+    let (_, size, _, _) = cpuid(0xD, 0);
+    if size as usize > core::mem::size_of::<FxArea>() {
+        // Cannot happen for x87|SSE|AVX (832); fall back rather than overflow.
+        unsafe { core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") 3u32, in("edx") 0u32, options(nomem, nostack, preserves_flags)) };
+        unsafe { XCR0 = 3 };
+        return (3, size);
+    }
+    unsafe { XCR0 = want };
+    (want, size)
+}
+
+/// Save the live vector state into `a`: XSAVE of every enabled component,
+/// or FXSAVE when the CPU has no XSAVE.
+pub fn fxsave(a: &mut FxArea) {
+    let m = unsafe { XCR0 };
+    if m != 0 {
+        unsafe { core::arch::asm!("xsave64 [{}]", in(reg) a.0.as_mut_ptr(), in("eax") m as u32, in("edx") (m >> 32) as u32, options(nostack, preserves_flags)) }
+    } else {
+        unsafe { core::arch::asm!("fxsave64 [{}]", in(reg) a.0.as_mut_ptr(), options(nostack, preserves_flags)) }
+    }
+}
+/// Load `a` into the FPU. XRSTOR with the full enabled mask overwrites every
+/// component (absent ones are reset to their init state), so nothing of the
+/// previous owner survives in any register.
 pub fn fxrstor(a: &FxArea) {
-    unsafe { core::arch::asm!("fxrstor64 [{}]", in(reg) a.0.as_ptr(), options(nostack, preserves_flags)) }
+    let m = unsafe { XCR0 };
+    if m != 0 {
+        unsafe { core::arch::asm!("xrstor64 [{}]", in(reg) a.0.as_ptr(), in("eax") m as u32, in("edx") (m >> 32) as u32, options(nostack, preserves_flags)) }
+    } else {
+        unsafe { core::arch::asm!("fxrstor64 [{}]", in(reg) a.0.as_ptr(), options(nostack, preserves_flags)) }
+    }
 }
 
 /// FS base for the thread about to run (Linux TLS).

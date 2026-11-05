@@ -135,8 +135,8 @@ native entry, and a thread that uses the other personality's entry is killed,
 0x400000, SSE allowed, no libc) and loaded by `warden-elf` into an address
 space of their own; the user range is now `0x400000..0x2000000` with a page
 table per 2 MiB window created on first use, read-only data segments get a
-real R-- mapping, and every trap saves and restores the thread's SSE state
-(`fxsave`/`fxrstor`) and FS base, so TLS and vector code work. The Linux
+real R-- mapping, and the thread's vector state (see "Vector state" below)
+and FS base follow it across switches, so TLS and vector code work. The Linux
 initial stack carries argc/argv/envp and an auxv (AT_PHDR, AT_PHNUM,
 AT_PAGESZ, AT_ENTRY, AT_RANDOM, ...), what a static glibc or musl start
 needs.
@@ -183,6 +183,53 @@ file-backed mmap, dynamic loading, a real libc run (the test programs are
 freestanding), the network container, SMP, ARM64; the frames a loaded image
 occupies are charged but not yet returned when the program dies (they are
 not Frame objects). See the kernel plan.
+
+### Vector state: SSE and AVX in ring 3 (graphics plan M1)
+
+At boot the kernel enables XSAVE when the CPU has it: CR4.OSXSAVE, and XCR0
+set to x87 | SSE | AVX (no AVX-512 state, ever). Each thread carries a
+1 KiB, 64-byte-aligned area that holds the XSAVE image (832 bytes for x87,
+SSE and AVX). On a CPU without XSAVE the kernel falls back to FXSAVE (SSE
+only). The boot log names the mode in use.
+
+State moves **lazily**. Only the thread that owns the FPU runs with CR0.TS
+clear. Any other thread's first vector instruction raises #NM, and then:
+
+- **Allowed threads** take over the FPU. These are Linux threads and native
+  threads marked `simd`, such as the render service and games that use
+  super-ops. The owner's state is saved into its own area with XSAVE, the new
+  thread's state is loaded with XRSTOR using the full enabled mask, and the
+  instruction is retried. XRSTOR resets every component that is absent from
+  the image, so no register of the previous owner stays visible.
+- **Any other native thread** is still killed by #NM. The "sse from native
+  thread" check keeps its meaning.
+
+A thread that never touches a vector register never costs a save or a
+restore. A dead owner's registers are never saved again, and the next owner
+overwrites them.
+
+Verified with `tests/kernel/run.sh`, 189 of 189 checks (6 new), run two ways:
+
+- with the default `qemu64` CPU, on the FXSAVE path;
+- with `QEMU_CPU=max tests/kernel/run.sh`, on the XSAVE x87|SSE|AVX path,
+  with a 832-byte area.
+
+The new checks:
+
+- **Two keepers.** Two `simd` threads load different patterns into
+  xmm0..15 (ymm0..15 when AVX is usable), then yield and spin across timer
+  ticks four times while the other runs. Each gets back exactly its own
+  256 or 512 bytes.
+- **Snoop.** A fresh `simd` thread that only reads its registers sees all
+  zeros, never a keeper's pattern.
+
+A mutant kernel that skips the owner's save fails both keeper checks
+(512 bytes wrong each). Pong (`tests/kernel/pong.sh`) still passes,
+15 of 15. Run in the cloud container with QEMU 8.2 TCG; not run under KVM.
+
+The `simd` flag is a spawn-time attribute set by whoever builds the thread,
+like the personality. It is not yet a capability or a manifest permission;
+the loader will set it from the manifest.
 
 See [HOST.md](HOST.md) for running everything on the Windows/WSL2 target host.
 

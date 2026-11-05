@@ -14,6 +14,7 @@ mod mm;
 mod pong;
 mod serial;
 mod tests;
+mod tests_simd;
 mod thread;
 
 use thread::Kernel;
@@ -79,6 +80,12 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 
     arch::init();
     arch::init_syscall();
+    let (xcr0, xsize) = arch::init_fpu();
+    match xcr0 {
+        0 => kprintln!("vector state: FXSAVE, x87|SSE (no XSAVE on this CPU), saved lazily on #NM"),
+        m => kprintln!("vector state: XSAVE, XCR0={m:#x} ({}), {xsize}-byte area, saved lazily on #NM",
+                       if m & 4 != 0 { "x87|SSE|AVX" } else { "x87|SSE" }),
+    }
 
     // Review finding: a refused mapping must not consume a frame. The mm
     // self-test checks that and the rest of the mapping rules (W^X bits,
@@ -112,6 +119,18 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
         // Each thread's untyped memory: everything it creates is paid from it.
         thread::root_cap(&mut k, t, 3, ObjectKind::Untyped, Rights::ALL, c.untyped);
         // Slot 4, the host capability, is minted for nobody.
+    }
+    // Graphics plan M1: native threads allowed vector state (`simd`).
+    for c in tests_simd::CASES {
+        let mut a = mm::AddressSpace::new(&mut k.frames).expect("page tables");
+        a.load(&mut k.frames, tests::USER_BASE, user_code, mm::Perm::Rx).expect("user code");
+        a.map_user(&mut k.frames, tests::DATA_PAGE, mm::Perm::Rw).expect("data page");
+        for i in 0..16 {
+            a.map_user(&mut k.frames, tests::STACK_TOP - (i + 1) * mm::PAGE, mm::Perm::Rw).expect("stack");
+        }
+        let t = k.spawn(c.name, c.entry as usize as u64, tests::STACK_TOP, c.budget, c.expect, a);
+        k.threads[t].simd = true;
+        thread::root_endpoint(&mut k, t, 0, Rights::WRITE, 1);
     }
     // One shared endpoint: the server holds the root, the client a WRITE
     // copy badged 42, the eavesdropper a WRITE copy badged 7.
@@ -152,7 +171,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 pub fn finish(k: &mut Kernel) -> ! {
     #[cfg(feature = "pong")]
     pong::finish(k);
-    let expected_logs = tests::EXPECT.len() as u32;
+    let expected_logs = (tests::EXPECT.len() + tests_simd::EXPECT.len()) as u32;
     let logs: u32 = k.threads.iter().map(|t| t.logs).sum();
     k.checks += 1;
     if logs != expected_logs {

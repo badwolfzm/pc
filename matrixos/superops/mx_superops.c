@@ -136,10 +136,33 @@ uint32_t mxs_get_tri_simd_min_span(void) {
 }
 static const mxs_kernels *g_K = &K_v128;
 
+#if MXS_HAVE_V256 && defined(MXS_FREESTANDING)
+/* No libgcc CPU-model init in a freestanding image: ask the CPU directly.
+ * AVX2 is usable only if the CPU has it (CPUID.7.0:EBX[5]) AND the OS enabled
+ * the YMM state (CPUID.1:ECX[27] OSXSAVE, then XCR0 bits 1 and 2). */
+static bool cpu_has_usable_avx2(void) {
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0u), "c"(0u));
+    if (a < 7u) return false;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1u), "c"(0u));
+    if (!(c & (1u << 27)) || !(c & (1u << 28))) return false;   /* OSXSAVE, AVX */
+    uint32_t xlo, xhi;
+    __asm__ volatile("xgetbv" : "=a"(xlo), "=d"(xhi) : "c"(0u));
+    (void)xhi;
+    if ((xlo & 6u) != 6u) return false;                          /* SSE and YMM state enabled */
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7u), "c"(0u));
+    return (b & (1u << 5)) != 0;
+}
+#endif
+
 mxs_tier mxs_detect_tier(void) {
 #if MXS_HAVE_V256
+#ifdef MXS_FREESTANDING
+    if (cpu_has_usable_avx2()) return MXS_TIER_V256;
+#else
     __builtin_cpu_init();
     if (__builtin_cpu_supports("avx2")) return MXS_TIER_V256;
+#endif
 #endif
     return MXS_TIER_V128;
 }

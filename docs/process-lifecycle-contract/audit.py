@@ -19,7 +19,7 @@ FAMILIES = {
               "set_robust_list", "get_robust_list"),
 }
 TARGETS = {name: family for family, names in FAMILIES.items() for name in names}
-ARM = re.compile(r'(?P<names>"[a-zA-Z0-9_]+"(?:\s*\|\s*"[a-zA-Z0-9_]+")*)\s*=>\s*(?P<body>[^\n]+)')
+ARM = re.compile(r'^[ \t]*(?P<names>"[a-zA-Z0-9_]+"(?:[ \t]*\|[ \t]*"[a-zA-Z0-9_]+")*)[ \t]*=>[ \t]*(?P<body>[^\n]+)', re.MULTILINE)
 NAME = re.compile(r'"([a-zA-Z0-9_]+)"')
 
 
@@ -31,8 +31,13 @@ def extract_pass_arms(source):
     end = source.find("\n/// Mediated tier:", start)
     if start < 0 or end < 0:
         raise ValueError("pass() boundaries unrecognized; inspection required")
+    # Ignore commented-out examples. This remains a conservative source scanner,
+    # not a full Rust parser.
+    region = source[start:end]
+    region = re.sub(r"/\*.*?\*/", "", region, flags=re.DOTALL)
+    region = re.sub(r"//[^\n]*", "", region)
     arms = {}
-    for arm in ARM.finditer(source[start:end]):
+    for arm in ARM.finditer(region):
         body = arm.group("body").strip()
         for name in NAME.findall(arm.group("names")):
             if name in arms:
@@ -87,7 +92,7 @@ def main(argv=None):
         print(f"audit setup error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(output, indent=2, sort_keys=True))
-    return int(args.assert_no_silent_success and output["summary"]["silent_success"] > 0)
+    return int(args.assert_no_silent_success and (output["summary"]["silent_success"] > 0 or output["summary"]["missing_abi_entries"] > 0))
 
 
 if __name__ == "__main__":

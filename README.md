@@ -49,7 +49,13 @@ assessment then pointed out that `revoke()` allocated a temporary vector per
 call on a heap that never frees; it is now allocation-free (a node whose
 parent is dead is dead, so no scratch bitmap is needed), proven by a
 counting-allocator test of 10,000 revocations in `warden-caps` and by 10,000
-in-guest revocations inside the 4 KiB heap bound. 54 of 54 checks hold.
+in-guest revocations inside the 4 KiB heap bound. An adversarial suite then
+uses every capability wrongly (the untyped cap as an endpoint, the dir cap as
+memory, ALL rights on the wrong object for host-exit, a derived untyped copy
+to spend the parent's budget, a revoked endpoint copy mid-flight) and floods
+the kernel with 5,000 refused retypes, revokes, sends, recvs, invokes, mints
+and host-exits, then overruns the stack and the data page. 83 of 83 checks
+hold; the heap grows 32 bytes during the run.
 
 Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
 See the kernel plan.
@@ -124,8 +130,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 23 unit tests across the crates
-tests/kernel/run.sh             # 54 in-guest checks against the kernel
+cargo test                      # 25 unit tests across the crates
+tests/kernel/run.sh             # 83 in-guest checks against the kernel
 tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
 tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```

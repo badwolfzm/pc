@@ -22,7 +22,7 @@ cargo build --release -p warden-kernel --target x86_64-unknown-none
 (5.15+): seccomp user notification with `ADDFD`, `openat2`, `pidfd_getfd`.
 
 ```sh
-cargo test                 # 23 unit tests
+cargo test                 # 25 unit tests
 tests/escape/run.sh        # 44 attack checks, run as root inside the sandbox
 tests/compat/run.sh        # 13 checks with ls, sh, tar, python3 ...
 ```
@@ -34,7 +34,7 @@ kernel was built without `CONFIG_SECCOMP_FILTER`; update WSL
 ## Phase 1 (kernel) under QEMU
 
 ```sh
-tests/kernel/run.sh        # builds, boots in QEMU, runs 27 in-guest checks
+tests/kernel/run.sh        # builds, boots in QEMU, runs 83 in-guest checks
 ```
 
 The script picks **KVM** when `/dev/kvm` is writable and falls back to

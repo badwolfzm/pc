@@ -3,11 +3,16 @@
 import argparse
 import json
 import sys
-from pathlib import PurePosixPath
+
+
+def safe_label(value):
+    return isinstance(value, str) and bool(value.strip()) and not any(
+        ord(ch) < 32 or ord(ch) == 127 for ch in value
+    )
 
 
 def normalize(raw):
-    if not isinstance(raw, str) or not raw or raw.startswith("/"):
+    if not safe_label(raw) or raw != raw.strip() or raw.startswith("/"):
         raise ValueError("paths must be nonempty repository-relative strings")
     is_dir = raw.endswith("/**")
     base = raw[:-3] if is_dir else raw
@@ -33,7 +38,7 @@ def find_collisions(document):
     entries = []
     seen = set()
     for agent in document["agents"]:
-        if not isinstance(agent, dict) or not isinstance(agent.get("id"), str) or not agent["id"].strip():
+        if not isinstance(agent, dict) or not safe_label(agent.get("id")) or agent["id"] != agent["id"].strip():
             raise ValueError("each agent must have a nonempty string id")
         agent_id = agent["id"]
         if agent_id in seen:

@@ -61,6 +61,19 @@ class ClaimTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 checker.normalize(bad)
 
+    def test_control_characters_rejected(self):
+        for bad in ("a\nb", "a\rb", "a\x1bb", "a\x7fb", " a", "a "):
+            with self.subTest(bad=repr(bad)), self.assertRaises(ValueError):
+                checker.normalize(bad)
+        for bad in ("a\nb", "a\x1b[31m", " a", "a "):
+            with self.subTest(agent=repr(bad)), self.assertRaises(ValueError):
+                self.check([{"id": bad, "paths": ["src/a.rs"]}])
+
+    def test_non_string_paths_rejected(self):
+        for bad in (None, 5, {}, ["a"]):
+            with self.subTest(bad=repr(bad)), self.assertRaises(ValueError):
+                checker.normalize(bad)
+
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "claims.json"

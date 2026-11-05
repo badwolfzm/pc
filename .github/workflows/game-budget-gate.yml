@@ -1,0 +1,32 @@
+name: Game G0 evidence validator
+on:
+  pull_request:
+    paths:
+      - 'tools/game-budget-gate/**'
+      - '.github/workflows/game-budget-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run standard library tests
+        run: python3 -m unittest discover -s tools/game-budget-gate -p 'test_*.py' -v
+      - name: Verify CLI acceptance and rejection
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, 'tools/game-budget-gate')
+          import test_validate
+          path = pathlib.Path('game-g0-ci-fixture.json')
+          path.write_text(json.dumps(test_validate.fixture()))
+          PY
+          python3 tools/game-budget-gate/validate.py game-g0-ci-fixture.json
+          printf '%s\n' '{"runs":[]}' > game-g0-ci-invalid.json
+          if python3 tools/game-budget-gate/validate.py game-g0-ci-invalid.json; then
+            echo "Validator accepted bad evidence" >&2
+            exit 1
+          fi

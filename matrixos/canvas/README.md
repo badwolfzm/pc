@@ -121,6 +121,26 @@ are the memory-bandwidth thread's job and will move these by a constant factor.
 Not tested: alpha/additive blends and triangles (not in this module yet, see
 below), concurrent access (single-threaded by design), A8 surfaces.
 
+### Dirty-tile edge tests (`test_dirty_tiles.c`, `make test_dirty`)
+
+62 checks in a second file that pins the bitmap mechanics the table above only
+covers end to end. They also run under ASan and UBSan (`make asan`).
+
+| Test | What it pins |
+|---|---|
+| Bitmap word boundary (1280x720) | tiles 62..66 of row 0 straddle bit 64; tile 79 of row 1 is the last bit of a row; every dirty word is consumed |
+| Row summary, 64x1100 (69 tile rows) | rows 0, 63, 64, 68 are walked; the second summary word is used; the 12 px partial row is clipped to 16x12 |
+| Tile edges | pixels at 15 and 16 dirty different tiles; a damage rect ending on a tile border does not spill; zero-size rects mark nothing |
+| `gc_pset` clipping | out-of-range writes mark nothing; same-colour writes are free |
+| `gc_invalidate_all` | forces a full 480x270 resend (510 tiles, 0 false), then clears `force` |
+| `gc_damage_bits` | NULL and mismatched geometry return -1 and touch nothing; a flagged tile with no changed pixel is dropped (`tiles_false`); the partial corner tile of 37x19 is 5x3 |
+| Sink abort | the first nonzero return is propagated, the sink is not called again, every bit is still cleared, the frame counter advances, the ghost still matches work |
+| Validation and sizing | sizes 0 and above 16384 are rejected; `gc_bitmap_bytes` gives 72 and 464 as in the cost table; a 1x1 canvas works; `gc_free` nulls the pointers |
+
+Mutation check (run once by hand, not in CI): dropping the second row-summary
+word, shifting the word-span mask by one bit, and skipping `force` in
+`gc_invalidate_all` each make this file fail.
+
 ## Alpha blending rounding rule
 
 Owned by the command-set contract, `contracts/gpu-commands.md` section 4

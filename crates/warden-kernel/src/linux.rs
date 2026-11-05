@@ -174,7 +174,7 @@ pub fn setup(k: &mut Kernel, boot: &mut CSpace, srv: usize) {
         for p in 0..BUF_SIZE / PAGE {
             k.threads[srv].aspace.map_frame(buf + p * PAGE, SRV_BUF_BASE + ci as u64 * BUF_SIZE + p * PAGE, Perm::Rw).expect("server view of buffer");
         }
-        let sp = init_stack(&a, app.name.as_bytes(), &placed, k.ticks).expect("initial stack");
+        let sp = init_stack(&a, app.name.as_bytes(), &placed).expect("initial stack");
         let t = k.spawn(app.name, placed.entry, sp, 50, app.expect, a);
         k.threads[t].personality = Personality::Linux;
         k.threads[t].linux = Proc { badge, buf, brk_start: placed.end, brk: placed.end, ..Proc::new() };
@@ -193,24 +193,22 @@ pub fn setup(k: &mut Kernel, boot: &mut CSpace, srv: usize) {
     }
 }
 
-/// Build the Linux initial stack: argc, argv, envp, auxv, AT_RANDOM bytes.
-fn init_stack(a: &crate::mm::AddressSpace, argv0: &[u8], placed: &loader::Placed, ticks: u64) -> Option<u64> {
+/// Build the Linux initial stack: argc, argv, envp and auxv.
+///
+/// Deliberately omit AT_RANDOM until Warden has a cryptographically trusted,
+/// fully seeded entropy provider. Advertising predictable bytes as Linux
+/// AT_RANDOM creates a false security guarantee for guest libc/canaries.
+/// Omission is not a substitute for real entropy: some libc implementations
+/// may refuse startup or use unsafe fallback seeds. Such guests are not
+/// security-verified and must not be enabled for untrusted workloads.
+fn init_stack(a: &crate::mm::AddressSpace, argv0: &[u8], placed: &loader::Placed) -> Option<u64> {
     let mut sp = STACK_TOP;
-    sp -= 16;
-    let random_at = sp;
-    let mut rnd = [0u8; 16];
-    for (i, b) in rnd.iter_mut().enumerate() {
-        *b = (ticks as u8).wrapping_mul(31).wrapping_add(i as u8 * 7).wrapping_add(argv0.len() as u8);
-    }
-    if !a.copy_to_user(random_at, &rnd) {
-        return None;
-    }
     sp -= (argv0.len() + 1 + 15) as u64 & !15;
     let argv0_at = sp;
     if !a.copy_to_user(argv0_at, argv0) || !a.copy_to_user(argv0_at + argv0.len() as u64, &[0]) {
         return None;
     }
-    let aux: [(u64, u64); 10] = [
+    let aux: [(u64, u64); 9] = [
         (3, placed.phdr),  // AT_PHDR
         (4, 56),           // AT_PHENT
         (5, placed.phnum), // AT_PHNUM
@@ -219,7 +217,6 @@ fn init_stack(a: &crate::mm::AddressSpace, argv0: &[u8], placed: &loader::Placed
         (11, 1000),        // AT_UID
         (12, 1000),        // AT_EUID
         (23, 0),           // AT_SECURE
-        (25, random_at),   // AT_RANDOM
         (0, 0),            // AT_NULL
     ];
     let words = 1 + 1 + 1 + 1 + aux.len() * 2;

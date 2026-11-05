@@ -32,6 +32,12 @@ class Probe(unittest.TestCase):
         digests = [re.search(r"digest=([0-9a-f]+)", run(n).stdout).group(1) for n in ("1", "2", "60")]
         self.assertEqual(len(set(digests)), 3)
 
+    def test_300_frame_golden_digest(self):
+        """Pinned from Linux CI baseline; changes require explicit review."""
+        result = run("300")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("digest=460307657f8a6e19", result.stdout)
+
     def test_framebuffer_size(self):
         self.assertIn("bytes=256000", run("2").stdout)
 

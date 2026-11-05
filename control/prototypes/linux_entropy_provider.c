@@ -16,7 +16,9 @@ bool warden_linux_entropy_fill(void *context, uint8_t *destination, size_t lengt
     /* Stage all bytes: on failure, leave caller memory untouched. */
     unsigned char staging[WARDEN_ENTROPY_MAX_REQUEST];
     size_t position = 0;
+    unsigned attempts = 0;
     while (position < length) {
+        if (++attempts > 16u) { wipe(staging, sizeof(staging)); return false; }
         /* GRND_NONBLOCK refuses to wait for an uninitialized CSPRNG. */
         ssize_t count = getrandom(staging + position, length - position, GRND_NONBLOCK);
         if (count < 0 && errno == EINTR) continue;

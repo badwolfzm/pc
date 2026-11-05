@@ -1,6 +1,6 @@
 {
   "schema": "warden-abi",
-  "version": "0.1",
+  "version": "0.2",
   "arch": "x86_64",
   "permissions": [
     {"name": "load", "doc": "Map this library into the process (no scope)."},
@@ -9,7 +9,11 @@
     {"name": "exec", "doc": "Execute programs under a path prefix."},
     {"name": "net.connect", "doc": "Open TCP connections to host:port (\"*\" wildcards allowed)."},
     {"name": "net.listen", "doc": "Listen on a local port."},
-    {"name": "proc.spawn", "doc": "Create processes and threads (no namespaces)."}
+    {"name": "proc.spawn", "doc": "Create processes and threads (no namespaces)."},
+    {"name": "render", "doc": "Submit commands to the render service's command ring (no scope). The render capability is the only path to the ring."},
+    {"name": "superop", "doc": "Use one named compiler super-op / accelerated kernel; scope is its name."},
+    {"name": "clock", "doc": "Clock resolution: scope is \"coarse\" (default, ms) or \"precise\" (ns; enables timing side channels, ask twice)."},
+    {"name": "random", "doc": "Read from the system entropy source (no scope)."}
   ],
   "syscalls": [
     {"nr": 0, "name": "read", "class": "pass"},

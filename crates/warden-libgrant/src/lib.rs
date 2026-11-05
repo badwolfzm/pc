@@ -20,7 +20,8 @@ use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
 
-pub const KNOWN_PERMS: &[&str] = &["load", "fs.read", "fs.write", "exec", "net.connect", "net.listen", "proc.spawn"];
+pub const KNOWN_PERMS: &[&str] =
+    &["load", "fs.read", "fs.write", "exec", "net.connect", "net.listen", "proc.spawn", "render", "superop", "clock", "random"];
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Grant {
@@ -45,6 +46,15 @@ impl Grant {
         }
         if matches!(perm, "net.connect" | "net.listen") && scope.is_empty() {
             return Err(format!("{perm} needs a host:port scope"));
+        }
+        if perm == "superop" && scope.is_empty() {
+            return Err("superop needs the super-op name as scope".into());
+        }
+        if perm == "clock" && !matches!(scope, "coarse" | "precise") {
+            return Err("clock scope must be coarse or precise".into());
+        }
+        if matches!(perm, "load" | "render" | "random" | "proc.spawn") && !scope.is_empty() {
+            return Err(format!("{perm} takes no scope"));
         }
         Ok(Grant { perm: perm.to_string(), scope: scope.to_string() })
     }
@@ -288,6 +298,11 @@ mod tests {
         assert!(Grant::parse("root").is_err());
         assert!(Grant::parse("net.connect=").is_err());
         assert!(Grant::parse("fs.read=/a b").is_err());
+        assert!(Grant::parse("clock=precise").is_ok());
+        assert!(Grant::parse("clock=fast").is_err());
+        assert!(Grant::parse("superop").is_err());
+        assert!(Grant::parse("superop=lfsr_lift").is_ok());
+        assert!(Grant::parse("render=x").is_err());
     }
 
     #[test]

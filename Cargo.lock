@@ -94,6 +94,13 @@ name = "warden-caps"
 version = "0.0.1"
 
 [[package]]
+name = "warden-kernel"
+version = "0.0.1"
+dependencies = [
+ "warden-caps",
+]
+
+[[package]]
 name = "warden-libgrant"
 version = "0.0.1"
 dependencies = [

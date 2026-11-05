@@ -44,7 +44,12 @@ code was mapped writable (now **W^X**: code RX, data and stack NX; writing
 one's own code, executing the data page and executing the stack all fault),
 and endpoint wait queues grew on demand (now each endpoint's queues have a
 **fixed capacity allocated at creation**; the IPC path never allocates and a
-third sender on a full queue is refused with -7). 53 of 53 checks hold.
+third sender on a full queue is refused with -7). The user's status
+assessment then pointed out that `revoke()` allocated a temporary vector per
+call on a heap that never frees; it is now allocation-free (a node whose
+parent is dead is dead, so no scratch bitmap is needed), proven by a
+counting-allocator test of 10,000 revocations in `warden-caps` and by 10,000
+in-guest revocations inside the 4 KiB heap bound. 54 of 54 checks hold.
 
 Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
 See the kernel plan.
@@ -120,7 +125,7 @@ join the process's authority only once that library is actually loaded.
 
 ```sh
 cargo test                      # 23 unit tests across the crates
-tests/kernel/run.sh             # 53 in-guest checks against the kernel
+tests/kernel/run.sh             # 54 in-guest checks against the kernel
 tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
 tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```

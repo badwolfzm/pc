@@ -154,6 +154,21 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (90, "untyped death: frame cap paid by deleted untyped", E_REVOKED),
     (91, "untyped death: deleted untyped slot is empty", E_INVALID),
     (92, "untyped death: delete freed the untyped and its frame (2 nodes)", 2),
+    // Phase 2b: reported by the rogue application (100..109, 112) and the
+    // personality server (110, 111). Values are Linux errnos, negative.
+    (100, "rogue: read of httpd's fd 3 is EBADF", -(9i64) as u64),
+    (101, "rogue: open without fs.read is EACCES", -(13i64) as u64),
+    (102, "rogue: socket without net grant is EACCES", -(13i64) as u64),
+    (103, "rogue: write of 1 MiB from a 16 KiB buffer is EFAULT", -(14i64) as u64),
+    (104, "rogue: unknown syscall is ENOSYS", -(38i64) as u64),
+    (105, "rogue: 5000 unknown syscalls, all ENOSYS", 0),
+    (106, "rogue: host-exit via personality endpoint", E_KIND),
+    (107, "rogue: host-exit via reply endpoint (READ only)", E_RIGHTS),
+    (108, "rogue: slots 4..0xFFFF name nothing", 0),
+    (109, "rogue: 13 descriptors then EMFILE", 13),
+    (110, "personality: HTTP connections accepted", 60),
+    (111, "personality: exit_group from every client", 3),
+    (112, "rogue: its own buffer is read/write", 0xB0B),
 ];
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {

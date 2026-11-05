@@ -1,6 +1,6 @@
 [package]
 name = "warden-kernel"
-description = "Warden microkernel, Phase 1: boots on x86-64 under QEMU, runs ring-3 threads under the warden-caps capability model with one partition timer and no device interrupts."
+description = "Warden microkernel: boots on x86-64 under QEMU, runs ring-3 threads in private address spaces under the warden-caps capability model, loads static ELF applications and serves them through a user-space Linux personality server."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,4 +8,5 @@ build = "build.rs"
 
 [dependencies]
 warden-caps = { path = "../warden-caps" }
+warden-elf = { path = "../warden-elf" }
 

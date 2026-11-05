@@ -9,6 +9,9 @@ yet; it has been verified on a Linux 6.18 x86-64 cloud VM without KVM. The
 
 ```sh
 sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+# build-essential also provides the `cc` the kernel build uses to compile the
+# Phase 2b user programs (crates/warden-kernel/user/*.c); set WARDEN_CC to
+# point at another compiler if `cc` is not gcc or clang.
 curl https://sh.rustup.rs -sSf | sh          # stable toolchain
 rustup target add x86_64-unknown-none        # bare-metal target for the kernel
 git clone https://github.com/badwolfzm/pc && cd pc
@@ -22,7 +25,7 @@ cargo build --release -p warden-kernel --target x86_64-unknown-none
 (5.15+): seccomp user notification with `ADDFD`, `openat2`, `pidfd_getfd`.
 
 ```sh
-cargo test                 # 31 unit tests
+cargo test                 # 38 unit tests
 tests/escape/run.sh        # 67 attack checks, run as root inside the sandbox
 tests/compat/run.sh        # 14 checks with ls, sh, tar, python3 ...
 ```
@@ -34,7 +37,7 @@ kernel was built without `CONFIG_SECCOMP_FILTER`; update WSL
 ## Phase 1 (kernel) under QEMU
 
 ```sh
-tests/kernel/run.sh        # builds, boots in QEMU, runs 108 in-guest checks
+tests/kernel/run.sh        # builds, boots in QEMU, runs 131 in-guest checks
 ```
 
 The script picks **KVM** when `/dev/kvm` is writable and falls back to

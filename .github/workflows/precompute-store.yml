@@ -1,0 +1,19 @@
+name: Precompute artifact store reference
+on:
+  pull_request:
+    paths:
+      - 'tools/precompute-store/**'
+      - '.github/workflows/precompute-store.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host Python reference tests
+        run: python3 -m unittest discover -s tools/precompute-store -p 'test_*.py' -v
+      - name: Compile checks
+        run: python3 -m py_compile tools/precompute-store/store.py tools/precompute-store/test_store.py

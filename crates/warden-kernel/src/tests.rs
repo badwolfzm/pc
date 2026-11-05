@@ -195,6 +195,12 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (161, "linux hostile: read of fd 3 (not open) is EBADF", -(9i64) as u64),
     (162, "linux hostile: 1 MiB write from a 64-byte buffer is EFAULT", -(14i64) as u64),
     (163, "linux hostile: 5000 bad syscalls, all ENOSYS, still alive", 1),
+    (164, "linux client: gettimeofday writes timeval", 1),
+    (165, "linux client: getrlimit writes fd limits", 1),
+    (166, "linux client: prlimit64 writes stack limits", 1),
+    (167, "linux client: sched_getaffinity writes CPU mask", 1),
+    (168, "linux client: clock_getres writes resolution", 1),
+    (169, "linux client: getrandom refuses predictable bytes", 1),
     (112, "rogue: its own buffer is read/write", 0xB0B),
 ];
 

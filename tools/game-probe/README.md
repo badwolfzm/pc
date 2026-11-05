@@ -42,3 +42,24 @@ kernel-controlled provenance before exposure to an untrusted guest.
 Existing Pong native guest (`tests/kernel/pong.sh`) already exercises
 QEMU/VGA/input separately; reusing that proven device path is an integration
 option, not proof that this new transport runs in Warden.
+
+## Integrated host replay (2026-11-05, exact PR head)
+
+`game_loop.h/.c` composes input queue drain, deterministic game state,
+software rendering and validated copy/present into one caller-owned instance.
+`test_game_loop.c` independently replays 301 frames on two instances,
+compares every frame hash/dirty count, and checks event handling and bounds.
+
+Verified by GitHub Actions [run 42032996931](https://github.com/badwolfzm/pc/actions/runs/42032996931)
+on commit `4a99623d38b1042a1183f5e6ded70649627d903f`:
+
+- Optimized GCC C11 `make clean test`: all three test executables PASS.
+- GCC ASan+UBSan `make clean test`: all three test executables PASS.
+- Integrated replay final hash: `82182d0eb3b82019`.
+- This is a host CI test. Warden/QEMU integration and one-vCPU FPS are **not verified**.
+
+The existing Warden Pong guest uses a 320x240 VGA framebuffer behind
+capability-checked SYS_PRESENT and SYS_KEY calls. A future guest adaptor can
+scale/copy this 160x100 frame into a 320x240 private source buffer and invoke
+those syscalls, but that work requires kernel/guest ownership coordination.
+Do not write to device memory directly or bypass capability checks.

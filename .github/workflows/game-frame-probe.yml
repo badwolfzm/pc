@@ -23,3 +23,16 @@ jobs:
         run: |
           cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all -o /tmp/probe-ubsan tools/game-frame-probe/main.c tools/game-frame-probe/render.c
           python3 tools/game-frame-probe/test_probe.py /tmp/probe-ubsan
+
+  qemu-native-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bare-metal and QEMU build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm binutils qemu-system-x86
+          rustup target add x86_64-unknown-none
+      - name: Run the guest under one QEMU vCPU (experimental)
+        run: bash tools/game-frame-probe/guest/qemu-smoke.sh

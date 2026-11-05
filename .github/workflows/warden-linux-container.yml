@@ -35,6 +35,10 @@ jobs:
         run: |
           cc -std=c11 -O0 -fno-builtin -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-unused-function tests/compat/net_namespace_integration.c -o /tmp/warden-netns-integration
           /tmp/warden-netns-integration
+      - name: Duplicate-listener reservation regression
+        run: |
+          cc -std=c11 -O0 -fno-builtin -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-unused-function tests/compat/net_namespace_double_bind.c -o /tmp/warden-double-bind
+          /tmp/warden-double-bind
       - name: Rust unit tests
         run: cargo test --workspace --exclude warden-kernel
       - name: Boot Warden and run its in-guest checks

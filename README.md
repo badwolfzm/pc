@@ -30,7 +30,12 @@ tables; the same user virtual addresses map to different frames) and
 sender's badge; `send` needs WRITE on the endpoint capability, `recv` needs
 READ). Tests: a client's badge and words reach the server; a WRITE-only holder
 cannot receive; a writer's data page is invisible to a reader at the same
-address. 41 of 41 checks hold.
+address. A review of commit bd1e914 found that `SYS_HOST_EXIT` accepted any
+WRITE capability (the console would have stopped the machine) and that
+refused mints still allocated; both are fixed and tested: host-exit needs the
+`Host` object, refused mints and roots allocate nothing, a 5,000-mint flood
+leaves the capability table unchanged, and the kernel heap may grow by at most
+4 KiB during the whole run. 45 of 45 checks hold.
 
 Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
 See the kernel plan.
@@ -105,8 +110,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 21 unit tests across the crates
-tests/kernel/run.sh             # 41 in-guest checks against the kernel
+cargo test                      # 23 unit tests across the crates
+tests/kernel/run.sh             # 45 in-guest checks against the kernel
 tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
 tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```

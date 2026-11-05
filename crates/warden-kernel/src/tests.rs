@@ -54,6 +54,8 @@ const E_INVALID: u64 = -(1i64) as u64;
 const E_RIGHTS: u64 = -(3i64) as u64;
 const E_REVOKED: u64 = -(4i64) as u64;
 const E_BUDGET: u64 = -(5i64) as u64;
+const E_KIND: u64 = -(6i64) as u64;
+const E_OCCUPIED: u64 = -(2i64) as u64;
 
 /// (id, name, expected observed value)
 pub const EXPECT: &[(u64, &str, u64)] = &[
@@ -70,6 +72,8 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (11, "retype 1 MiB from 1 MiB budget (legit)", 0),
     (12, "retype 1 more byte", E_BUDGET),
     (13, "mint into empty slot 5 then invoke", 1),
+    (14, "host-exit via console cap (WRITE, wrong object)", E_KIND),
+    (15, "5000 mints into an occupied slot: all refused", 0),
     (20, "IPC: server sees client's badge", 42),
     (21, "IPC: server gets word 0", 0x1234),
     (22, "IPC: server gets word 3", 0x4444),
@@ -130,6 +134,21 @@ pub extern "C" fn hostile_caps() -> ! {
         let _ = sys!(2, SLOT_DIR, SLOT_LOCK, 1);
         let r = sys!(1, SLOT_LOCK, 1u64, 0);
         sys!(0, SLOT_CONSOLE, 13, if r == 0 { 1 } else { r });
+        // Review finding: WRITE on the console must not stop the machine.
+        let r = sys!(7, SLOT_CONSOLE, 0, 0);
+        sys!(0, SLOT_CONSOLE, 14, r);
+        // Review finding: refused mints must not allocate. The kernel checks
+        // the node count after this thread; here we count wrong results.
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            let r = sys!(2, SLOT_DIR, SLOT_CONSOLE, 0x1F);
+            if r != E_OCCUPIED {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 15, bad);
         // Finally: write to kernel memory. Expected: #PF, thread killed.
         asm!("mov qword ptr [{0}], 0xDEAD", in(reg) 0x10_0000u64, options(nostack));
         sys!(6, 0, 0, 0);

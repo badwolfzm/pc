@@ -94,6 +94,14 @@ pub struct Kernel {
     pub ticks: u64,
     pub failures: u32,
     pub checks: u32,
+    /// Capability nodes after setup; tests may add exactly `expected_mints`.
+    pub cap_nodes_baseline: usize,
+    pub expected_mints: usize,
+    /// Kernel heap in use after setup. The run may add only a little.
+    pub heap_baseline: usize,
+    /// The one machine-control object, if any was ever created. Phase 2a
+    /// creates none, so no capability can stop the machine.
+    pub host_object: Option<warden_caps::ObjectId>,
 }
 
 pub static mut KERNEL: Option<Kernel> = None;
@@ -233,13 +241,10 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
         }
         SYS_INVOKE => k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights(b as u8 & 0x1F)).map(|_| 0).map_err(err),
         SYS_MINT => {
-            let mut dst = k.threads[cur].cspace.clone();
-            let r = k.caps.mint(&k.threads[cur].cspace, a as usize, &mut dst, b as usize, Rights(c as u8 & 0x1F), 0);
-            match r {
-                Ok(()) => {
-                    k.threads[cur].cspace = dst;
-                    k.caps.invoke(&k.threads[cur].cspace, b as usize, Rights::NONE).map(|r| r.rights.bits() as u64).map_err(err)
-                }
+            // No clone of the CSpace: a refused mint must not touch the heap.
+            let cs = &mut k.threads[cur].cspace;
+            match k.caps.mint_self(cs, a as usize, b as usize, Rights(c as u8 & 0x1F), 0) {
+                Ok(()) => k.caps.invoke(cs, b as usize, Rights::NONE).map(|r| r.rights.bits() as u64).map_err(err),
                 Err(e) => Err(err(e)),
             }
         }
@@ -251,8 +256,15 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
         }
         SYS_EXIT => return Err(Death::Exited(a)),
         SYS_HOST_EXIT => {
-            if let Err(e) = k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
-                return Ok(After::Resume(err(e)));
+            // The capability must name the machine-control object itself;
+            // WRITE on some other object (the console) is not enough.
+            match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
+                Err(e) => return Ok(After::Resume(err(e))),
+                // Kind and identity: it must be *the* machine-control object.
+                Ok(r) if r.kind != ObjectKind::Host || Some(r.object) != k.host_object => {
+                    return Ok(After::Resume(err(CapError::WrongKind)))
+                }
+                Ok(_) => {}
             }
             crate::kprintln!("thread {} holds the host capability and stops the machine", k.threads[cur].name);
             arch::qemu_exit(b as u32)

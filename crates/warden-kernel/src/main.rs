@@ -76,6 +76,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let mut k = Kernel {
         caps: warden_caps::CapTable::new(), frames, endpoints: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
+        cap_nodes_baseline: 0, expected_mints: 2, heap_baseline: 0, host_object: None, // tests 4 and 13 each mint once
     };
     // One address space per thread: a private copy of the user code, one
     // private data page, and a 64 KiB stack, all at the same virtual
@@ -101,6 +102,8 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     thread::root_cap(&mut k, server, 6, ObjectKind::Endpoint, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 0);
     thread::mint_to(&mut k, server, 6, client, 6, Rights::WRITE, 42);
     thread::mint_to(&mut k, server, 6, eaves, 6, Rights::WRITE, 7);
+    k.cap_nodes_baseline = k.caps.len();
+    k.heap_baseline = heap::used();
     kprintln!("{} ring-3 threads in {} address spaces, {} frames ({} KiB) allocated, {} bytes of kernel heap; starting the partition timer",
         k.threads.len(), k.threads.len(), k.frames.used, k.frames.used * 4, heap::used());
     unsafe { *core::ptr::addr_of_mut!(thread::KERNEL) = Some(k) };
@@ -117,6 +120,26 @@ pub fn finish(k: &mut Kernel) -> ! {
         kprintln!("FAIL threads reported {logs} of {expected_logs} expected results");
     } else {
         kprintln!("PASS threads reported all {expected_logs} expected results");
+    }
+    k.checks += 1;
+    let nodes = k.caps.len();
+    if nodes == k.cap_nodes_baseline + k.expected_mints {
+        kprintln!("PASS capability table grew only by the {} legitimate mints ({} nodes)", k.expected_mints, nodes);
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL capability table has {} nodes, expected {} + {}", nodes, k.cap_nodes_baseline, k.expected_mints);
+    }
+    // The kernel heap has no free(): every byte the run allocates is a byte
+    // a hostile thread could make it allocate. Bound: the endpoint queues
+    // (one BTreeMap node) plus two Vec pushes. 4 KiB is generous.
+    const HEAP_LIMIT: usize = 4096;
+    let grew = heap::used() - k.heap_baseline;
+    k.checks += 1;
+    if grew <= HEAP_LIMIT {
+        kprintln!("PASS kernel heap grew {grew} bytes during the run (limit {HEAP_LIMIT})");
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL kernel heap grew {grew} bytes during the run (limit {HEAP_LIMIT})");
     }
     kprintln!();
     kprintln!("{}: {} checks, {} failed, {} timer ticks, {} frames, heap {} bytes", if k.failures == 0 { "ALL HELD" } else { "KERNEL TEST FAILED" }, k.checks, k.failures, k.ticks, k.frames.used, heap::used());

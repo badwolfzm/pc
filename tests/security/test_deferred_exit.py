@@ -23,6 +23,12 @@ class DeferredExitTests(unittest.TestCase):
         self.assertIn("if !Endpoint::enqueue(&mut ep.senders, ep.capacity, t)", THREAD)
         self.assertNotIn("ENDPOINT_MAX_QUEUE + 1); // extend queue", THREAD)
 
+    def test_queue_backpressure_is_not_conflated_with_missing_exits(self):
+        main = (ROOT / "crates/warden-kernel/src/main.rs").read_text(encoding="utf-8")
+        self.assertIn("k.ep_over_capacity == 0 && k.ep_refused >= 1", main)
+        self.assertIn("CHECK 111 proves all ten", main)
+        self.assertNotIn("k.ep_refused == 1", main)
+
     def test_linux_exit_remains_badged_capability_mediated(self):
         self.assertIn("k.caps.invoke(cs, SLOT_PERSONALITY, Rights::WRITE)", LINUX)
         self.assertIn("Msg { badge: ep.badge, w: [231, code, 0, 0] }", LINUX)

@@ -25,6 +25,7 @@ Plan: https://claude.ai/artifact/VU7zP9p25aqDQzpSpfYFRp (MatrixOS compiler and G
 ## Skeleton (filled in once the contracts land)
 
     tests/
+      integrate.sh             builds integrated.c = baseline + accepted modules (lfsr wired)
       golden_check.sh          baseline pins (done)
       security_regressions.sh  the seven review findings (done; F2, F7 skip)
       unit/

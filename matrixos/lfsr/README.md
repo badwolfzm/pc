@@ -78,11 +78,18 @@ AddressSanitizer and UndefinedBehaviorSanitizer.
 
 | Method | median | p95 |
 |---|---|---|
-| naive loop (v1 C) | 13.18 ms | 13.33 ms |
-| v1 lifted (accumulator compose) | 7.96 us | 8.87 us |
-| v2 `mx_aff_jump`, one-off n | 6.38 us | 7.19 us |
-| v2 plan jump, plan prebuilt | 149 ns | 158 ns |
-| plan build, paid once per recurrence | 19.1 us | |
+| naive loop (v1 C) | 13.16 ms | 13.34 ms |
+| v1 lifted (accumulator compose, per call) | 9.38 us | 9.77 us |
+| v2 `mx_aff_jump`, one-off n (per call, like-for-like with v1) | 6.24 us | 7.02 us |
+| v2 plan build + one jump (cold, like-for-like with v1) | 18.98 us | 19.78 us |
+| v2 plan jump only (warm, plan reused) | 144 ns | 159 ns |
+| plan build alone, paid once per recurrence | 18.6 us | |
+
+Fair reading: for a single jump with no reuse, v2 is about 1.5x faster than v1
+(6.2 us vs 9.4 us) and a cold plan is about 2x slower than v1 (the 64
+squarings cover all n up to 2^64, which v1's ~24 squarings for n = 10^7 did
+not). The plan pays off from the second jump on: about 65x per jump against v1
+and about 90,000x against the naive loop.
 
 The plan-jump number is within 10x of the timer floor, so read it as "about
 0.15 us", not as an exact figure. These are from this container, not from the

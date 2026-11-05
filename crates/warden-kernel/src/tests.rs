@@ -47,7 +47,7 @@ const SLOT_FREE: u64 = 2;
 const SLOT_UNTYPED: u64 = 3; // Untyped, 1 MiB
 const SLOT_HOST: u64 = 4; // not held by any test thread
 const SLOT_LOCK: u64 = 5; // slot with no cap and never will be
-const SLOT_EP: u64 = 6; // Endpoint: server READ|WRITE|GRANT, client WRITE badge 42, eavesdropper WRITE badge 7
+const SLOT_EP: u64 = 6; // Endpoint: server ALL (creator, paid for it), client WRITE|GRANT badge 42, eavesdropper WRITE badge 7
 const SLOT_EMPTY: u64 = 7;
 pub const DATA_PAGE: u64 = 0x90_0000; // one private, zeroed, writable page per thread
 pub const STACK_TOP: u64 = USER_END; // same VA in every thread: spaces are private
@@ -107,6 +107,8 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (27, "isolation: reader sees nothing of the writer", 0),
     (28, "isolation: reader's own page is still writable", 0x7),
     (29, "IPC: third sender on a full endpoint queue refused", E_QUEUE_FULL),
+    (95, "badge: client's self-minted copy still carries 42", 42),
+    (96, "badge: eavesdropper claiming to be the client arrives as 7", 7),
     // Wrong-capability use (ids 40..49): the right bits on the wrong object,
     // or the right object through the wrong right, must all be refused.
     (40, "send via untyped cap (ALL rights, wrong kind)", E_KIND),
@@ -453,6 +455,17 @@ pub extern "C" fn ipc_server() -> ! {
         sys!(0, SLOT_CONSOLE, 20, if r == 0 { badge } else { r });
         sys!(0, SLOT_CONSOLE, 21, w0);
         sys!(0, SLOT_CONSOLE, 22, w3);
+        // Two more messages arrive in either order: one through the client's
+        // self-minted copy (must still carry 42) and one from the eavesdropper
+        // claiming in word 0 to be the client (must carry 7). The badge is
+        // the only identity a server trusts.
+        let mut i = 0;
+        while i < 2 {
+            let (r, badge, w0, _, _, _) = recv!(SLOT_EP);
+            let v = if r == 0 { badge } else { r };
+            sys!(0, SLOT_CONSOLE, if w0 == 0xC0DE { 95 } else { 96 }, v);
+            i += 1;
+        }
         sys!(6, 0, 0, 0);
     }
     loop {}
@@ -463,6 +476,10 @@ pub extern "C" fn ipc_client() -> ! {
     unsafe {
         let r = send!(SLOT_EP, 0x1234u64, 0x2222u64, 0x3333u64, 0x4444u64);
         sys!(0, SLOT_CONSOLE, 23, r);
+        // Copy our own endpoint cap (we hold GRANT) and send through the
+        // copy. Badges are sticky: the copy carries 42 whatever we ask for.
+        let _ = sys!(2, SLOT_EP, SLOT_FREE, 0x1F);
+        let _ = send!(SLOT_FREE, 0xC0DEu64, 0u64, 0u64, 0u64);
         sys!(6, 0, 0, 0);
     }
     loop {}
@@ -475,6 +492,8 @@ pub extern "C" fn ipc_eavesdropper() -> ! {
         sys!(0, SLOT_CONSOLE, 24, r);
         let r = send!(SLOT_EMPTY, 1u64, 2u64, 3u64, 4u64);
         sys!(0, SLOT_CONSOLE, 25, r);
+        // Claim to be the client in the message words; the badge says 7.
+        let _ = send!(SLOT_EP, 42u64, 42u64, 42u64, 42u64);
         sys!(6, 0, 0, 0);
     }
     loop {}

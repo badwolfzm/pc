@@ -184,6 +184,29 @@ freestanding), the network container, SMP, ARM64; the frames a loaded image
 occupies are charged but not yet returned when the program dies (they are
 not Frame objects). See the kernel plan.
 
+**Endpoint queues are priced into untyped memory, and badges are sticky.**
+An endpoint's price is now `128 + 2 * capacity * 16` bytes, so its two wait
+queues are paid for by whoever creates it, from the same untyped budget as
+every other object: a `retype` of kind Endpoint takes the queue capacity as
+its size (0 = the default 4, at most 8) and the kernel allocates exactly the
+queue it charged for. The suite's own endpoints (server, flood target,
+revocation target) are created the same way at boot, paid from their
+creators' untyped memory; a boot check shows an over-budget request is
+refused with nothing allocated or charged, and that each creator paid exactly
+its object, queues and minted copies while holders paid nothing. The kernel
+records each endpoint's peak sender depth and refused calls when it reclaims
+it and checks both at the end. In `warden-caps`, a badged capability can no
+longer be re-badged by `mint`, even with GRANT: a copy keeps its badge and
+only an unbadged capability can be given one (the test
+`badged_caps_cannot_be_rebadged` the adversarial review left ignored now
+runs). In-guest: the client copies its own endpoint capability and still
+arrives as badge 42; the eavesdropper claims in its message words to be the
+client and still arrives as badge 7. Measured under QEMU/TCG in a cloud
+container, not yet on the target PC.
+
+Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
+See the kernel plan.
+
 See [HOST.md](HOST.md) for running everything on the Windows/WSL2 target host.
 
 ## Phase 0: the host prototype

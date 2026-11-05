@@ -100,7 +100,7 @@ impl ObjectKind {
     pub const fn bytes(self) -> u64 {
         match self {
             ObjectKind::Frame => 4096,
-            ObjectKind::Endpoint => 256,
+            ObjectKind::Endpoint => endpoint_bytes(ENDPOINT_DEFAULT_QUEUE),
             ObjectKind::Notification => 64,
             ObjectKind::AddressSpace => 4 * 4096,
             ObjectKind::Thread => 8192,
@@ -112,6 +112,30 @@ impl ObjectKind {
 
 /// Bytes charged for one capability node (one entry of the derivation tree).
 pub const NODE_BYTES: u64 = 64;
+
+/// An endpoint's price is its object plus its two wait queues, so the queue
+/// budget is paid from the creator's untyped memory like everything else:
+/// `ENDPOINT_BASE_BYTES + 2 * capacity * ENDPOINT_QUEUE_SLOT_BYTES`. A retype
+/// of kind Endpoint takes the queue capacity as its `size` (0 = default).
+pub const ENDPOINT_BASE_BYTES: u64 = 128;
+pub const ENDPOINT_QUEUE_SLOT_BYTES: u64 = 16;
+pub const ENDPOINT_DEFAULT_QUEUE: u64 = 4;
+pub const ENDPOINT_MAX_QUEUE: u64 = 8;
+
+pub const fn endpoint_bytes(capacity: u64) -> u64 {
+    ENDPOINT_BASE_BYTES + 2 * capacity * ENDPOINT_QUEUE_SLOT_BYTES
+}
+
+/// The queue capacity a retype `size` asks for: 0 means the default, anything
+/// above `ENDPOINT_MAX_QUEUE` is refused (the kernel and the table use the
+/// same rule, so the queue allocated matches the bytes charged).
+pub fn endpoint_capacity(size: u64) -> Result<u64, CapError> {
+    match size {
+        0 => Ok(ENDPOINT_DEFAULT_QUEUE),
+        c if c <= ENDPOINT_MAX_QUEUE => Ok(c),
+        _ => Err(CapError::OutOfBudget),
+    }
+}
 
 /// Smallest untyped a split may produce; stops a thread making millions of
 /// one-byte children (each child is an object plus a node, both charged).
@@ -491,6 +515,12 @@ impl CapTable {
         if !src.rights.contains(Rights::GRANT) {
             return Err(CapError::InsufficientRights);
         }
+        // Badges are sticky: a badged capability's copies keep its badge.
+        // A holder may copy and attenuate it, but cannot speak to a server
+        // under another identity. Only an unbadged capability takes a badge.
+        if src.badge != 0 && badge != 0 && badge != src.badge {
+            return Err(CapError::InsufficientRights);
+        }
         Ok(CapNode {
             object: src.object,
             rights: src.rights.intersect(mask),
@@ -546,8 +576,9 @@ impl CapTable {
     /// Create a kernel object of `kind`, paid for from the untyped in
     /// `untyped_slot` (needs WRITE), and place a full-rights root capability
     /// for it in `dst_slot`. For `Untyped`, `size` is the child's budget
-    /// (at least `MIN_UNTYPED`); for other kinds the size is fixed by the
-    /// kind. Costs `kind.bytes() + NODE_BYTES`. Returns the object and the
+    /// (at least `MIN_UNTYPED`); for `Endpoint` it is the wait-queue capacity
+    /// (0 = `ENDPOINT_DEFAULT_QUEUE`, at most `ENDPOINT_MAX_QUEUE`); for other
+    /// kinds the size is fixed by the kind. Costs the object plus `NODE_BYTES`. Returns the object and the
     /// untyped's remaining budget. A refused retype consumes nothing.
     pub fn retype(
         &mut self,
@@ -573,7 +604,8 @@ impl CapTable {
                 }
                 size
             }
-            ObjectKind::Frame | ObjectKind::Endpoint | ObjectKind::Notification => kind.bytes(),
+            ObjectKind::Endpoint => endpoint_bytes(endpoint_capacity(size)?),
+            ObjectKind::Frame | ObjectKind::Notification => kind.bytes(),
             _ => return Err(CapError::WrongKind),
         };
         self.check_free(cs, dst_slot)?;
@@ -674,6 +706,50 @@ mod tests {
             .unwrap();
         t.create_root(&mut cs, 1, ObjectKind::Untyped, Rights::ALL, U_BUDGET).unwrap();
         (t, cs)
+    }
+
+    #[test]
+    fn badged_caps_cannot_be_rebadged() {
+        let mut t = CapTable::new();
+        let mut server = CSpace::new(1);
+        let mut client = CSpace::new(3);
+        t.create_root(&mut server, 0, ObjectKind::Endpoint, Rights::ALL, 0).unwrap();
+        t.mint(&server, 0, &mut client, 0, Rights::WRITE.union(Rights::GRANT), 7).unwrap();
+        let (nodes, live) = (t.len(), t.live_nodes());
+        // A different badge is refused, and the refusal allocates nothing.
+        assert_eq!(t.mint_self(&mut client, 0, 1, Rights::ALL, 42), Err(CapError::InsufficientRights));
+        let mut other = CSpace::new(1);
+        assert_eq!(t.mint(&client, 0, &mut other, 0, Rights::ALL, 42), Err(CapError::InsufficientRights));
+        assert_eq!((t.len(), t.live_nodes()), (nodes, live));
+        // Keeping the badge (0 = inherit, or the same value) is allowed.
+        t.mint_self(&mut client, 0, 1, Rights::ALL, 0).unwrap();
+        t.mint_self(&mut client, 0, 2, Rights::WRITE, 7).unwrap();
+        assert_eq!(t.invoke(&client, 1, Rights::WRITE).unwrap().badge, 7);
+        assert_eq!(t.invoke(&client, 2, Rights::WRITE).unwrap().badge, 7);
+        // The unbadged root may still hand out any badge.
+        t.mint(&server, 0, &mut other, 0, Rights::WRITE, 99).unwrap();
+        assert_eq!(t.invoke(&other, 0, Rights::WRITE).unwrap().badge, 99);
+    }
+
+    #[test]
+    fn endpoint_queue_capacity_is_paid_from_untyped() {
+        let mut t = CapTable::new();
+        let mut cs = CSpace::new(8);
+        t.create_root(&mut cs, 0, ObjectKind::Untyped, Rights::ALL, 4096).unwrap();
+        // Default capacity costs the fixed Endpoint price.
+        let (_, left) = t.retype(&mut cs, 0, ObjectKind::Endpoint, 0, 1).unwrap();
+        assert_eq!(left, 4096 - ObjectKind::Endpoint.bytes() - NODE_BYTES);
+        assert_eq!(ObjectKind::Endpoint.bytes(), endpoint_bytes(ENDPOINT_DEFAULT_QUEUE));
+        // A bigger queue costs more, a smaller one less, and an oversized one
+        // is refused without charging.
+        let (_, left2) = t.retype(&mut cs, 0, ObjectKind::Endpoint, 8, 2).unwrap();
+        assert_eq!(left - left2, endpoint_bytes(8) + NODE_BYTES);
+        let (_, left3) = t.retype(&mut cs, 0, ObjectKind::Endpoint, 1, 3).unwrap();
+        assert_eq!(left2 - left3, endpoint_bytes(1) + NODE_BYTES);
+        assert!(endpoint_bytes(1) < endpoint_bytes(ENDPOINT_DEFAULT_QUEUE));
+        assert_eq!(t.retype(&mut cs, 0, ObjectKind::Endpoint, ENDPOINT_MAX_QUEUE + 1, 4), Err(CapError::OutOfBudget));
+        assert_eq!(t.budget(&cs, 0), Ok(left3));
+        assert_eq!(t.invoke(&cs, 4, Rights::NONE), Err(CapError::InvalidSlot));
     }
 
     #[test]

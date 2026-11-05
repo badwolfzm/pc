@@ -421,7 +421,7 @@ pub fn boot(mem_upper_kib: u32) -> ! {
         user_frames: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
         cap_nodes_baseline: 0, heap_baseline: 0, heap_carved_baseline: 0, frames_baseline: 0,
-        frames_high_water_baseline: 0, host_object: None, linux_run_frames: 0,
+        frames_high_water_baseline: 0, host_object: None, linux_run_frames: 0, ep_over_capacity: 0, ep_refused: 0,
         fx_owner: None, ts_set: false, fs_loaded: 0,
     };
 

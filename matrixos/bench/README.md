@@ -26,6 +26,7 @@ the design's own deployment shape.
 | Shared-folder (Windows host disk through the VM's FUSE mount) sequential read / write | 266 MB/s / 10 MB/s | 3.2 GB/s / 1.1 GB/s (virtio) | SSD "about one second" per 100 to 200 MB |
 | Shared-folder random 4 KiB reads | 4,800 IOPS, 208 us | 28,700 IOPS, 35 us | 50,000+ |
 | VM's own disk (/tmp), direct write / read | 231 MB/s / 1.6 GB/s | | |
+| 20,000 flat 20x20 triangles, superops `mxs_triangle`, scalar / v128 / v256 tier (`pc/pc_superops_bench.csv`) | 7.4 / 10.3 / 11.4 ms | 13.7 / 11.8 / 10.1 ms | 8 to 12 ms |
 
 Conclusions from the PC run:
 
@@ -41,6 +42,10 @@ Conclusions from the PC run:
   right number for the design; the VM's own disk read 1.6 GB/s. A 100 to 200 MB scene swap over such a
   shared mount would take 0.4 to 0.8 s, close to the doc's "about one second". Over a direct virtio
   block or virtio-fs path it should be an order of magnitude faster; that was not measurable here.
+- The superops triangle rasteriser meets the doc's 8 to 12 ms line at the scalar tier (7.4 ms, 22 percent
+  of a 33 ms frame). On the PC the SIMD tiers are slower than scalar for these small triangles (short
+  spans, per-span vector setup dominates); the cloud box showed the opposite order. Three repeat runs
+  agreed within 5 percent on the median; v256 p95 reached 30 ms.
 - Not visible from inside the VM: host RAM size and type, the physical disk model, and the other three
   cores. `pc/machine_pc.json` says what was captured and what has to be filled in from Windows.
 

@@ -17,29 +17,30 @@ Plan: https://claude.ai/artifact/VU7zP9p25aqDQzpSpfYFRp (MatrixOS compiler and G
 - `security_regressions.sh <matrixos_v9.c> <swrap.c> [gcc|clang]` — one
   regression test per finding in matrixos/reviews/security-review.md (F1
   symlink escape, F3 flag forwarding + PATH lookup, F4 OOB read under ASan,
-  F5 fuzz coverage, F6 untrusted lengths under ASan, F1b long-path truncation; F2 and F7 SKIP until
-  the frontend module and the MXSB loader exist). Against the baseline it
-  fails 14 checks (F1b covers the 512-byte path truncation), which reproduces the review. A module is accepted into the
+  F5 fuzz coverage, F6 untrusted lengths under ASan, F1b long-path truncation; F2 runs when
+  FRONTEND_DIR is set, F7 when MXSB_DIR points at a copy of codegen/mxsb). Against the baseline it
+  fails 15 checks (F1b covers the 512-byte path truncation; F3 has 7 cases incl. `-- -fplugin=`), which reproduces the review. A module is accepted into the
   wave-2 build only when this passes with zero failures.
 
 ## Layout and how to run (everything with `bash`; the mount is noexec)
 
     tests/
       golden_check.sh          baseline pins: 23 asserts, trace hash, PPM/MXSB SHA-256, reference probes
-      security_regressions.sh  one regression test per review finding (F1, F1b, F2, F3, F4, F5, F6; F7 skips)
+      security_regressions.sh  one regression test per review finding (F1, F1b, F2, F3, F4, F5, F6, F7)
       integrate.sh             builds integrated.c = frozen baseline + accepted modules swapped in
       fuzz/mx_fuzz_compat.h    replacement fuzzer (finding 5), harness-owned
       unit/rcs/rcs_conformance.c  independent RCS conformance test written from gpu-commands.md (92 checks)
-      unit/canvas/gc_dirty_oracle.c  brute-force tile-diff oracle for the ghost canvas (36 checks, 5 sizes)
+      unit/canvas/gc_dirty_oracle.c  brute-force tile-diff oracle for the ghost canvas (40 checks, 5 sizes + INT_MAX/INT_MIN coords)
+      unit/mxsb/mxsb_contract.c   hand-built MXSB v2 file + 43 mutations, each must hit the rule the contract assigns
+      unit/Makefile               `make -C tests/unit OUT=/tmp/x MX=<matrixos copy> test` builds and runs the three above
 
     # scratch copies, since module Makefiles write build products and the mount is noexec
-    cp -r /mnt/project-files/matrixos/{frontend,assets,superops} /tmp/w/
+    cp -r /mnt/project-files/matrixos/. /tmp/w/mx/      # whole tree: codegen needs ../lfsr, unit tests need ../contracts
     bash integrate.sh <uploaded matrixos_v9.c> /tmp/w/integ
     bash golden_check.sh /tmp/w/integ/integrated.c <uploaded swrap.c> "gcc -D_GNU_SOURCE -I/tmp/w/integ"
-    FRONTEND_DIR=/tmp/w/frontend ASSETS_DIR=/tmp/w/assets \
-      bash security_regressions.sh /tmp/w/integ/integrated.c /tmp/w/frontend/src/mxcc.c "gcc -D_GNU_SOURCE -I/tmp/w/integ"
-    cc -std=c11 -O1 -g -fsanitize=address,undefined -I<contracts/gpu-commands-ref> \
-      unit/rcs/rcs_conformance.c <contracts/gpu-commands-ref>/rcs.c -o rcs_conf && ./rcs_conf
+    FRONTEND_DIR=/tmp/w/mx/frontend ASSETS_DIR=/tmp/w/mx/assets MXSB_DIR=/tmp/w/mx/codegen/mxsb \
+      bash security_regressions.sh /tmp/w/integ/integrated.c /tmp/w/mx/frontend/src/mxcc.c "gcc -D_GNU_SOURCE -I/tmp/w/integ"
+    make -C /tmp/w/mx/tests/unit OUT=/tmp/w/unit MX=/tmp/w/mx test      # rcs 92, canvas 40, mxsb 43
 
 What integrate.sh swaps (baseline line ranges, each wrapped in an #ifndef so the baseline file is never edited):
   251-320 super-op dispatcher -> superops/mx_superops_compat.h + mx_superops.c, via a harness adapter
@@ -53,18 +54,20 @@ What integrate.sh swaps (baseline line ranges, each wrapped in an #ifndef so the
 
 | Target | golden_check | security_regressions | Notes |
 |---|---|---|---|
-| Frozen baseline | 25/26 | 14 failures | expected: the one golden failure is the wrapper --version bug; the 14 are the review findings |
-| Integrated build, gcc | 25/26 with GOLDEN_TRACE=0x3b3805a77980eee1 | 0 failures (F7 skip, F2 Rust side skip) | trace hash differs by design: the replacement fuzzer uses its own oracle, so the baseline fuzzer's trace events are gone; isolated by building with only the fuzz swap |
+| Frozen baseline | 25/26 | 15 failures (F2, F7 skip) | expected: the one golden failure is the wrapper --version bug; the 15 are the review findings |
+| Integrated build, gcc | 25/26 with GOLDEN_TRACE=0x3b3805a77980eee1 | 0 failures, 32 PASS incl. F2 and F7 (F2 Rust side skip) | trace hash differs by design: the replacement fuzzer uses its own oracle, so the baseline fuzzer's trace events are gone; isolated by building with only the fuzz swap |
 | Integrated build, clang | 25/26 (same GOLDEN_TRACE) | 0 failures | sanitizer checks fall back to gcc (no clang ASan runtime in this container) |
 | lfsr own tests | | | 394,115 passed (gcc, clang, gcc ASan/UBSan) |
 | assets own tests | | | 47 passed (gcc, clang, gcc ASan/UBSan) |
-| frontend own tests | | | typed_input 48, cells.vec 57 (C), driver tests; Rust vectors skip |
-| superops own tests | | | 202 passed (gcc) |
+| frontend 1.0.1 own tests | | | typed_input 48 (2 compilers), cells.vec 57 (C), driver tests; Rust vectors skip; re-accepted with the `-- -fplugin=x.so` case |
+| superops own tests | | | 203 passed (gcc) |
 | RCS reference | | | 57,669 passed; harness conformance 92/92 |
-| canvas own tests | | | 759 + 22 passed (gcc, ASan, UBSan, clang); golden ghost hash f7da60a90fb9597f; harness dirty oracle 36/36 |
+| canvas own tests | | | 759 + 22 passed (gcc, ASan, UBSan, clang); golden ghost hash f7da60a90fb9597f; harness dirty oracle 40/40 |
+| codegen own tests | | | mxsb_test 40113, run_mxsb 21, tiers_test 25, run_tiers 22, run_lifter 21 (gcc and clang; needs sibling lfsr/ and superops/); harness MXSB contract test 43/43 (gcc ASan, clang) |
 
 Not run: anything on the user's machine; cold-cache storage numbers; clang sanitizer builds; the Rust
-side of the typed-input vectors; F7 (no MXSB loader exists yet).
+side of the typed-input vectors. F7 runs against the codegen validator as an interim stand-in; when
+matrixos/contracts/mxsb-ref/ exists, the same 43 mutations must give the same codes there (not yet checked).
 
 ## Evidence rules (short form; full text in the plan)
 
@@ -90,7 +93,6 @@ side of the typed-input vectors; F7 (no MXSB loader exists yet).
 
 ## Waiting on
 
-- matrixos/contracts/mxsb-manifest.md
-- matrixos/contracts/gpu-commands.md (rcs.h draft exists)
+- matrixos/contracts/mxsb-ref/ (reference validator; must agree with codegen/mxsb on the 43 contract mutations)
 - matrixos/bench/ memory-bandwidth numbers
 - scalar reference kernels from superops (or written here)

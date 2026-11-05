@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(name, cond) do { if (cond) g_pass++; else { g_fail++; printf("FAIL %s\n", name); } } while (0)
@@ -86,6 +87,20 @@ static void run_size(uint32_t W, uint32_t H, int frames, int draws_per_frame) {
 
 int main(void) {
     run_size(1, 1, 50, 5); run_size(37, 11, 200, 20); run_size(480, 270, 60, 40); run_size(1280, 720, 10, 60); run_size(17, 1000, 30, 30);
+    /* 5. extreme coordinates (audit case): INT_MAX/INT_MIN endpoints and sizes must clip, finish, and leave the
+     *    canvas consistent; run under ASan. A line from INT_MIN to INT_MAX must complete in bounded time. */
+    { gc_canvas c; gc_init(&c, 64, 48); sink_state s = { calloc(64 * 48, 4), 64, 48, 0, 0 };
+      gc_rect(&c, INT_MAX, INT_MAX, INT_MAX, INT_MAX, 1); gc_rect(&c, INT_MIN, INT_MIN, INT_MAX, INT_MAX, 2); gc_rect(&c, -5, -5, INT_MAX, INT_MAX, 3);
+      gc_line(&c, INT_MIN, INT_MIN, INT_MAX, INT_MAX, 4); gc_line(&c, INT_MAX, 0, INT_MIN, 47, 5); gc_line(&c, 10, INT_MIN, 10, INT_MAX, 6);
+      gc_damage(&c, INT_MIN, INT_MIN, INT_MAX, INT_MAX); gc_pset(&c, INT_MIN, INT_MAX, 7);
+      uint32_t px[4] = { 8, 8, 8, 8 }; gc_blit(&c, INT_MAX - 1, INT_MIN + 1, px, 2, 2, 2); gc_blit(&c, -1, -1, px, 2, 2, 2);
+      int all_in = 1; for (int i = 0; i < 64 * 48; ++i) if (c.work[i] > 8) all_in = 0;
+      gc_present(&c, sink, &s);
+      CHECK("extreme coords: canvas holds only colours drawn (no stray writes)", all_in);
+      CHECK("extreme coords: ghost == work after present", memcmp(c.ghost, c.work, 64 * 48 * 4) == 0);
+      CHECK("extreme coords: no sink rect outside the canvas", s.bad_rect == 0);
+      CHECK("extreme coords: rect at -5,-5 with INT_MAX size covered the whole canvas", c.work[0] == 3 || c.work[0] == 4 || c.work[0] == 5 || c.work[0] == 6 || c.work[0] == 8);
+      free(s.got); gc_free(&c); }
     /* 4. determinism */
     uint64_t h[2]; for (int k = 0; k < 2; ++k) { rng = 12345; gc_canvas c; gc_init(&c, 480, 270); for (int f = 0; f < 30; ++f) { for (int d = 0; d < 40; ++d) random_draw(&c, 480, 270); gc_present(&c, NULL, NULL); } h[k] = gc_ghost_hash(&c); gc_free(&c); }
     CHECK("determinism: same scripted frames, same ghost hash", h[0] == h[1]);

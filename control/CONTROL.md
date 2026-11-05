@@ -413,3 +413,65 @@ merges: the user merges, or says "merge", in their own words.
   HANDOFF.md. The lead applies within minutes, so a handoff more than one
   kernel PR behind main goes back unapplied.
 - 2026-11-05 07:58 first lead ("Control the whole effort"): saw the 07:34 round only after my message quota lifted. Retracted my 07:54 instructions to the old kernel thread (no Phase 2b there, no sync PR). Split proposed to the kernel lead ("Control all phases in parallel"): kernel phases, all pushes, PRs, merges and kernel handoff rulings are theirs; the MatrixOS workstream (compiler, GPU, contracts, six modules, their acceptance) and the design doc are mine; accepted MatrixOS deliveries go to STATUS.md as handoffs for the kernel lead to sync. Module threads never push.
+- 2026-11-05 lead (MatrixOS): PC triangle numbers: 20k flat triangles 7.4 ms scalar, SIMD slower (10 to 14 ms) on the i3-14100. Ruling: superops picks scalar for short spans; triangle cap of 20,000 stays (22 percent of the 33 ms frame at scalar).
+- 2026-11-05 lead (MatrixOS): frontend 1.0.2 takes tier strings from codegen's mx_tiers.h with a drift test; suite green. Handoff for sync via STATUS.md after tests thread re-accepts.
+- 2026-11-05 08:12 Phase 0 supervisor thread ("Harden the Phase 0 supervisor"): DELIVERED, not pushed (user rule: only control pushes). Patch at project files kernel/phase0-supervisor-hardening.patch, one commit, applies cleanly on main 5a817c2 (checked with git apply --check). Touches only crates/warden-sentry, tests/escape, tests/compat, README.md, HOST.md; nothing under the kernel crate. What it closes: the README's Phase 0 path races. Metadata (stat/statx/access/readlink/statfs/xattr) is done by the supervisor on a pinned O_PATH fd and the result is written into the caller's buffer; create/delete/rename/link/symlink/chmod/truncate are done as *at calls on a pinned parent dir under a write grant with the caller's umask; O_PATH opens hand out a read-only fd to the pinned inode. execve stays a kernel path read, but the new image is verified right after (exe inode == checked file, every file-backed mapping under a grant) and killed otherwise: in 300 racing tries every swapped-in image was killed, none completed. Residual: chdir (existence oracle only) and the pre-verification window on exec (pass syscalls only, up to 5 ms). Library grants are now per process and live only while the library is mapped (/proc/PID/maps), not sandbox-wide. Results on 5a817c2 here (root, 6.18 kernel, no KVM): cargo test 26/26, escape 67/67 (14 new race checks + 9 harness checks of an outside directory), compat 14/14 (new: a child without libz stays offline). Not verified on WSL2 or the user's PC.
+- 2026-11-05 08:10 lead: AUTO-MERGED PR #12 (project-files-sync-3, 00a3abb):
+  26 files, text and C only. Bookkeeping: record #12 merged. Kernel handoff
+  base = main after #12 (fetch the tip).
+- 2026-11-05 07:58 two-apps thread: PHASE 2b DELIVERED for the control thread to push (user rule: only the control thread updates the repo). Patch /mnt/project-files/kernel/phase2b-two-apps/0001-phase2b-two-isolated-apps.patch applies with `git am` on main 6d9f979 (verified in a fresh clone); run logs beside it. Content: no_std warden-elf parser crate (validates before any frame is allocated, 7 unit tests incl. 10k mutations), in-kernel static ELF loader, user-space Linux personality server (C, ring 3: fs.read on an in-memory site, AF_INET streams over an in-server loopback, epoll, exit_group; identifies callers by kernel badge only), httpd (static HTTP/1.0 over epoll) and fetch (60 GETs, byte-checked) running at the same time as a rogue app, each in its own address space with only its own capabilities; per-client IPC buffers are shared frames. Kernel syscalls added: CALL (send+wait reply atomically), SEND_NB, CONSOLE_WRITE; mm gains map_frame/read_user; IPC block refills the budget; new finish check: no frame allocated after boot. Results: 77/77 in-guest checks (was 53) in release and dev, 30 unit tests, clippy clean, kernel heap +136 bytes over the run. Rogue results: EBADF on httpd's fd, EACCES without grants, EFAULT on a 1 MiB write, 5001 ENOSYS without allocation, host-exit via both held caps refused, foreign slots name nothing, 13 fds then EMFILE while others keep serving, #PF reading httpd's buffer at the server's address. Honest limits (in README): no NIC/TCP/VFS service yet, marshalling libc instead of trapped syscalls, R-- data mapped R-X, FPU state not saved (programs built -mgeneral-regs-only), permission table lives in the server. Build needs a host `cc` (build-essential; WARDEN_CC overrides). Not run on the user's PC. Does not include the kernel thread's revoke patch or the ipc-queue-budget patch; applies independently of both.
+- notice for control thread: suggested sync of this patch as its own PR ("phase2b-two-apps") from main; README/HOST updated inside the patch. Next slice proposed: trap the `syscall` instruction (EFER.SCE on, MSR_LSTAR) and forward to the personality server so an unmodified static musl binary runs; then the network container.
+- 2026-11-05 08:15 lead: AUTO-MERGED PR #13 (phase0-hardening, 20e5df8) into
+  main. Policy: code hunks applied cleanly on 24160ac; README/HOST.md count
+  hunks re-resolved by the lead (26 unit tests measured here, escape 67,
+  compat 14 from the delivering thread); cargo test 26/26 here; warden-sentry
+  builds; escape/compat need root+seccomp, not available to the lead.
+  Bookkeeping: record #13 merged. Base for handoffs = main after #13.
+- 2026-11-05 08:15 lead: Phase 2b handoff (kernel/phase2b-two-apps/, 77/77,
+  30 unit tests) does NOT apply on current main: main.rs, tests.rs, README,
+  HOST.md hunks fail (built before #11). It also ships its own ELF loader
+  (crates/warden-elf, loader.rs) and a user-space personality
+  (user/personality.c), which is thread 4's scope. RULINGS: (a) thread 2
+  rebases onto the tip of main after #13, reruns, re-hands off as
+  kernel/phase2b-two-apps/v2/ with the base hash. (b) Loader ownership: if
+  thread 4 has not handed off a loader by the time v2 lands, thread 2's
+  warden-elf and loader.rs become THE loader and thread 4 builds its
+  personality server on them (thread 4: read crates/warden-elf in the Phase 2b
+  handoff now, do not write a second loader). If thread 4 lands first, thread
+  2 rebases on it. First to land on main wins; the other adapts. (c) The
+  loader must enforce W^X at load (refuse W+X PT_LOAD) per the standing ruling;
+  the lead checks this in the PR diff before merging.
+- 2026-11-05 08:10 untyped-memory thread: Phase 3 v2 DELIVERED for control to apply: handoff/phase3-untyped-memory/v2/ (HANDOFF.md, 0001-phase3-untyped-memory.patch, phase3-v2.bundle). Base origin/main b19a3e9 (PR #11 merge); git apply --check clean. Ruling applied: kill_subtree design kept, PR #9 revoke_alloc.rs passes unchanged (free lists are intrusive, freeing never allocates), PR #9 in-guest flood passes, PR #11 tests kept with three ported to the new retype ABI (44, 60-62; see HANDOFF.md). Results: in-guest 108/108 release and dev, 0 live objects at end, all user frames back, heap high-water growth 0; cargo test 30 pass; clippy clean. Not verified on the user's PC or KVM. v1 folder is obsolete.
+- 2026-11-05 08:18 lead: #13 merge confirmed (main 0872c87; the merge raced
+  with a click from the user's account, same result). Two more handoffs are
+  stale: kernel/ipc-queue-budget.patch (68/68, heap +0) fails on warden-caps
+  lib.rs and README (built before #9); kernel/phase2b-linux-personality/
+  (0001 is the superseded harden patch, 0002 the personality + static ELF
+  loader) is built on the old harden base and ships a second loader. RULINGS:
+  thread 5 and thread 4 rebase onto the tip of main (0872c87 or later), drop
+  any copy of the harden patch (#6 is in main), rerun, and re-hand off as
+  v2 directories with the base hash. Loader: ruling 08:15(b) stands, first of
+  thread 2 / thread 4 to land a clean v2 owns the loader; the other adapts.
+  Thread 5: the sticky-badge test (ruling 07:58 d) goes in your v2.
+- 2026-11-05 08:06 two-apps thread: Phase 2b v2 ready at /mnt/project-files/kernel/phase2b-two-apps/v2/ (HANDOFF.md names base main 0872c87; `git am` verified in a fresh clone). Rebased over PRs #9, #11, #12, #13; test ids moved to 70..82 (PR #11 took 40..68). Suite: 107/107 in-guest checks release and dev (main 83 + 24 new), 33 unit tests, clippy clean, heap +32 bytes, 0 frames after boot. Loader refuses W+X PT_LOAD and uses main's mm::Perm, per the 08:15 ruling. v1 folder is superseded.
+- 2026-11-05 08:25 lead: Phase 3 untyped v2 (654e128, base b19a3e9)
+  cherry-picked onto main 0872c87 as b770253; only README/HOST.md count
+  hunks conflicted (resolved: 31 unit tests measured here, 108 in-guest from
+  the thread, 67/14 from #13). cargo test 31/31 here, kernel builds. PR
+  opening and auto-merge now. Bookkeeping: record it when the number is here.
+- 2026-11-05 08:28 lead: AUTO-MERGED PR #14 (phase3-untyped, b770253) into
+  main = aa06bf0. Bookkeeping: record #14 merged. Phase 3 untyped memory,
+  heap reclamation and budgets are on main. Base for every handoff = aa06bf0.
+- 2026-11-05 08:28 lead: Phase 2b v2 (kernel/phase2b-two-apps/v2/, base
+  0872c87, 107/107) landed on the board 90 seconds after Phase 3 did, and the
+  two change the same code: thread.rs syscall dispatch, main.rs, tests.rs.
+  Both sides changed the same logic, so the lead does not resolve it blind.
+  Thread 2: rebase onto aa06bf0 (Phase 3's retype ABI, SYS_BUDGET, untyped
+  pays for every object; your apps must get their frames through untyped
+  retype now), rerun, hand off as v3. Threads 4 and 5: same base, aa06bf0.
+  Order of landing after this: whichever of 2b-two-apps / linux-personality /
+  ipc-budgets arrives clean first; the others rebase on each merge. To cut
+  the churn: threads 2, 4, 5, before writing a handoff, check the board for a
+  PR opened in the last 10 minutes and wait for its merge, then rebase.
+- 2026-11-05 08:30 linux-personality thread: DELIVERED v2 (rebased on main 0872c87) for the control thread to push, per the user's rule. kernel/phase2b-linux-personality/v2/: 0001-phase2b-linux-personality.patch (one commit, 19 files, +2813/-121, `git am` on a fresh branch from 0872c87), a bundle, HANDOFF.md, QEMU log. Verified here (cloud, TCG): tests/kernel/run.sh 150/150 (83 from main + 67 new), cargo test 26/26, abi json unchanged, heap growth 0 during the run. Content: static non-PIE Linux ELF loaded unmodified from -initrd modules into 0x400000..0x2000000, `syscall` entry, every number tiered by the Phase 0 table (pass in-kernel; openat/socket/bind/listen/connect decoded by the kernel then put to a ring-3 personality server over call/reply IPC via a badged cap; denied EPERM; not built ENOSYS logged); static HTTP server serves a client in a second isolated process over in-kernel loopback from a ustar module; hostile program refused at every tier. Uses main's Perm::{Rx,Rw} (+Ro) and root_endpoint queues. Loader is in-kernel crates/warden-kernel/src/elf.rs (17 self-tests, refuses W+X); if the two-apps loader lands first, elf.rs plus three call sites in main.rs are the swap. Not verified on the user's PC. v1 folder obsolete.
+- notice for control thread: apply v2, run tests/kernel/run.sh (needs gcc, tar), open the PR. README/HOST updated in the patch (150 checks).

@@ -2,12 +2,15 @@
 # Regression tests for the seven findings in matrixos/reviews/security-review.md.
 # Run against ANY build of the VFS / super-op / wrapper code: the baseline is
 # expected to FAIL findings 1, 3, 4, 5 and 6; a fixed module must PASS them all.
-# Findings 2 and 7 have no code to test yet and print SKIP with the reason.
+# Findings 2 and 7 print SKIP unless the module that fixes them is pointed at via env.
 #
 # Usage: security_regressions.sh <matrixos_v9.c> <swrap.c> [CC]
 #   ASSETS_DIR=<matrixos/assets copy on a writable disk>  also runs F1/F1b against the asset store API
+#   FRONTEND_DIR=<matrixos/frontend copy>                  runs F2 (typed-input suite)
+#   MXSB_DIR=<matrixos/codegen/mxsb copy>                  runs F7 (unit/mxsb/mxsb_contract.c against mxsb.c)
 set -uo pipefail
 SRC="$1"; WRAP="$2"; CC="${3:-gcc}"
+TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)"; cd "$WORK" || exit 1
 tr -d '\r' < "$SRC" | sed 's/^int main(void){/int main_orig(void){/' > mx_lib.c
 cp "$WRAP" swrap.c
@@ -108,6 +111,8 @@ for bad in "-fplugin=/tmp/evil.so" "-specs=/tmp/evil.specs" "@/tmp/resp" "-B/tmp
   O="$(PATH="$PWD/fakebin:$PATH" ./swrap --profile=matrixos -S t.c -o t.s "$bad" 2>&1)"; RC=$?
   t "F3 wrapper rejects or drops $bad" "ok" "$( { [ $RC -ne 0 ] || ! grep -q "ARG=$bad" <<<"$O"; } && echo ok)"
 done
+O="$(PATH="$PWD/fakebin:$PATH" ./swrap --profile=matrixos -S t.c -o t.s -- -fplugin=x.so 2>&1)"; RC=$?
+t "F3 wrapper rejects or drops -fplugin= after --" "ok" "$( { [ $RC -ne 0 ] || ! grep -q "ARG=-fplugin=x.so" <<<"$O"; } && echo ok)"
 O="$(PATH="$PWD/fakebin:$PATH" ./swrap --profile=matrixos -S t.c -o t.s -Xclang -load -Xclang /tmp/evil.so 2>&1)"; RC=$?
 t "F3 wrapper rejects -Xclang -load" "ok" "$( { [ $RC -ne 0 ] || ! grep -q "ARG=-load" <<<"$O"; } && echo ok)"
 O="$(PATH="$PWD/fakebin:$PATH" ./swrap --profile=matrixos -S t.c -o t.s 2>&1)"
@@ -155,6 +160,16 @@ $SANCC $SAN -w -o f6 f6.c && O="$(./f6 2>&1)"; RC=$?
 t "F6 crc32 with length beyond buffer is refused (no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q 'crc_over rc=-' <<<"$O" && echo ok)"
 
 # ---- F7: MXSB loader header validation -----------------------------------------
-skip "F7 MXSB loader rejects text_size near UINT32_MAX, entry_off outside text, sizes > file" "no loader exists yet; cases land with matrixos/contracts/mxsb-manifest.md"
+# The contract test hand-builds a valid MXSB v2 file and mutates it: sizes past the file, entry_off
+# outside TEXT, header_size/nsections extremes, overlaps, duplicate/missing sections, bad manifest,
+# build_id mismatch. Each mutation must yield the error code and rule name the contract (9a) assigns.
+if [[ -n "${MXSB_DIR:-}" ]]; then
+  $SANCC $SAN -std=c11 -w -D_GNU_SOURCE -I"$MXSB_DIR" -o f7 "$TESTS_DIR/unit/mxsb/mxsb_contract.c" "$MXSB_DIR/mxsb.c" 2>f7.err && O="$(./f7 2>&1)"; RC=$?
+  [[ -s f7.err ]] && head -3 f7.err
+  echo "     $(tail -1 <<<"$O")"
+  t "F7 MXSB validator rejects every contract mutation with the assigned rule (0 failed, no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q ' 0 failed' <<<"$O" && echo ok)"
+else
+  skip "F7 MXSB loader rejects sizes > file, entry_off outside text, header extremes" "set MXSB_DIR=<copy of matrixos/codegen/mxsb> to run unit/mxsb/mxsb_contract.c against it"
+fi
 
 echo "--- $fails failure(s) (baseline is expected to fail F1, F1b, F3, F4, F5, F6)"; exit $fails

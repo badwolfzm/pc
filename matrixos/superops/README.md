@@ -16,6 +16,7 @@ arithmetic) and security review finding 6 (`../reviews/security-review.md`).
 | `mx_superops_lower.h` | Compiler lowering: loop shape → kernel call, legality rules, fixed SIMD tier flags |
 | `test_superops.c` | Unit tests (ASan + UBSan) |
 | `bench_superops.c`, `bench.csv` | Anti-illusion benchmark rows, last run on the cloud container |
+| `bench_tri_sweep.c`, `tri_sweep_cloud.csv` | Triangle row-span sweep (scalar vs SIMD vs default path) and the bench-backed path check, `make B=... perfcheck` |
 
 Build and run: `make B=/tmp/superops-build test` and `make B=/tmp/superops-build bench`
 (the project-files share has no execute permission, so build products go to `B`).
@@ -48,7 +49,7 @@ the backing span anyway, so a validator bug becomes a refused call, not a write.
 | `mxs_fill_rect`, `mxs_clear` | FILL_RECT / CLEAR | scalar, v128, v256 | |
 | `mxs_blit` COPY / ALPHA / ADD | BLIT | all | ALPHA and ADD follow `gpu-commands.md` "Blend arithmetic" bit for bit; `test_blend_oracle` holds the four `rcs_test.c` cases and an exhaustive channel sweep was run against `rcs.c blend_px` |
 | `mxs_line` | LINE, Bresenham, clipped per pixel | scalar only | not a SIMD shape |
-| `mxs_triangle` | DRAW_TRIANGLES flat, same inside test as `rcs.c` | all | barycentric weights stepped incrementally; 32-bit lanes when the triangle fits a 2^14 window, int64 lanes otherwise. Sampling rule for `texture`/`BAKED` is **not defined yet** (open point 4 of the contract) |
+| `mxs_triangle` | DRAW_TRIANGLES flat, same inside test as `rcs.c` | all, with a span threshold | barycentric weights stepped incrementally; rows shorter than `MXS_TRI_SIMD_MIN_SPAN_DEFAULT` (96 px) always run the scalar kernel, longer rows run 32-bit SIMD lanes when the triangle fits a 2^14 window, int64 lanes otherwise (see "Triangle span threshold"). Sampling rule for `texture`/`BAKED` is **not defined yet** (open point 4 of the contract) |
 | `mxs_blit_dirty` | copy + per-pixel XOR shadow bit + changed count | all | optional for the canvas thread, which tracks tiles itself |
 | `mxs_vadd_f32`, `mxs_vmul_f32`, `mxs_vfma_f32`, `mxs_vadd_sat_u8` | element-wise | all | VFMA is two roundings (`a*b` then `+d`); never fused, so it equals C under `-ffp-contract=off` |
 | `mxs_reduce_sum_f32`, `mxs_dot_f32` | reductions | all | fixed 8-lane strided order, then a fixed tree; bit-identical on every tier. Differs from a sequential C sum, so the lowering only takes these under fast-math |
@@ -82,7 +83,7 @@ table; this is the string it should use.
 
 ## Verified / not verified
 
-Verified (run here, `make test`, 202 checks, 0 failures, ASan+UBSan clean):
+Verified (run here, `make test`, 203 checks, 0 failures, ASan+UBSan clean):
 - every kernel on scalar, v128 and v256 equals the independent scalar reference on
   random inputs, including lengths 1..70 (tails) and in-place forms;
 - blend ALPHA/ADD equal `rcs.c blend_px` on the oracle cases and an exhaustive
@@ -120,9 +121,41 @@ Not verified:
 | blit add 720p | 2.75 ms | 0.35 ms | 0.31 ms | 9× |
 | 200 alpha sprites 64×64 | 5.39 ms | 2.21 ms | 1.36 ms | 4× (design budget line: 2–4 ms) |
 | blit + dirty shadow 720p | 1.01 ms | 0.35 ms | 0.26 ms | 3.9× |
-| 20 000 flat triangles (20 px) | 13.7 ms | 11.8 ms | 10.1 ms | 1.35× (≈0.5 µs per triangle; design budget 8–12 ms for 20 k) |
+| 20 000 flat triangles (20 px) | 13.7 ms | 13.7 ms | 13.7 ms | 1× by design: rows under 96 px take the scalar path on every tier (≈0.5 µs per triangle here, 0.37 µs on the PC; design budget 8–12 ms for 20 k) |
 
-The triangle rasteriser is the weak spot: the per-row setup dominates for small
-triangles, and the first int64-lane attempt was slower than scalar (dropped in favour
-of the 32-bit path). A span-walking rasteriser (edge stepping instead of a bounding-box
-inside test) would remove most of the remaining cost; not done in this wave.
+## Triangle span threshold
+
+The lead's PC measurement (i3-14100, `../bench/pc/pc_superops_bench.csv`) showed the
+reverse of the cloud box for 20 000 small triangles: 7.4 ms scalar, 10.4 ms v128, 11.4 ms
+v256. Short rows pay the per-row vector setup and gain nothing. The fix: `mxs_triangle` runs
+the scalar incremental kernel for any row shorter than `MXS_TRI_SIMD_MIN_SPAN_DEFAULT`
+(96 px) and the SIMD kernel otherwise; `mxs_set_tri_simd_min_span()` overrides it (0 forces
+SIMD, `UINT32_MAX` forces scalar).
+
+Why 96: the sweep below (cloud container, 21 interleaved runs per span, median ns per row)
+shows SIMD at best neutral below 64 px and 2 to 3.5× faster from 96 px up, on both tiers.
+The PC data covers only the 20 px case, where scalar wins by 40%; 96 leaves margin for the
+PC's faster scalar core. The bench thread should run `make B=... tri-sweep` on the PC; if SIMD
+already wins at 48 or 64 px there, lower the default.
+
+| span px | v128 scalar | v128 SIMD | v256 scalar | v256 SIMD | default path |
+|---|---|---|---|---|---|
+| 8 | 44 | 60 | 46 | 58 | scalar |
+| 20 | 53 | 52 | 56 | 76 | scalar |
+| 32 | 66 | 74 | 56 | 38 | scalar |
+| 64 | 120 | 193 | 128 | 143 | scalar |
+| 96 | 167 | 119 | 184 | 87 | SIMD |
+| 128 | 158 | 86 | 198 | 79 | SIMD |
+| 256 | 282 | 167 | 289 | 83 | SIMD |
+| 512 | 656 | 359 | 554 | 152 | SIMD |
+
+Bench-backed check: `make B=/tmp/x perfcheck` builds `bench_tri_sweep --check`, which times
+forced-scalar, forced-SIMD and the default path interleaved and fails if the default path is
+slower than scalar by more than 25% at any span on either tier. Result here: pass (worst ratio
+1.19 at 64 px, where both paths run the identical scalar code, so that is the machine's noise).
+It is a separate target, not part of the sanitizer test build, because timings under ASan say
+nothing. Not yet run on the PC.
+
+With the threshold the 20 000 small-triangle row runs the scalar kernel on every tier, so the
+PC should see its 7.4 ms on all three. A span-walking rasteriser (edge stepping instead of a
+bounding-box inside test) would cut the remaining per-row cost; not done in this wave.

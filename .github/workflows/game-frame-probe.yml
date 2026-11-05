@@ -1,0 +1,23 @@
+name: game-frame-probe host smoke checks
+on:
+  pull_request:
+    paths:
+      - 'tools/game-frame-probe/**'
+      - '.github/workflows/game-frame-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-render-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and repeat deterministic host tests
+        run: make -C tools/game-frame-probe test
+      - name: Run single-thread 300-frame checksum
+        run: tools/game-frame-probe/game-frame-probe 300
+      - name: Undefined behavior sanitizer regression
+        run: |
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all -o /tmp/probe-ubsan tools/game-frame-probe/main.c tools/game-frame-probe/render.c
+          python3 tools/game-frame-probe/test_probe.py /tmp/probe-ubsan

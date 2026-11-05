@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from audit import audit, extract_pass_arms, main
+from audit import TARGETS, audit, extract_pass_arms, main
 
 SOURCE = '''fn pass(k: &mut Kernel, cur: usize, nr: u32, name: &str, a: &[u64; 6]) -> Result<After, Death> {
     match name {
@@ -45,11 +45,21 @@ class AuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate ABI"):
             audit({"syscalls": ABI["syscalls"] * 2}, SOURCE)
 
+    def test_comments_do_not_create_fake_match_arms(self):
+        commented = SOURCE.replace('        "getpid" =>', '        // "futex" => ret(Ok(0)),\n        /* "wait4" => ret(Ok(0)), */\n        "getpid" =>')
+        rows = {r["name"]: r for r in audit(ABI, commented)["rows"]}
+        self.assertEqual(rows["futex"]["source_status"], "no_explicit_pass_arm")
+        self.assertNotIn("wait4", extract_pass_arms(commented))
+
     def test_assertion_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:
             abi = Path(d) / "abi.json"
             linux = Path(d) / "linux.rs"
-            abi.write_text(json.dumps(ABI))
+            complete = {"syscalls": ABI["syscalls"] + [
+                {"name": name, "nr": 1000 + i, "class": "unimplemented"}
+                for i, name in enumerate(sorted(set(TARGETS) - {x["name"] for x in ABI["syscalls"]}))
+            ]}
+            abi.write_text(json.dumps(complete))
             linux.write_text(SOURCE)
             from contextlib import redirect_stdout
             import io
@@ -58,6 +68,8 @@ class AuditTests(unittest.TestCase):
                 self.assertEqual(main(["--abi", str(abi), "--linux", str(linux), "--assert-no-silent-success"]), 1)
                 linux.write_text(SOURCE.replace("=> ret(Ok(0)),", "=> ret(Err(ENOSYS)),"))
                 self.assertEqual(main(["--abi", str(abi), "--linux", str(linux), "--assert-no-silent-success"]), 0)
+                abi.write_text(json.dumps(ABI))
+                self.assertEqual(main(["--abi", str(abi), "--linux", str(linux), "--assert-no-silent-success"]), 1)
 
 
 if __name__ == "__main__":

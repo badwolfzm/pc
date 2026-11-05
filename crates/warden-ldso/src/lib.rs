@@ -254,6 +254,7 @@ mod tests {
         b[p..p+8].copy_from_slice(&tag.to_le_bytes());
         put_u64(b, p + 8, value);
     }
+    #[allow(clippy::too_many_arguments)] // Synthetic ELF fixture builder only.
     fn ph(b: &mut [u8], idx: usize, kind: u32, flags: u32, off: usize, va: u64, sz: usize, mem: u64) {
         let p = 64 + idx * 56;
         put_u32(b, p, kind);

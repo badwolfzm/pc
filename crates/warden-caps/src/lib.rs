@@ -65,6 +65,8 @@ pub enum ObjectKind {
     NetEndpoint,
     /// A library approval: the right to map one hashed library image.
     Library,
+    /// Machine control: stop or reset the machine. Minted for nobody by default.
+    Host,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -136,6 +138,13 @@ impl CSpace {
     fn get(&self, slot: usize) -> Result<usize, CapError> {
         self.slots.get(slot).copied().flatten().ok_or(CapError::InvalidSlot)
     }
+    fn check_free(&self, slot: usize) -> Result<(), CapError> {
+        match self.slots.get(slot) {
+            None => Err(CapError::InvalidSlot),
+            Some(Some(_)) => Err(CapError::SlotOccupied),
+            Some(None) => Ok(()),
+        }
+    }
     fn put(&mut self, slot: usize, idx: usize) -> Result<(), CapError> {
         match self.slots.get_mut(slot) {
             None => Err(CapError::InvalidSlot),
@@ -179,12 +188,12 @@ impl CapTable {
         rights: Rights,
         budget: u64,
     ) -> Result<ObjectId, CapError> {
+        // Check the destination before allocating: a refused request must
+        // not consume kernel memory.
+        cs.check_free(slot)?;
         let object = self.alloc_object();
         let idx = self.push(CapNode { object, kind, rights, badge: 0, parent: None, alive: true, budget });
-        if let Err(e) = cs.put(slot, idx) {
-            self.nodes[idx].alive = false;
-            return Err(e);
-        }
+        cs.put(slot, idx).expect("slot checked free");
         Ok(object)
     }
 
@@ -215,6 +224,9 @@ impl CapTable {
         if !src.rights.contains(Rights::GRANT) {
             return Err(CapError::InsufficientRights);
         }
+        // Every check happens before the allocation below, so a rejected
+        // mint leaves the table exactly as it was.
+        dst_cs.check_free(dst_slot)?;
         let node = CapNode {
             object: src.object,
             kind: src.kind,
@@ -225,11 +237,39 @@ impl CapTable {
             budget: 0,
         };
         let idx = self.push(node);
-        if let Err(e) = dst_cs.put(dst_slot, idx) {
-            self.nodes[idx].alive = false;
-            return Err(e);
-        }
+        dst_cs.put(dst_slot, idx).expect("slot checked free");
         Ok(())
+    }
+
+    /// Mint within one CSpace (a thread copying its own capability). Same
+    /// rules as `mint`; exists so the kernel need not clone the CSpace.
+    pub fn mint_self(&mut self, cs: &mut CSpace, src_slot: usize, dst_slot: usize, mask: Rights, badge: u64) -> Result<(), CapError> {
+        let src_idx = cs.get(src_slot)?;
+        let src = self.live(src_idx)?.clone();
+        if !src.rights.contains(Rights::GRANT) {
+            return Err(CapError::InsufficientRights);
+        }
+        cs.check_free(dst_slot)?;
+        let idx = self.push(CapNode {
+            object: src.object,
+            kind: src.kind,
+            rights: src.rights.intersect(mask),
+            badge: if badge != 0 { badge } else { src.badge },
+            parent: Some(src_idx),
+            alive: true,
+            budget: 0,
+        });
+        cs.put(dst_slot, idx).expect("slot checked free");
+        Ok(())
+    }
+
+    /// Number of nodes ever allocated (live or revoked). Tests use it to
+    /// prove that refused operations allocate nothing.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
     }
 
     /// Revoke every capability derived from the one in `slot` (not the
@@ -360,5 +400,37 @@ mod tests {
         let (mut t, mut cs) = setup();
         let snapshot = cs.clone();
         assert_eq!(t.mint(&snapshot, 0, &mut cs, 1, Rights::READ, 0), Err(CapError::SlotOccupied));
+    }
+
+    #[test]
+    fn mint_self_matches_mint() {
+        let (mut t, mut cs) = setup();
+        t.mint_self(&mut cs, 0, 2, Rights::READ, 9).unwrap();
+        let r = t.invoke(&cs, 2, Rights::READ).unwrap();
+        assert_eq!((r.rights, r.badge), (Rights::READ, 9));
+        assert_eq!(t.mint_self(&mut cs, 0, 2, Rights::READ, 0), Err(CapError::SlotOccupied));
+        assert_eq!(t.mint_self(&mut cs, 2, 3, Rights::READ, 0), Err(CapError::InsufficientRights));
+        assert_eq!(t.revoke(&cs, 0).unwrap(), 1);
+    }
+
+    #[test]
+    fn refused_requests_allocate_nothing() {
+        let (mut t, mut cs) = setup();
+        let before = t.len();
+        let snapshot = cs.clone();
+        for _ in 0..10_000 {
+            // occupied destination, out-of-range destination, source without
+            // GRANT, empty source, out-of-range root slot
+            assert_eq!(t.mint(&snapshot, 0, &mut cs, 1, Rights::ALL, 0), Err(CapError::SlotOccupied));
+            assert_eq!(t.mint(&snapshot, 0, &mut cs, 99, Rights::ALL, 0), Err(CapError::InvalidSlot));
+            assert!(t.mint(&snapshot, 1, &mut cs, 2, Rights::ALL, 0).is_ok());
+            assert_eq!(t.revoke(&cs, 1).unwrap(), 1);
+            cs = snapshot.clone();
+            assert_eq!(t.mint(&snapshot, 5, &mut cs, 2, Rights::ALL, 0), Err(CapError::InvalidSlot));
+            assert_eq!(t.create_root(&mut cs, 0, ObjectKind::Host, Rights::ALL, 0), Err(CapError::SlotOccupied));
+            assert_eq!(t.create_root(&mut cs, 1000, ObjectKind::Host, Rights::ALL, 0), Err(CapError::InvalidSlot));
+        }
+        // Only the 10,000 legitimate mints allocated.
+        assert_eq!(t.len(), before + 10_000);
     }
 }

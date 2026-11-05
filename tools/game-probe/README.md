@@ -16,3 +16,29 @@ On 2026-11-05, both commands passed in a Linux container. Final hash for the bou
 **Ownership:** only `tools/game-probe/**`. The eventual Warden guest integration should bind this rasterizer to a capability-checked presentation endpoint and bounded input transport. Rendering on a host, however successfully, does **not** validate the kernel/ABI, isolation, device access, or QEMU game execution. See [roadmap PR #63](https://github.com/badwolfzm/pc/pull/63).
 
 **Next:** integration agent should provide (1) a native guest wrapper using the Warden ABI, (2) a securely mediated pixel presentation path, (3) user input replay, and (4) QEMU tests with exact output hashes and repeated exit/teardown. For Doom, source-port integration is separately required.
+
+## Bounded frame + input transport (follow-up)
+
+`transport.c/.h` adds a fixed 160×100 ARGB framebuffer copy, 16×16 tile
+hashes to count changed tiles, and a 32-event FIFO for four keyboard directions.
+It rejects wrong dimensions/stride/byte count and refuses overflow or malformed
+key events. No malloc and no operating-system calls. This is a **host-tested
+primitive**, not a kernel-accessible service or actual Doom integration.
+
+Host checks run in Linux container: `make test` with GCC C11 `-O2`,
+warnings-as-errors; `make clean && make CFLAGS='-std=c11 -O1 -g -Wall
+-Wextra -Werror -Wpedantic -fsanitize=address,undefined
+-fno-omit-frame-pointer' test` to run sanitizer tests. Both transport-specific
+tests passed locally before publishing. Existing renderer regression must
+also be rerun on this precise GitHub head via CI/reviewer.
+
+**Threat-model boundary:** the buffer sizes and coordinates are checked, but
+a direct C pointer is still trusted to refer to accessible memory; the eventual
+Warden boundary must copy from validated guest address ranges and verify
+capabilities/badges, never blindly dereference guest pointers. Tile hashes
+are for change detection, **not cryptographic integrity**. Input events need a
+kernel-controlled provenance before exposure to an untrusted guest.
+
+Existing Pong native guest (`tests/kernel/pong.sh`) already exercises
+QEMU/VGA/input separately; reusing that proven device path is an integration
+option, not proof that this new transport runs in Warden.

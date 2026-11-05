@@ -6,6 +6,8 @@
 //! continuation, so there is nothing to preempt inside the kernel.
 
 use crate::arch;
+use crate::mm::{AddressSpace, FrameAlloc};
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
 use warden_caps::{CSpace, CapError, CapTable, ObjectKind, Rights};
@@ -20,7 +22,29 @@ pub struct TrapFrame {
 }
 
 extern "C" {
-    fn enter_user(frame: *const TrapFrame) -> !;
+    fn enter_user(frame: *const TrapFrame, cr3: u64) -> !;
+}
+
+/// Four-word IPC message carried in registers (rsi, rdx, r10, r8).
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Msg {
+    pub badge: u64,
+    pub w: [u64; 4],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum State {
+    Runnable,
+    /// Waiting for a receiver on this endpoint object, holding the message.
+    SendBlocked(u32),
+    /// Waiting for a sender on this endpoint object.
+    RecvBlocked(u32),
+}
+
+#[derive(Default)]
+pub struct Endpoint {
+    senders: Vec<usize>,
+    receivers: Vec<usize>,
 }
 
 /// Why a thread stopped. Compared against each test thread's expectation.
@@ -50,6 +74,9 @@ pub struct Thread {
     pub name: &'static str,
     pub frame: TrapFrame,
     pub cspace: CSpace,
+    pub aspace: AddressSpace,
+    pub state: State,
+    pub pending: Msg,
     /// Timer ticks left (10 ms each). Refilled on yield.
     pub budget: u32,
     pub budget_period: u32,
@@ -60,6 +87,8 @@ pub struct Thread {
 
 pub struct Kernel {
     pub caps: CapTable,
+    pub frames: FrameAlloc,
+    pub endpoints: BTreeMap<u32, Endpoint>,
     pub threads: Vec<Thread>,
     pub current: usize,
     pub ticks: u64,
@@ -77,22 +106,48 @@ pub const USER_CS: u64 = 0x18 | 3;
 pub const USER_SS: u64 = 0x20 | 3;
 
 impl Kernel {
-    pub fn spawn(&mut self, name: &'static str, entry: u64, stack_top: u64, budget: u32, expect: Death) -> usize {
+    pub fn spawn(&mut self, name: &'static str, entry: u64, stack_top: u64, budget: u32, expect: Death, aspace: AddressSpace) -> usize {
         let frame = TrapFrame {
             rip: entry, cs: USER_CS, rflags: 0x202, rsp: stack_top, ss: USER_SS, ..TrapFrame::default()
         };
         self.threads.push(Thread {
-            name, frame, cspace: CSpace::new(8), budget, budget_period: budget, death: None, expect, logs: 0,
+            name, frame, cspace: CSpace::new(8), aspace, state: State::Runnable, pending: Msg::default(),
+            budget, budget_period: budget, death: None, expect, logs: 0,
         });
         self.threads.len() - 1
     }
 
     fn pick_next(&mut self) -> Option<usize> {
         let n = self.threads.len();
-        (1..=n).map(|i| (self.current + i) % n).find(|&i| self.threads[i].death.is_none())
+        (1..=n).map(|i| (self.current + i) % n).find(|&i| self.threads[i].death.is_none() && self.threads[i].state == State::Runnable)
+    }
+
+    fn any_alive(&self) -> bool {
+        self.threads.iter().any(|t| t.death.is_none())
+    }
+
+    /// Deliver `msg` into a receiver's registers and make it runnable.
+    fn deliver(&mut self, to: usize, msg: Msg) {
+        let f = &mut self.threads[to].frame;
+        f.rax = 0;
+        f.rdi = msg.badge;
+        f.rsi = msg.w[0];
+        f.rdx = msg.w[1];
+        f.r10 = msg.w[2];
+        f.r8 = msg.w[3];
+        self.threads[to].state = State::Runnable;
+    }
+
+    /// A thread died: drop it from any endpoint queue.
+    fn unqueue(&mut self, idx: usize) {
+        for ep in self.endpoints.values_mut() {
+            ep.senders.retain(|&t| t != idx);
+            ep.receivers.retain(|&t| t != idx);
+        }
     }
 
     fn kill(&mut self, idx: usize, how: Death) {
+        self.unqueue(idx);
         let t = &mut self.threads[idx];
         t.death = Some(how);
         let ok = how == t.expect;
@@ -108,7 +163,17 @@ impl Kernel {
         match self.pick_next() {
             Some(i) => {
                 self.current = i;
-                unsafe { enter_user(&self.threads[i].frame) }
+                unsafe { enter_user(&self.threads[i].frame, self.threads[i].aspace.cr3) }
+            }
+            None if self.any_alive() => {
+                // Everyone is blocked on IPC with nobody to pair with: a
+                // deadlock. Report it as a budget death of each blocked thread.
+                let blocked: Vec<usize> = (0..self.threads.len()).filter(|&i| self.threads[i].death.is_none()).collect();
+                for i in blocked {
+                    crate::kprintln!("  {} blocked forever in {:?}", self.threads[i].name, self.threads[i].state);
+                    self.kill(i, Death::Budget);
+                }
+                crate::finish(self)
             }
             None => crate::finish(self),
         }
@@ -126,6 +191,8 @@ pub const SYS_RETYPE: u64 = 4; // (slot, bytes) -> remaining budget
 pub const SYS_YIELD: u64 = 5;
 pub const SYS_EXIT: u64 = 6; // (code)
 pub const SYS_HOST_EXIT: u64 = 7; // (host_slot, code): stop the machine
+pub const SYS_SEND: u64 = 8; // (slot, w0, w1, w2) blocks until received -> 0
+pub const SYS_RECV: u64 = 9; // (slot) blocks until sent -> rax=0, rdi=badge, rsi/rdx/r10/r8=words
 
 fn err(e: CapError) -> u64 {
     -(match e {
@@ -138,9 +205,23 @@ fn err(e: CapError) -> u64 {
     }) as u64
 }
 
-fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<u64, Death> {
+/// What the syscall path does with the caller afterwards.
+enum After {
+    /// Resume the caller with rax = value.
+    Resume(u64),
+    /// The caller is blocked; run someone else.
+    Block,
+    /// The caller yielded; run someone else, rax = 0.
+    Yield,
+}
+
+fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
     let cur = k.current;
     let (a, b, c) = (f.rdi, f.rsi, f.rdx);
+    match f.rax {
+        SYS_SEND | SYS_RECV => return ipc(k, f),
+        _ => {}
+    }
     let r = match f.rax {
         SYS_LOG => {
             // Even logging needs a capability: the console endpoint with WRITE.
@@ -166,22 +247,67 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<u64, Death> {
         SYS_RETYPE => k.caps.retype(&k.threads[cur].cspace, a as usize, b).map_err(err),
         SYS_YIELD => {
             k.threads[cur].budget = k.threads[cur].budget_period;
-            Ok(0)
+            return Ok(After::Yield);
         }
         SYS_EXIT => return Err(Death::Exited(a)),
         SYS_HOST_EXIT => {
             if let Err(e) = k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
-                return Ok(err(e));
+                return Ok(After::Resume(err(e)));
             }
             crate::kprintln!("thread {} holds the host capability and stops the machine", k.threads[cur].name);
             arch::qemu_exit(b as u32)
         }
         _ => Err(-(100i64) as u64),
     };
-    Ok(match r {
+    Ok(After::Resume(match r {
         Ok(v) => v,
         Err(e) => e,
-    })
+    }))
+}
+
+/// Synchronous rendezvous IPC. SEND needs WRITE on the endpoint capability,
+/// RECV needs READ. The sender's badge travels with the message, so a server
+/// knows which grant a client is speaking through.
+fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
+    let cur = k.current;
+    let slot = f.rdi as usize;
+    let sending = f.rax == SYS_SEND;
+    let need = if sending { Rights::WRITE } else { Rights::READ };
+    let r = match k.caps.invoke(&k.threads[cur].cspace, slot, need) {
+        Ok(r) => r,
+        Err(e) => return Ok(After::Resume(err(e))),
+    };
+    if r.kind != ObjectKind::Endpoint {
+        return Ok(After::Resume(err(CapError::WrongKind)));
+    }
+    let ep_id = r.object.0;
+    let ep = k.endpoints.entry(ep_id).or_default();
+    if sending {
+        let msg = Msg { badge: r.badge, w: [f.rsi, f.rdx, f.r10, f.r8] };
+        if !ep.receivers.is_empty() {
+            let to = ep.receivers.remove(0);
+            k.deliver(to, msg);
+            return Ok(After::Resume(0));
+        }
+        ep.senders.push(cur);
+        k.threads[cur].pending = msg;
+        k.threads[cur].state = State::SendBlocked(ep_id);
+        // The sender resumes with rax = 0 once a receiver takes the message.
+        k.threads[cur].frame.rax = 0;
+        Ok(After::Block)
+    } else {
+        if !ep.senders.is_empty() {
+            let from = ep.senders.remove(0);
+            let msg = k.threads[from].pending;
+            k.threads[from].state = State::Runnable;
+            k.deliver(cur, msg);
+            // deliver() wrote the message into cur's frame; resume it.
+            return Ok(After::Resume(0));
+        }
+        ep.receivers.push(cur);
+        k.threads[cur].state = State::RecvBlocked(ep_id);
+        Ok(After::Block)
+    }
 }
 
 /// Rust side of every trap. Never returns.
@@ -213,14 +339,18 @@ pub extern "C" fn trap(frame: *mut TrapFrame) -> ! {
             // Time slice: always rotate.
         }
         arch::VEC_SYSCALL => match syscall(k, &f) {
-            Ok(v) => {
-                k.threads[cur].frame.rax = v;
-                if f.rax != SYS_YIELD {
-                    // Run-to-completion for the caller: resume it directly.
-                    k.current = cur;
-                    unsafe { enter_user(&k.threads[cur].frame) }
+            Ok(After::Resume(v)) => {
+                // deliver() may have filled the frame; only rax is set here,
+                // and for a completed RECV it is already 0.
+                if !(f.rax == SYS_RECV && v == 0) {
+                    k.threads[cur].frame.rax = v;
                 }
+                // Run-to-completion for the caller: resume it directly.
+                k.current = cur;
+                unsafe { enter_user(&k.threads[cur].frame, k.threads[cur].aspace.cr3) }
             }
+            Ok(After::Yield) => k.threads[cur].frame.rax = 0,
+            Ok(After::Block) => {}
             Err(d) => k.kill(cur, d),
         },
         v => {
@@ -247,4 +377,11 @@ pub fn start() -> ! {
 pub fn root_cap(k: &mut Kernel, thread: usize, slot: usize, kind: ObjectKind, rights: Rights, budget: u64) {
     let t = &mut k.threads[thread];
     k.caps.create_root(&mut t.cspace, slot, kind, rights, budget).expect("root cap");
+}
+
+pub fn mint_to(k: &mut Kernel, from: usize, from_slot: usize, to: usize, to_slot: usize, mask: Rights, badge: u64) {
+    let src = k.threads[from].cspace.clone();
+    let mut dst = k.threads[to].cspace.clone();
+    k.caps.mint(&src, from_slot, &mut dst, to_slot, mask, badge).expect("mint");
+    k.threads[to].cspace = dst;
 }

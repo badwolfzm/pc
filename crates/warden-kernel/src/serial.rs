@@ -17,7 +17,7 @@ pub fn init() {
     unsafe {
         outb(COM1 + 1, 0x00); // no interrupts
         outb(COM1 + 3, 0x80); // DLAB
-        outb(COM1 + 0, 0x01); // 115200
+        outb(COM1, 0x01); // 115200
         outb(COM1 + 1, 0x00);
         outb(COM1 + 3, 0x03); // 8N1
         outb(COM1 + 2, 0xC7); // FIFO

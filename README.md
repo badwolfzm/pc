@@ -22,11 +22,18 @@ slots, minting with a wider mask, using a revoked copy, over-budget retype,
 host-exit without the host capability, writing and reading kernel memory,
 jumping into kernel code, moving the stack outside the partition, `cli`,
 `hlt`, `out`, `rdmsr`, `mov cr3`, an unprogrammed `int`, the `syscall`
-instruction, and an infinite loop. 27 of 27 checks hold; the kernel then
-stops QEMU with its verdict.
+instruction, and an infinite loop. The kernel then stops QEMU with its verdict.
 
-Not in Phase 1 yet: user address spaces (one shared identity map with one
-user page), IPC endpoints, a loader, SMP, ARM64. See the kernel plan.
+Phase 2a adds **per-thread address spaces** (each thread gets private page
+tables; the same user virtual addresses map to different frames) and
+**synchronous IPC endpoints** (`send`/`recv` with four register words and the
+sender's badge; `send` needs WRITE on the endpoint capability, `recv` needs
+READ). Tests: a client's badge and words reach the server; a WRITE-only holder
+cannot receive; a writer's data page is invisible to a reader at the same
+address. 41 of 41 checks hold.
+
+Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
+See the kernel plan.
 
 See [HOST.md](HOST.md) for running everything on the Windows/WSL2 target host.
 
@@ -99,7 +106,7 @@ join the process's authority only once that library is actually loaded.
 
 ```sh
 cargo test                      # 21 unit tests across the crates
-tests/kernel/run.sh             # 27 in-guest checks against the Phase 1 kernel
+tests/kernel/run.sh             # 41 in-guest checks against the kernel
 tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
 tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```

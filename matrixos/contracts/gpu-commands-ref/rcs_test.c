@@ -136,6 +136,35 @@ static void test_blend_rules(void) {
     rcs_client_free(&c);
 }
 
+static void test_damage(void) {
+    rcs_client c; rcs_client_init(&c, RCS_R_ALL); CHECK_OK(make_surfaces(&c));
+    CHECK(c.surfaces[0].tw == 80 && c.surfaces[0].th == 45);
+    bb b; rcs_begin_frame bf = {1}; rcs_present pr = {0, 1};
+    rcs_fill_rect fr = {0, {10, 10, 100, 40}, 0xFFFFAA00u};     /* tiles x 0..6, y 0..3 = 28 */
+    bb_begin(&b, RCS_BATCH_FRAME); ADD(&b, RCS_OP_BEGIN_FRAME, bf); ADD(&b, RCS_OP_FILL_RECT, fr); ADD(&b, RCS_OP_PRESENT, pr); CHECK_OK(submit(&c, &b));
+    CHECK(c.last_present.dirty_tiles == 28 && c.last_present.slot == 0 && c.last_present.frame_no == 1);
+    CHECK(c.last_present.tiles[0] & 1);                           /* tile (0,0) */
+    CHECK((c.last_present.tiles[(6) >> 3] >> (6 & 7)) & 1);        /* tile (6,0) */
+    CHECK(!((c.last_present.tiles[(7) >> 3] >> (7 & 7)) & 1));     /* tile (7,0) untouched */
+    /* a static frame reports zero damage; a full clear reports every tile */
+    bf.frame_no = 2; pr.frame_no = 2;
+    bb_begin(&b, RCS_BATCH_FRAME); ADD(&b, RCS_OP_BEGIN_FRAME, bf); ADD(&b, RCS_OP_PRESENT, pr); CHECK_OK(submit(&c, &b));
+    CHECK(c.last_present.dirty_tiles == 0);
+    bf.frame_no = 3; pr.frame_no = 3; rcs_clear cl = {0, 0};
+    bb_begin(&b, RCS_BATCH_FRAME); ADD(&b, RCS_OP_BEGIN_FRAME, bf); ADD(&b, RCS_OP_CLEAR, cl); ADD(&b, RCS_OP_PRESENT, pr); CHECK_OK(submit(&c, &b));
+    CHECK(c.last_present.dirty_tiles == 80 * 45);
+    /* a line across the frame marks one tile per step at most, and only inside the clip */
+    bf.frame_no = 4; pr.frame_no = 4; rcs_set_clip sc = {0, {0, 0, 64, 64}}; rcs_line ln = {0, 0, 0, 1279, 719, 1};
+    bb_begin(&b, RCS_BATCH_FRAME); ADD(&b, RCS_OP_BEGIN_FRAME, bf); ADD(&b, RCS_OP_SET_CLIP, sc); ADD(&b, RCS_OP_LINE, ln); ADD(&b, RCS_OP_PRESENT, pr); CHECK_OK(submit(&c, &b));
+    CHECK(c.last_present.dirty_tiles > 0 && c.last_present.dirty_tiles <= 16);
+    /* a rejected batch leaves no damage behind */
+    bf.frame_no = 5; pr.frame_no = 5; rcs_fill_rect bad = {0, {0, 0, 0, 5}, 0};
+    bb_begin(&b, RCS_BATCH_FRAME); ADD(&b, RCS_OP_BEGIN_FRAME, bf); ADD(&b, RCS_OP_CLEAR, cl); ADD(&b, RCS_OP_FILL_RECT, bad); CHECK_REJ(submit(&c, &b), 2, RCS_E_RECT_EMPTY);
+    bb_begin(&b, RCS_BATCH_FRAME); ADD(&b, RCS_OP_BEGIN_FRAME, bf); ADD(&b, RCS_OP_PRESENT, pr); CHECK_OK(submit(&c, &b));
+    CHECK(c.last_present.dirty_tiles == 0);
+    rcs_client_free(&c);
+}
+
 static void test_envelope(void) {
     rcs_client c; rcs_client_init(&c, RCS_R_ALL); make_surfaces(&c);
     bb b;
@@ -486,6 +515,7 @@ static void test_fuzz(void) {
 int main(void) {
     test_happy_path_and_determinism();
     test_blend_rules();
+    test_damage();
     test_envelope();
     test_rights_and_atomicity();
     test_slots_and_resources();

@@ -1,8 +1,11 @@
+#define _POSIX_C_SOURCE 199309L
 /* Tests for ghost_canvas: correctness of damage tracking and streaming. */
 #include "ghost_canvas.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <time.h>
 
 static int fails = 0, checks = 0;
 #define CHECK(cond) do { checks++; if (!(cond)) { fails++; fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -194,7 +197,82 @@ static void test_consumed_hash_does_not_cancel(void) {
     CHECK(fixed != fixed2);
 }
 
+/* Service hand-off: rcs_present_info.tiles has the same geometry as ours. */
+static void test_damage_bits_import(void) {
+    gc_canvas c; CHECK(gc_init(&c, 480, 270) == 0); gc_present(&c, NULL, NULL);
+    uint8_t bits[(30 * 17 + 7) / 8]; memset(bits, 0, sizeof bits);
+    /* service says: tiles (6..10, 12..16) and tile (29,16) (bottom-right, partial) were drawn */
+    for (uint32_t ty = 12; ty <= 16; ++ty) for (uint32_t tx = 6; tx <= 10; ++tx) { uint32_t b = ty * 30 + tx; bits[b >> 3] |= (uint8_t)(1u << (b & 7)); }
+    { uint32_t b = 16 * 30 + 29; bits[b >> 3] |= (uint8_t)(1u << (b & 7)); }
+    /* kernel wrote work directly in those tiles, but only some pixels differ */
+    c.work[200 * 480 + 100] = 0xABCDEF; c.work[269 * 480 + 479] = 0x123456;
+    CHECK(gc_damage_bits(&c, bits, 30, 17) == 26);
+    CHECK(gc_damage_bits(&c, bits, 31, 17) == -1);
+    gc_present(&c, NULL, NULL);
+    CHECK(c.last.tiles_dirty == 26 && c.last.tiles_emitted == 2 && c.last.tiles_false == 24);
+    CHECK(c.ghost[200 * 480 + 100] == 0xABCDEF && c.ghost[269 * 480 + 479] == 0x123456);
+    gc_present(&c, NULL, NULL); CHECK(c.last.tiles_dirty == 0);
+    gc_free(&c);
+}
+
+/* Audit 2026-11-05: four UBSan-confirmed signed overflows on extreme coordinates,
+ * plus the line rasterizer running ~4 billion steps for a line across INT range.
+ * Run under -fsanitize=undefined -fno-sanitize-recover=all (make ubsan). */
+static void test_extreme_coordinates(void) {
+    gc_canvas c; CHECK(gc_init(&c, 64, 64) == 0); gc_present(&c, NULL, NULL);
+    uint32_t spr[16 * 16]; for (int i = 0; i < 256; ++i) spr[i] = 0xFF00FF00u;
+    gc_damage(&c, INT_MAX, 0, 16, 16);                 /* probe 1 */
+    gc_rect(&c, INT_MAX, 0, 16, 16, 1);                /* probe 2 */
+    gc_blit(&c, INT_MIN, 0, spr, 16, 16, 16);          /* probe 4 */
+    gc_damage(&c, INT_MIN, INT_MIN, INT_MAX, INT_MAX); /* ends at -2: outside */
+    gc_rect(&c, INT_MIN, INT_MIN, INT_MAX, INT_MAX, 1);
+    gc_rect(&c, 0, 0, INT_MAX, INT_MAX, 0);            /* covers the canvas, same colour: clean */
+    gc_blit(&c, INT_MAX, INT_MAX, spr, 16, 16, 16);
+    gc_blit(&c, 0, 0, spr, INT_MAX, 1, INT_MAX);       /* huge declared size, clipped to 64x1: reads only 64 px */
+    gc_present(&c, NULL, NULL);
+    CHECK(c.last.tiles_emitted == 4);                  /* only the 64x1 blit row changed (tiles 0..3 of row 0) */
+    for (int i = 0; i < 64; ++i) CHECK(c.ghost[i] == 0xFF00FF00u);
+    /* probe 3 and friends: lines across the whole int range must finish quickly */
+    struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
+    gc_line(&c, INT_MIN, 0, INT_MAX, 10, 2);           /* nearly horizontal, crosses canvas around y = 5 */
+    gc_line(&c, INT_MIN, INT_MIN, INT_MAX, INT_MAX, 3);/* diagonal through (0,0)..(63,63) region */
+    gc_line(&c, INT_MAX, INT_MIN, INT_MIN, INT_MAX, 3);
+    gc_line(&c, 0, INT_MIN, 0, INT_MAX, 4);            /* vertical through x = 0 */
+    gc_line(&c, INT_MIN, 100, INT_MAX, 100, 5);        /* below the canvas: nothing */
+    gc_line(&c, INT_MAX, INT_MAX, INT_MAX, INT_MAX, 5);/* degenerate, outside */
+    for (int k = 0; k < 2000; ++k) gc_line(&c, (int)(rnd() % 7 == 0 ? INT_MIN : (int)rnd()), (int)rnd(), (int)rnd(), (int)(rnd() % 5 == 0 ? INT_MAX : (int)rnd()), 6);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+    CHECK(ms < 500.0);                                 /* 2006 int-range lines; was unbounded */
+    gc_present(&c, NULL, NULL);
+    CHECK(c.ghost[0] == 4 || c.ghost[0] == 3 || c.ghost[0] == 6); /* x=0 column was drawn by something */
+    CHECK(c.last.tiles_emitted > 0);
+    /* a horizontal line that leaves both sides lands on the right row */
+    gc_clear(&c, 0); gc_present(&c, NULL, NULL);
+    gc_line(&c, -100000, 7, 100000, 7, 9); gc_present(&c, NULL, NULL);
+    for (int i = 0; i < 64; ++i) CHECK(c.ghost[7 * 64 + i] == 9);
+    CHECK(c.last.tiles_emitted == 4);
+    gc_free(&c);
+    /* clipped lines are pixel-identical to the unclipped rasterization: compare against a
+     * 64-bit brute-force reference Bresenham that plots only inside the canvas */
+    gc_canvas big, small; CHECK(gc_init(&big, 300, 300) == 0); CHECK(gc_init(&small, 300, 300) == 0);
+    gc_present(&big, NULL, NULL); gc_present(&small, NULL, NULL);
+    for (int k = 0; k < 200; ++k) {
+        int x0 = (int)(rnd() % 1200) - 450, y0 = (int)(rnd() % 1200) - 450, x1 = (int)(rnd() % 1200) - 450, y1 = (int)(rnd() % 1200) - 450;
+        if (k % 4 == 0) { x0 = (int)(rnd() % 600) - 150; y0 = (int)(rnd() % 600) - 150; }   /* some endpoints inside */
+        gc_line(&small, x0, y0, x1, y1, 1);           /* bounded path */
+        /* reference: unclipped Bresenham, plotting only inside the canvas */
+        int64_t dx = llabs((int64_t)x1 - x0), sx = x0 < x1 ? 1 : -1, dy = -llabs((int64_t)y1 - y0), sy = y0 < y1 ? 1 : -1, err = dx + dy, cx = x0, cy = y0;
+        for (;;) { if (cx >= 0 && cy >= 0 && cx < 300 && cy < 300) big.work[cy * 300 + cx] = 1; if (cx == x1 && cy == y1) break; int64_t e2 = 2 * err; if (e2 >= dy) { err += dy; cx += sx; } if (e2 <= dx) { err += dx; cy += sy; } }
+    }
+    int mism = memcmp(big.work, small.work, 300 * 300 * 4) != 0;
+    CHECK(mism == 0);
+    gc_free(&big); gc_free(&small);
+}
+
 int main(void) {
+    test_extreme_coordinates();
+    test_damage_bits_import();
     test_consumed_hash_does_not_cancel();
     test_first_present_sends_everything();
     test_old_toggle_loses_abc();

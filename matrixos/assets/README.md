@@ -12,6 +12,7 @@ Baseline C file is not edited; this folder is a new module.
 | `assetpack.c` | Packer: file or raw ARGB8888 image → 64 KiB chunks named by SHA-256 under `chunks/xx/`, plus a manifest under `manifests/<sha256>`. Images get a box-filtered mip chain; `--tiles` writes mip 0 as 16x16 ARGB tiles, row-major, 1 KiB each, for the canvas thread. |
 | `test_asset_store.c` | 47 checks: jail escapes, hash verification, non-blocking API, residency, eviction, budget, generation counter, close-in-flight, SSD plan. |
 | `bench_asset_store.c` | Read-pattern harness: sequential 4 MiB assets vs random 64 KiB chunks at queue depth 1, 4 and 32, plus the SHA-256 CPU ceiling. |
+| `mx_vfs_compat.h` / `test_mx_vfs_compat.c` | Header-only drop-in for the baseline `mx_vfs` (same four function names and return codes) backed by `openat2` from the sandbox directory fd, for the integrated build. 20 checks including the review's symlink-to-`../` reproduction. See the header comment for how to swap it in. |
 | `Makefile` | `make test`, `make asan`, `make bench`. |
 
 ## Interface for the canvas thread
@@ -43,7 +44,7 @@ Addresses finding 1 (symlink escape) and the over-long path finding from `matrix
 
 ## Verified (run here, on this container: Linux 6.18, 4 cores, ext4 on a virtual disk)
 
-- `make test`: 47 passed, 0 failed, under `gcc -O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion`.
+- `make test`: 47 passed, 0 failed (asset store) and 20 passed, 0 failed (mx_vfs shim), under `gcc -O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion`.
 - `make asan`: same 47 pass under AddressSanitizer + UndefinedBehaviorSanitizer with gcc, no reports. (clang ASan cannot link in this container; the tests thread confirmed the plain build under clang 18.)
 - The tests thread's independent harness, `matrixos/tests/security_regressions.sh` with `ASSETS_DIR=<writable copy of this folder>`, passes 9 of 9 against this module (symlink out of root, `../`, absolute path, climbing directory symlink, 129/550/600-byte paths).
 - Jail checks that pass: symlink file → `../` (ELOOP), path through a symlinked directory (ELOOP), absolute symlink (ELOOP), `../` escape, absolute path (EINVAL), directory as chunk, symlinked manifest through `asset_open` (`ASSET_ERR_ESCAPE`), 6000-byte path (ENAMETOOLONG) also when a file with the truncated name exists.

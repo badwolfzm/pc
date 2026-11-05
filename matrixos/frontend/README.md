@@ -150,3 +150,26 @@ is the check the security review asked for on super-op lengths (finding 6).
 | aarch64 flag set | dry-run only, no cross compiler here: **not verified** |
 | any speedup from tiers or profiles | **not measured**; the benchmark thread owns that |
 | use inside a Warden container or the kernel | **not exercised** |
+
+## Changelog
+
+### 1.0.1 (2026-11-05): independent audit fixes
+- **Issue 1 (HIGH): `--` passthrough bypassed the flag deny policy.** Arguments
+  after `--` were copied verbatim, so `-- -fplugin=x.so` loaded a plugin. Every
+  argument path now goes through the same check (`is_denied_flag`), and options
+  that take a following value (`-Xlinker`, `-include`, `-imacros`, `-Xassembler`,
+  `-Xpreprocessor`, ...) have that value checked with `is_denied_value`. Also
+  denied now: `-fuse-ld=`, `--ld-path`, `-flto`, `-fuse-linker-plugin`,
+  `-fsanitize=`, profile generation, `-Xassembler`, `-Xpreprocessor`.
+  Regression: `tests/driver/plugin_regression.sh` builds a real shared object whose
+  constructor writes a marker, proves with a direct gcc run that the probe loads
+  (control), then requires exit 2 and no marker for 11 argument shapes with both
+  compilers (25 checks).
+- **Harness weakness: a missing compiler counted as a passing rejection.**
+  `tests/typed_input/run.sh` now probes that mxcc can invoke each compiler first
+  (setup error, exit 3, otherwise), and a fail case passes only when the log holds
+  a compiler diagnostic and no `mxcc: error`. `tests/driver/run.sh` real-compile
+  blocks use absolute compiler paths from `command -v`, so a clang outside mxcc's
+  fixed search directories is still exercised; the fixed list gained
+  `/usr/lib/llvm-{17,19,20}/bin` and `/opt/homebrew/opt/llvm/bin`. `$PATH` is
+  still never used by mxcc itself.

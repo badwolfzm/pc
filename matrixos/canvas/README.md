@@ -2,9 +2,10 @@
 
 Owner: thread "Design dirty-bit canvas compositing". Status: **reference
 implementation, tested, benchmarked on a dev container, not yet wired to the
-RCS command set or the asset streamer.** Written against
-`contracts/gpu-commands-ref/rcs.h` v1 as it stood on 2026-11-05 06:53; the
-security review had not landed yet, so this must be re-read against it.
+RCS command set or the asset streamer.** Aligned with
+`contracts/gpu-commands.md` (wave 1 release, 2026-11-05 07:08) and
+`assets/asset_store.h`. The security review has not landed yet; re-read against
+it when it does.
 
 ## What it does
 
@@ -102,8 +103,7 @@ are the memory-bandwidth thread's job and will move these by a constant factor.
 
 ## Tests
 
-`make test OUT=/tmp/build` (the project-files mount is noexec; 595 checks, 0 failures) and `make asan` (same, under
-AddressSanitizer and UBSan):
+`make test OUT=/tmp/build` (the project-files mount is noexec; 759 checks, 0 failures), `make asan` (AddressSanitizer + UBSan) and `make ubsan` (UBSan, no recovery), all 0 failures:
 
 | Test | Checks |
 |---|---|
@@ -123,14 +123,12 @@ below), concurrent access (single-threaded by design), A8 surfaces.
 
 ## Alpha blending rounding rule
 
-The command-set contract owns this rule (CONTROL.md), and the canvas has no
-blend code of its own, so the authoritative definition is `blend_px` in
-`contracts/gpu-commands-ref/rcs.c`: per channel `(s*a + d*(255-a) + 127) / 255`
-with truncating division, destination alpha composited as
-`min(255, sa + (da*(255-sa) + 127) / 255)`, ADD saturating on all four bytes.
-The super-op kernels match that today. An earlier draft of this README
-proposed a different (exact-rounding) rule; it is withdrawn so that only one
-rule exists. Any change goes through the command-set thread.
+Owned by the command-set contract, `contracts/gpu-commands.md` section 4
+(normative, shared with canvas and superops): per colour channel with `a` the
+source alpha, `t = s*a + d*(255-a) + 128; out = (t + (t >> 8)) >> 8` (exact
+round(t/255)); destination alpha unchanged; ADD saturating on all four bytes;
+COPY replaces. `test_blend_rules` in `rcs_test.c` is the oracle; the canvas has
+no blend code of its own.
 
 ## How it plugs into the RCS contract
 
@@ -154,6 +152,51 @@ rectangle they wrote. The XOR compare at present catches kernels that wrote
 the same value. `RCS_FRAME_PIXEL_BUDGET` is charged by the RCS layer before
 the call, not here.
 
+### Two ways the compositor can receive a frame
+
+1. **Canvas is the surface's backing store** (preferred, what this module
+   assumes). The service executes CLEAR/FILL_RECT/LINE/BLIT(COPY) through the
+   `gc_*` calls, and blend/triangle kernels write `work` then call `gc_damage`.
+   Present cost scales with what changed.
+2. **Service hands an opaque ARGB surface at PRESENT.** Then the compositor has
+   no damage information and must XOR-diff the whole surface against the ghost:
+   `gc_damage(all)` + `gc_present` = the "full redraw" row above, measured
+   0.65 ms at 720p, 0.07 ms at 480x270, every frame even when static. Still
+   within budget, but it wastes the dirty bits. The command-set contract now
+   hands the compositor `rcs_present_info` at PRESENT with a per-surface 16x16
+   tile bitmap (`tiles`, `tw` x `th` bits, row-major, bit = ty*tw + tx, LSB
+   first), the same geometry as the canvas bitmap. `gc_damage_bits` ORs it in
+   (test: 26 service tiles imported, 2 emitted after the XOR check, 24 dropped
+   as unchanged), which turns mode 2 into mode 1 with no rect list and a
+   bounded record (450 bytes at 720p).
+
+## Asset store glue (`canvas_assets.[ch]`)
+
+Built against `matrixos/assets/asset_store.h`. `gc_blit_image` blits a sub-rect
+of a mapped ARGB8888 image with explicit stride and rejects out-of-image
+rects; `gc_blit_asset` wraps `asset_query` + `asset_map` and returns
+`ASSET_NOT_READY` without drawing when the mip is not resident (never blocks);
+`gc_restore_tiled_bg` restores the background under a moved sprite from an
+`assetpack --tiles` layout (16x16 tiles, row-major, 1 KiB each) by whole-tile
+copies; `gc_assets_poll` drains `asset_poll` once per frame outside
+BEGIN_FRAME..PRESENT and damages the canvas when the bound background's
+generation changes or it is evicted. `make test_assets` (22 checks: sub-rect
+blit, stride > width, four geometry rejections draw nothing, tiled restore
+returns the exact background and emits exactly the 25 tiles under a 64x64
+sprite at the bottom edge, binding invalidation rules). `make glue` compiles
+the store-backed wrappers against the real header. Not run against a store on
+disk yet.
+
+## Baseline patch
+
+`baseline-patches/0001-canvas-bench-consumed-hash.patch` fixes the uploaded
+file's canvas benchmark, whose `consumed_hash` was always 0 (identical
+iterations XOR-cancelled). Verified by building the baseline and the patched
+copy: CSV `consumed_hash` goes from 0 to a nonzero value, the 30-frame demo
+PPM SHA-256 `99e7937b...4414` is unchanged, and
+`test_consumed_hash_does_not_cancel` reproduces the cancellation and checks the
+fix. The uploaded file itself is not modified (CONTROL.md decision 1).
+
 ## What this module needs from asset streaming
 
 Agreed with the "Design GPU asset streaming from storage" thread on 2026-11-05 (all four accepted, no conflicts). Their draft API: `asset_open`, `asset_want`, `asset_drop`, `asset_query` (non-blocking, resident-mips bitmap + generation; a blit on a non-resident asset gets `ASSET_NOT_READY`), `asset_poll` (list of (asset, mip, generation) changed this frame; the canvas calls it outside BEGIN_FRAME..PRESENT and turns each entry into `gc_damage`). Header to land in `matrixos/assets/asset_store.h`. Resident buffers are never evicted or replaced inside the frame window; tiled 16x16 backgrounds are a pack-layout option.
@@ -171,6 +214,31 @@ Agreed with the "Design GPU asset streaming from storage" thread on 2026-11-05 (
    row-major, 1 KB per tile) so that restoring the background under a moved
    sprite is a tile copy, not a strided rect copy. Optional, saves about 30%
    on the sprite scenes above; not measured yet.
+
+## Audit fixes (independent audit, 2026-11-05)
+
+The audit found four UBSan-confirmed signed overflows on extreme coordinates
+(`gc_damage` x=INT_MAX, `gc_rect` x=INT_MAX, `gc_line` INT_MIN..INT_MAX,
+`gc_blit` x=INT_MIN) and noted the line rasterizer could run ~4 billion steps.
+Fixed as follows:
+
+- All primitives clip in 64-bit arithmetic **before** any loop (`gc_clip_rect`),
+  so iteration counts are bounded by the canvas, not by the arguments.
+  `gc_restore_tiled_bg` in the asset glue got the same treatment.
+- `gc_line` no longer rounds clipped endpoints. Bresenham is a linear
+  recurrence, so its state after k iterations has a closed form
+  (`n = (2kb + a) / 2a`, `err = a - b - kb + na`, verified against brute force);
+  the rasterizer jumps to the first visible major-axis step and runs at most
+  canvas-extent iterations. Pixels are identical to the unclipped line (test:
+  200 random lines with far-off endpoints, exact match against a brute-force
+  reference), and the golden hash is unchanged.
+- Regression test `test_extreme_coordinates`: the four probes, INT-range
+  lines in every orientation, 2,000 random INT-range lines in under 500 ms,
+  a 64x1 blit declared as INT_MAX x 1 that reads only 64 pixels. `make ubsan`
+  runs the suites with `-fsanitize=undefined -fno-sanitize-recover=all`; the
+  audit's four probe programs now exit 0 in about 3 ms each on the fixed code.
+- Uses `__int128` for two intermediates (gcc and clang; MSVC would need a
+  fallback).
 
 ## Uncertainties and what is not verified
 

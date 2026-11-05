@@ -1,6 +1,6 @@
 {
   "schema": "mxsb-manifest",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "status": "draft",
   "date": "2026-11-05",
   "depends_on": {
@@ -384,13 +384,12 @@
   "digest": {
     "algorithm": "SHA-256",
     "covers": [
-      "header[0..header_size]",
-      "section_table",
-      "all sections in table order except SIGNATURE"
+      "file[0..len] in file order including header, section table, all sections, vendor sections and padding"
     ],
     "excludes": [
-      "SIGNATURE"
-    ]
+      "SIGNATURE section bytes at SIGNATURE.offset..+SIGNATURE.size"
+    ],
+    "padding_must_be_zero": true
   },
   "signature": {
     "algorithm": "Ed25519",
@@ -546,11 +545,19 @@
     {
       "name": "MXSB_E_NOT_GRANTED",
       "code": 19
+    },
+    {
+      "name": "MXSB_E_PADDING",
+      "code": 20
+    },
+    {
+      "name": "MXSB_E_LAYOUT",
+      "code": 21
     }
   ],
   "validation": {
     "spec_section": "9a",
-    "order": "V1..V26, stop at first failure",
+    "order": "V1..V13, V27, V28, V14..V26; stop at first failure",
     "limits": {
       "header_size_max": 4096,
       "section_count_max": 64,
@@ -582,6 +589,20 @@
       "version": "2.0.2",
       "date": "2026-11-05",
       "note": "random defaults to false; new names are warden-abi 0.2"
+    },
+    {
+      "version": "2.0.3",
+      "date": "2026-11-05",
+      "note": "v1 header is 40 bytes; load layout rule 3.4; digest covers whole file except SIGNATURE; zero padding V27; page-multiple TEXT V28"
     }
-  ]
+  ],
+  "v1_header_size": 40,
+  "load_layout": {
+    "spec_section": "3.4",
+    "text_at": "base",
+    "data_at": "base + TEXT.size",
+    "bss_at": "base + TEXT.size + DATA.size",
+    "entry_address": "base + (entry_off - TEXT.offset)",
+    "text_size_page_multiple_when_data_or_bss": 4096
+  }
 }

@@ -1,6 +1,6 @@
 # MXSB v2: super-binary header and manifest contract
 
-Status: draft 2.0.2, 2026-11-05. Owner: thread "Upgrade MXSB manifest format".
+Status: draft 2.0.3, 2026-11-05. Owner: thread "Upgrade MXSB manifest format".
 Machine-readable companion: `mxsb-manifest.schema.json` (same folder). The
 schema is authoritative for constants and names; this file explains them.
 
@@ -30,7 +30,7 @@ typedef struct {
     uint16_t version, flags;           // version = 1
     uint32_t text_size, data_size, superop_count, caps_required;
     uint64_t entry_off, manifest_hash; // FNV-1a 64 over text+data
-} mxsb_header;                         // 32 bytes
+} mxsb_header;                         // 40 bytes packed
 #pragma pack(pop)
 ```
 
@@ -86,6 +86,26 @@ u64 overflow; each unique type appears at most once; required types appear.
 | SIGNATURE | 6 | yes | yes | 32-byte key id + 64-byte Ed25519 signature |
 | BUILD_INFO | 7 | no | yes | UTF-8 `key=value` lines: `profile`, `simd_tier`, `source_sha256`, `toolchain` |
 | vendor | >= 0x8000 | no | no | skipped by the reader, still covered by the digest |
+
+### 3.4 Load layout (no vaddr fields)
+
+The section table carries file offsets only. The image layout in memory is
+fixed by rule, so emitter and loader need no load addresses:
+
+- `base` is the load address the loader chooses (any page-aligned address;
+  with flag PIE the code must tolerate any base).
+- TEXT is mapped at `base`. `TEXT.size` is a multiple of 4096 whenever DATA
+  or BSS exists, so the permission boundary falls on a page.
+- DATA is mapped at `base + TEXT.size`; BSS follows DATA at
+  `base + TEXT.size + DATA.size`, zero-filled, and `BSS.size` is rounded up
+  to a page by the loader.
+- `entry_off` is a file offset inside TEXT; the entry address is
+  `base + (entry_off - TEXT.offset)`.
+- An emitter converting from ELF uses: TEXT image =
+  `[page_floor(lowest vaddr), page_floor(first writable vaddr))`, DATA = the
+  writable segment image, BSS = its memsz minus filesz,
+  `entry_off = TEXT.offset + (e_entry - page_floor(lowest vaddr))`.
+  Vendor sections may hold relocation data; the 2.0 loader applies none.
 
 ## 4. MANIFEST section grammar
 
@@ -153,13 +173,17 @@ Bits 0..6 keep their v1 positions so a v1 mask converts by zero-extension.
 ## 6. Digest and signature (replaces `manifest_hash`)
 
 ```
-digest = SHA-256( header[0..header_size]
-               || section_table
-               || every section's bytes in table order, except SIGNATURE )
+digest = SHA-256( file[0..len] with the SIGNATURE section's bytes removed )
 ```
 
+That is: every byte of the file in file order, including the header, the
+section table, all sections, vendor sections and the padding between them,
+except the `SIGNATURE.size` bytes at `SIGNATURE.offset`. Padding bytes
+must be zero (V27), so there is no unauthenticated or writable slack
+anywhere in the file. BSS contributes nothing (no bytes).
+
 The header is inside the digest, so `caps_summary`, `entry_off` and `flags`
-cannot change after signing. BSS contributes nothing (no bytes).
+cannot change after signing.
 
 SIGNATURE = `key_id[32] || sig[64]` where `sig = Ed25519_sign(digest)` and
 `key_id = SHA-256(public key)`. The loader holds a trust list of key ids.
@@ -225,7 +249,7 @@ Three fields are added to `warden.toml`: `render`, `superops`, `random`. All def
 ## 9a. Exact validation rules (security review finding 7)
 
 These rules bind both the codegen emitter and the loader. A loader applies
-them in this order and stops at the first failure with the named error. An
+them in this order (V27 and V28 run after V13, before the digest) and stops at the first failure with the named error. An
 emitter must never produce a file that fails any of them. All arithmetic is
 on u64 with explicit overflow checks; a check that would overflow fails.
 
@@ -252,7 +276,7 @@ mapped read-only; the loader never trusts a length field to read more).
 | V16 | `SIGNATURE.size == 96`; `SUPEROPS.size % 4 == 0`; `MANIFEST.size <= 64 KiB`; `BUILD_INFO.size <= 64 KiB` | `MXSB_E_TABLE` |
 | V17 | `TEXT.offset <= entry_off < TEXT.offset + TEXT.size` (the right side cannot overflow after V11) | `MXSB_E_ENTRY` |
 | V18 | total mapped size `TEXT.size + DATA.size + BSS.size <= 4 GiB` with checked adds; this is the only allocation the loader makes and it is sized from these checked values, never from `file_size` or a sum of unchecked fields | `MXSB_E_BOUNDS` |
-| V19 | `digest == SHA-256(...)` per section 6, computed over ranges already proven in-bounds by V4, V9, V11 | `MXSB_E_DIGEST` |
+| V19 | `digest == SHA-256(file minus SIGNATURE bytes)` per section 6; the SIGNATURE range is already proven in-bounds by V11 | `MXSB_E_DIGEST` |
 | V20 | SIGNATURE valid under a trusted key id, or digest in approvals with `allow_unsigned` | `MXSB_E_SIGNATURE` / `MXSB_E_UNTRUSTED_KEY` |
 | V21 | MANIFEST is valid UTF-8, no NUL, no control characters other than `\n` and `\t`, at most 4096 lines, each at most 1024 bytes | `MXSB_E_MANIFEST_SYNTAX` |
 | V22 | manifest grammar per section 4, including `mxsb-manifest 1` | `MXSB_E_MANIFEST_SYNTAX` / `MXSB_E_MANIFEST_VERSION` / `MXSB_E_UNKNOWN_PERM` / `MXSB_E_BAD_SCOPE` |
@@ -260,6 +284,8 @@ mapped read-only; the loader never trusts a length field to read more).
 | V24 | `caps_summary == OR(family bits of require lines)`; reserved bits 10..63 zero | `MXSB_E_CAPS_SUMMARY` |
 | V25 | every SUPEROPS id has a matching `require superop=<name>` line (name table from the GPU command-set contract) | `MXSB_E_NOT_GRANTED` |
 | V26 | every `require` line is an attenuation of the container manifest (section 9); the loader never grants from `caps_summary`, from SUPEROPS, or anything the container does not hold | `MXSB_E_NOT_GRANTED` |
+| V27 | every byte not inside the header, the section table or a section is zero (padding between 16-aligned regions and bytes 64..header_size) | `MXSB_E_PADDING` |
+| V28 | if DATA or BSS exists, `TEXT.size % 4096 == 0` (section 3.4) | `MXSB_E_LAYOUT` |
 
 Allocation rule: the loader allocates exactly once, after V18, for
 `TEXT.size + DATA.size + BSS.size` rounded up to the page size with a
@@ -271,7 +297,7 @@ Decoder rule: every read of `buf` is through a bounds-checked accessor that
 takes `(buf, len, offset, width)` and fails closed. A failed check leaves
 the output image zeroed and holds no allocation.
 
-Emitter rule: the codegen emitter runs the same V1..V25 checks on its own
+Emitter rule: the codegen emitter runs the same V1..V25, V27 and V28 checks on its own
 output before writing the file, with the Rust and C implementations sharing
 the golden test set so they agree byte for byte.
 
@@ -282,11 +308,12 @@ the golden test set so they agree byte for byte.
 `MXSB_E_DUP_SECTION`, `MXSB_E_ENTRY`, `MXSB_E_DIGEST`, `MXSB_E_SIGNATURE`,
 `MXSB_E_UNTRUSTED_KEY`, `MXSB_E_MANIFEST_SYNTAX`, `MXSB_E_MANIFEST_VERSION`,
 `MXSB_E_UNKNOWN_PERM`, `MXSB_E_BAD_SCOPE`, `MXSB_E_BUILD_ID`,
-`MXSB_E_CAPS_SUMMARY`, `MXSB_E_NOT_GRANTED`. Numeric values are in the
+`MXSB_E_CAPS_SUMMARY`, `MXSB_E_NOT_GRANTED`, `MXSB_E_PADDING`, `MXSB_E_LAYOUT`. Numeric values are in the
 schema file. A decoder returns exactly one of these or success.
 
 ## 11. Changelog
 
+- 2.0.3 (2026-11-05): codegen thread review. v1 header size corrected to 40 bytes. Section 3.4 fixes the load layout (TEXT at base, DATA at base + TEXT.size, BSS after; no vaddr fields). Digest now covers the whole file except SIGNATURE and padding must be zero (V27); V28 requires page-multiple TEXT when DATA or BSS exists. Pre-freeze note: no golden files are frozen yet, so these meaning changes stay under major 2; from the first frozen golden file on, the policy in section 7 applies strictly.
 - 2.0.2 (2026-11-05): `random` defaults to false in `warden.toml` (kernel thread amendment); new names recorded as warden-abi 0.2.
 - 2.0.1 (2026-11-05): section 9a, exact validation rules V1..V26 and size limits, from security review finding 7.
-- 2.0.0 (2026-11-05): first draft of v2. Replaces the 32-byte v1 header.
+- 2.0.0 (2026-11-05): first draft of v2. Replaces the 40-byte v1 header.

@@ -20,8 +20,8 @@ execute the commands (superops), damage tracking and presentation (canvas),
 how assets reach the service (assets), the numbers' final values (bench).
 
 Every number in section 6 is labelled **assumed** (from the design doc) or
-**measured** (bench thread, cloud container, 2026-11-05). None has been
-measured on the user's PC yet.
+**measured** (bench thread on the user's PC, 2026-11-05; the cloud-container
+run is kept only as a comparison).
 
 ---
 
@@ -79,6 +79,12 @@ measured on the user's PC yet.
 | 0x22 | FENCE | frame | `present` | 4 | token u32 | ≤16 per batch |
 | 0x23 | PROMISE_DROP | frame | none | 4 | rights_mask u32 | 0; one-way |
 
+**Pixel-op, defined.** One pixel-op is one destination pixel written with at
+most one source read: CLEAR and FILL_RECT charge 1 per pixel, a COPY blit 1,
+and an ALPHA or ADD blit 2, because it also reads the destination. A 64×64
+alpha blit therefore charges 8 192 pixel-ops. Superops and canvas charge
+against the same budget with the same rule.
+
 Enumerations: format `0 ARGB8888`, `1 A8`. Blend `0 COPY`, `1 ALPHA`, `2 ADD`.
 Shading `0 FLAT`, `1 BAKED`. `NONE = 0xFFFFFFFF`. Colours are `0xAARRGGBB`.
 Rect is four `int32` (x, y, w, h). Mesh vertices come from the asset store as
@@ -104,6 +110,19 @@ body                fixed size from the table above; UPLOAD: 20 + payload
 result record (40)  magic u32 = 'RCSR' | status u32 (0 OK, 1 REJECTED) | failing_index u32 (0xFFFFFFFF = envelope)
                     | error u32 | pixel_ops u64 | triangles u32 | upload_bytes u32 | fences_done u32 | bind_bytes u32
 ```
+
+PRESENT hand-off (service → compositor, not on the client ring): the service
+keeps a 16×16-pixel damage tile bitmap per surface, set by every executed
+draw, upload or bind that touched the tile and cleared at the next
+BEGIN_FRAME after a PRESENT. PRESENT hands the compositor
+`rcs_present_info { slot, frame_no, tw, th, dirty_tiles, tiles }`. The bitmap
+is bounded by the surface: 450 bytes at 720p, at most 8 KiB at 4096². A static
+frame reports 0 dirty tiles, so the compositor never needs a full-surface XOR
+diff (measured 0.65 ms at 720p on the cloud box). Lifetime (MUST): the service
+keeps `tiles` readable and unchanged from PRESENT until it begins executing the
+client's next batch; it does not clear, free or rewrite the bitmap before that,
+and DESTROY_SURFACE of the presented slot in that next batch is the earliest
+point it may go away. The compositor reads the bitmap after PRESENT returns.
 
 Ring sizing (recommendation for the host runtime): command ring 1 MiB (four
 maximum batches in flight), result ring 64 × 40 bytes. One ring pair per
@@ -185,9 +204,12 @@ this bit for bit; `test_blend_rules` in `rcs_test.c` is the oracle.
 
 Frame = 33.3 ms at 30 fps, 720p (921 600 px, 3.69 MB ARGB), one core.
 **Assumed** = design doc (10 GB/s per core). **Measured** = bench thread on
-the cloud container (4 vCPU Sapphire Rapids KVM guest; one core: read 12,
-write 7.8, copy 10.7 GB/s; 200 alpha sprites 128² AVX2 in 1.1 ms; 3.7 MB
-composite 0.26–0.36 ms). Not yet measured on the user's PC.
+the user's PC (i3-14100 at 4.5 GHz inside the desktop Linux VM, one core,
+AVX2 only: read 20.8, write 13.5, copy 19.7 GB/s; 200 alpha sprites 128² in
+0.83 ms ≈ 3.9 Gpx/s; 3.7 MB composite 0.14–0.23 ms; x264 ultrafast 2.2 ms;
+L3 only 24 GB/s, so per-pixel work should tile to L2, about 1 MB). The earlier
+cloud-container run (read 12, copy 10.7 GB/s) was lower and stays only as a
+comparison in `matrixos/bench/`.
 
 Bytes moved per cost unit:
 
@@ -196,39 +218,43 @@ Bytes moved per cost unit:
 | CLEAR, FILL_RECT | 4 B write per px | streaming store |
 | BLIT copy | 8 B per px (4 read + 4 write) | 1 px-op |
 | BLIT alpha / add | 12 B per px (read src, read dst, write) | 2 px-ops, so 6 B per op |
-| LINE | 4 B write per step, worst one cache line (64 B) per step | scattered |
-| DRAW_TRIANGLES | compute-bound: edge setup + ~50 px fill per low-poly triangle (assumed) | ~0.5 µs/tri assumed |
+| LINE | 4 B write per step, worst one cache line (64 B) per step | scattered; a DRAM miss is 155 ns on the PC |
+| DRAW_TRIANGLES | compute-bound: edge setup + ~20–50 px fill per low-poly triangle | ~0.5 µs/tri, measured by the superops thread on 20 px flat triangles (cloud container, ±40% between runs) |
 | UPLOAD | 3× payload (ring copy-out 2×, surface write 1×) | |
-| BIND_ASSET | 2× asset bytes (read store buffer, write surface) | storage read is the assets thread's cost, off this core |
+| BIND_ASSET | 2× asset bytes (read store buffer, write surface) | the storage read is the assets thread's cost, off this core |
 | CREATE_SURFACE | 4 B write per px, once | zero-fill; not per frame |
-| others | 0 | |
+| others (clip, begin, present, fence, drop) | 0 | damage bitmap update is ≤ 8 KiB per frame |
 
 Per-frame ceilings as enforced, and what they cost if a game hits them:
 
-| Budget | Cap | Worst-case traffic | Time, assumed 10 GB/s | Time, measured | Design-doc row it maps to |
+| Budget | Cap | Worst-case traffic | Time, assumed 10 GB/s | Time, measured on the PC | Design-doc row it maps to |
 |---|---|---|---|---|---|
-| Commands | 4096/batch, ≤256 KiB/batch | ~0.25 MB per batch; a typical frame ~500 cmds ≈ 20 KiB | < 0.03 ms | < 0.03 ms | — |
-| 2D pixel-ops | 6 M | 48 MB (all copy) / 36 MB (all alpha) | 4.8 ms | 4.5 ms copy; ~1.0 ms if all alpha sprites at 2.9 Gpx/s | composite 0.5 ms + sprites 2–4 ms |
-| Triangles | 20 000 | ~1 M px written ≈ 8 MB; compute-bound | 8–12 ms (assumed) | not measured | low-poly 3D 8–12 ms |
-| UPLOAD | 2 MiB | 6 MiB | 0.6 ms | ~0.5 ms | part of streaming headroom 4 ms |
-| BIND_ASSET | 8 MiB | 16 MiB | 1.6 ms | 0.8 ms (copy 10.7 GB/s) | part of streaming headroom 4 ms |
-| **Render side at every cap** | | ~80 MB | **15–19 ms** | **~7 ms + triangles** | composite + sprites + 3D + streaming = 15–20.5 ms |
+| Commands | 4096/batch, ≤256 KiB/batch | ~0.25 MB per batch; a typical frame ~500 cmds ≈ 20 KiB | < 0.03 ms | < 0.02 ms | — |
+| 2D pixel-ops | 6 M | 48 MB (all copy) / 36 MB (all alpha) | 4.8 ms | 2.4 ms all copy at 19.7 GB/s; 0.8 ms all alpha at 3.9 Gpx/s | composite 0.5 ms + sprites 2–4 ms |
+| Triangles | 20 000 | ~1 M px written ≈ 8 MB; compute-bound | 8–12 ms (assumed) | ~10 ms: superops kernel measured ~0.5 µs per 20 px flat triangle on the cloud container (Xeon 2.8 GHz, AVX2), not the PC; runs varied up to ~40% | low-poly 3D 8–12 ms |
+| UPLOAD | 2 MiB | 6 MiB | 0.6 ms | 0.3 ms | part of streaming headroom 4 ms |
+| BIND_ASSET | 8 MiB | 16 MiB | 1.6 ms | 0.85 ms (copy) | part of streaming headroom 4 ms |
+| **Render side at every cap** | | ~80 MB | **15–19 ms** | **~3.6 ms + ~10 ms triangles** | composite + sprites + 3D + streaming = 15–20.5 ms |
 
 Remaining frame for the other rows (design doc): game logic 4–8 ms, encode
-6–10 ms (measured: x264 ultrafast 2.0–2.9 ms, veryfast 3.4–6.3 ms). A game at
-every render cap simultaneously plus the top of the logic and encode rows
-overruns 33 ms by ~4 ms on the assumed numbers and fits on the measured ones.
-The caps are per-resource ceilings, not a promise that all can be hit at once;
-the compositor's frame deadline remains the backstop (canvas thread).
+6–10 ms (measured on the PC: x264 ultrafast 2.2 ms, veryfast 4.9 ms, RGBA to
+YUV 0.49 ms). On the assumed numbers a game at every render cap plus the top
+of the logic and encode rows overruns 33 ms by ~4 ms; on the PC numbers the
+render side at every cap is about 14 ms, with triangles ~10 ms of it. The caps are per-resource ceilings, not a promise that
+all can be hit at once; the compositor's frame deadline remains the backstop
+(canvas thread). The PC measurements say the 2D caps are conservative by 2 to
+6×; I am keeping them until the triangle cost is measured, because raising
+them only matters once a game is bound by them.
 
 Ring traffic at 30 fps: commands ≈ 0.6 MB/s typical, ≤ 7 MB/s at 4096
-commands per frame; UPLOAD ≤ 63 MB/s. Both are small against the 10 GB/s core.
+commands per frame; UPLOAD ≤ 63 MB/s. Both are small against a 20 GB/s core.
 
 Storage side (for the assets thread): a BIND never reads disk on the frame
 path. Assets are requested ahead by the client via BIND of a future-scene
-surface and complete asynchronously (FENCE); the measured 3.2–3.9 GB/s
-sequential read puts a 100–200 MB scene swap at 30–60 ms, versus "about a
-second" assumed in the design doc.
+surface and complete asynchronously (FENCE); the cloud box's measured 3.2–3.9
+GB/s sequential read puts a 100–200 MB scene swap at 30–60 ms, versus "about
+a second" assumed in the design doc; the PC's disk figure is in the bench
+README.
 
 ## 7. What a `render` capability grants (for the kernel ABI, additive v0.2)
 
@@ -252,7 +278,7 @@ with the same shape (name, scope, doc):
 `gpu-commands-ref/rcs_test.c`, built with `-std=c11 -Wall -Wextra -Werror
 -Wconversion -fsanitize=address,undefined` (gcc 13) and also with clang 18
 `-O2`. Run: `make BUILD=/tmp/rcs-build test` (the project-files mount is
-noexec). Result on 2026-11-05: **57 669 checks passed, 0 failed**, both
+noexec). Result on 2026-11-05: **57 685 checks passed, 0 failed**, both
 compilers, no sanitizer findings, 1.1 s.
 
 | Test | What it proves |
@@ -260,6 +286,7 @@ compilers, no sanitizer findings, 1.1 s.
 | wire sizes (`_Static_assert`) | every struct size in section 3 |
 | happy path and determinism | create, upload, clear, fill, alpha blit, line, fence, present; exact pixel-op charge; two fresh clients produce identical surface hashes |
 | blend rules | ALPHA matches the exact-round formula on four cases incl. a=0 and a=255; dst alpha unchanged; ADD saturates |
+| damage | 100×40 fill marks exactly 28 of the 3 600 tiles at 720p; a static frame reports 0; a full clear reports all; a clipped line marks ≤ 16; a rejected batch leaves no damage |
 | envelope | too large, short, bad magic/version/kind/reserved, total_bytes mismatch, trailing bytes, truncated body, too many commands, cmd_count beyond bytes, bad seq, bad opcode, bad body_len, flags, cmd version, wrong class both ways; state unchanged after each |
 | rights and atomicity | missing right rejected at the exact index with no side effects, including a BEGIN_FRAME earlier in the same batch; PROMISE_DROP narrows later commands in the same batch, is rolled back with a rejected batch, and is one-way once committed; reserved bits rejected; zero-rights client can do nothing |
 | slots and resources | slot range/occupied/empty, bad dim, max dim, bad format, surface pixel budget, destroy-then-create in one batch, double destroy rolls back the whole batch; asset kind/empty/range, bind dim and format mismatch; mesh range incl. u32 wrap, zero count, kind, shading, same surface, A8 texture/target |
@@ -272,11 +299,12 @@ compositor's deadline, asset streaming latency, the ring transport itself.
 
 ## 9. Open points
 
-1. **Numbers.** All times in section 6 are assumed or measured on the cloud
-   container. The bench thread will rerun on the user's PC; caps may move.
-2. **Triangle cost.** 20 000 triangles per frame is the design's number; the
-   per-triangle cost of the superops rasterizer is unmeasured. If it comes in
-   under 0.25 µs the cap can double.
+1. **Numbers.** The 2D, upload and bind caps are 2 to 6× conservative on the
+   PC measurements. They stay until the triangle cost is measured; raising
+   them is a one-constant change in `rcs.h`.
+2. **Triangle cost.** The superops rasterizer measures ~0.5 µs per 20 px flat
+   triangle on the cloud container (±40% between runs, not yet the PC), so 20 000 triangles is ~10 ms, the design's row. The cap stays;
+   textured and baked shading will cost more, not less.
 3. **Depth.** v1 has no depth buffer command; DRAW_TRIANGLES draws in order.
    A `DEPTH` surface format and a `depth` field would be an additive v2.
 4. **Textured triangles.** `texture` and `BAKED` shading are validated but the

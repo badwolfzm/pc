@@ -29,17 +29,45 @@ void gc_free(gc_canvas *c) {
     memset(c, 0, sizeof *c);
 }
 
-void gc_damage(gc_canvas *c, int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) return;
-    int x1 = x + w - 1, y1 = y + h - 1;
+/* ---- clipping helpers: all intermediate arithmetic in int64 so INT_MIN/INT_MAX
+ * inputs cannot overflow (audit 2026-11-05, UBSan probes). A rect is clipped to
+ * the canvas BEFORE any loop runs, so iteration counts are bounded by w*h. ---- */
+typedef struct { int64_t x0, y0, x1, y1; } gc_span;   /* inclusive, clipped, valid when x0 <= x1 && y0 <= y1 */
+
+static bool gc_clip_rect(const gc_canvas *c, int64_t x, int64_t y, int64_t w, int64_t h, gc_span *s) {
+    if (w <= 0 || h <= 0) return false;
+    int64_t x1 = x + w - 1, y1 = y + h - 1;       /* |x|,|w| < 2^31, so no overflow in int64 */
     if (x < 0) x = 0; if (y < 0) y = 0;
-    if (x1 >= (int)c->w) x1 = (int)c->w - 1;
-    if (y1 >= (int)c->h) y1 = (int)c->h - 1;
-    if (x > x1 || y > y1) return;
-    uint32_t tx0 = (uint32_t)x >> GC_TILE_SHIFT, tx1 = (uint32_t)x1 >> GC_TILE_SHIFT;
-    uint32_t ty0 = (uint32_t)y >> GC_TILE_SHIFT, ty1 = (uint32_t)y1 >> GC_TILE_SHIFT;
+    if (x1 > (int64_t)c->w - 1) x1 = (int64_t)c->w - 1;
+    if (y1 > (int64_t)c->h - 1) y1 = (int64_t)c->h - 1;
+    if (x > x1 || y > y1) return false;
+    s->x0 = x; s->y0 = y; s->x1 = x1; s->y1 = y1;
+    return true;
+}
+
+void gc_damage(gc_canvas *c, int x, int y, int w, int h) {
+    gc_span s;
+    if (!gc_clip_rect(c, x, y, w, h, &s)) return;
+    uint32_t tx0 = (uint32_t)s.x0 >> GC_TILE_SHIFT, tx1 = (uint32_t)s.x1 >> GC_TILE_SHIFT;
+    uint32_t ty0 = (uint32_t)s.y0 >> GC_TILE_SHIFT, ty1 = (uint32_t)s.y1 >> GC_TILE_SHIFT;
     for (uint32_t ty = ty0; ty <= ty1; ++ty)
         for (uint32_t tx = tx0; tx <= tx1; ++tx) gc_mark_tile(c, tx, ty);
+}
+
+int gc_damage_bits(gc_canvas *c, const uint8_t *tiles, uint32_t tw, uint32_t th) {
+    if (!tiles || tw != c->tw || th != c->th) return -1;
+    int n = 0;
+    uint32_t total = tw * th;
+    for (uint32_t ty = 0; ty < th; ++ty) {
+        bool any = false;
+        for (uint32_t tx = 0; tx < tw; ++tx) {
+            uint32_t bit = ty * tw + tx;
+            if (tiles[bit >> 3] & (1u << (bit & 7))) { c->dirty[bit >> 6] |= (uint64_t)1 << (bit & 63); any = true; ++n; }
+        }
+        if (any) c->rowsum[ty >> 6] |= (uint64_t)1 << (ty & 63);
+    }
+    (void)total;
+    return n;
 }
 
 void gc_invalidate_all(gc_canvas *c) { gc_damage(c, 0, 0, (int)c->w, (int)c->h); c->force = true; }
@@ -62,48 +90,72 @@ void gc_clear(gc_canvas *c, uint32_t color) {
 }
 
 void gc_rect(gc_canvas *c, int x, int y, int w, int h, uint32_t color) {
-    if (w <= 0 || h <= 0) return;
-    int x1 = x + w, y1 = y + h;
-    if (x < 0) x = 0; if (y < 0) y = 0;
-    if (x1 > (int)c->w) x1 = (int)c->w;
-    if (y1 > (int)c->h) y1 = (int)c->h;
-    for (int j = y; j < y1; ++j) {
+    gc_span s;
+    if (!gc_clip_rect(c, x, y, w, h, &s)) return;
+    for (int64_t j = s.y0; j <= s.y1; ++j) {
         uint32_t *row = c->work + (size_t)j * c->w;
-        for (int i = x; i < x1; ++i) {
+        for (int64_t i = s.x0; i <= s.x1; ++i) {
             if (row[i] != color) { row[i] = color;
                 gc_mark_tile(c, (uint32_t)i >> GC_TILE_SHIFT, (uint32_t)j >> GC_TILE_SHIFT); }
         }
     }
 }
 
-void gc_line(gc_canvas *c, int x0, int y0, int x1, int y1, uint32_t color) {
-    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
-    for (;;) {
-        gc_pset(c, x0, y0, color);
-        if (x0 == x1 && y0 == y1) break;
-        int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
+/* Bounded, exact line rasterizer. Bresenham (Zingl variant) is a linear
+ * recurrence, so the state after k iterations has a closed form: for an x-major
+ * line with a = |dx| >= b = |dy|, after k iterations the minor axis has moved
+ * n = (2*k*b + a) / (2*a) steps and err = a - b - k*b + n*a. We jump straight
+ * to the first iteration whose major coordinate is inside the canvas and then
+ * run at most (canvas extent along the major axis) iterations. Pixels are
+ * identical to the unclipped rasterization (test: 200 random lines against a
+ * brute-force reference, exact match), and INT_MIN..INT_MAX endpoints cost a
+ * few hundred steps instead of 4 billion. All arithmetic is 64/128-bit. */
+static void gc_line_major(gc_canvas *c, int64_t maj0, int64_t min0, int64_t a, int64_t b, int64_t smaj, int64_t smin,
+                          int64_t maj_lo, int64_t maj_hi, bool x_major, uint32_t color) {
+    /* iterations until the major coordinate enters [maj_lo, maj_hi] */
+    int64_t k = 0;
+    if (maj0 < maj_lo)      { if (smaj < 0) return; k = maj_lo - maj0; }
+    else if (maj0 > maj_hi) { if (smaj > 0) return; k = maj0 - maj_hi; }
+    if (k > a) return;                                  /* the segment ends before reaching the canvas */
+    int64_t n = (int64_t)(((__int128)2 * k * b + a) / ((__int128)2 * a));
+    int64_t err = (int64_t)((__int128)a - b - (__int128)k * b + (__int128)n * a);
+    int64_t maj = maj0 + k * smaj, mn = min0 + n * smin;
+    int64_t remaining = a - k;                          /* iterations left to the true endpoint */
+    int64_t span = maj_hi - maj_lo + 1;                 /* at most this many major steps are visible */
+    int64_t iters = remaining < span ? remaining : span;
+    for (int64_t i = 0; ; ++i) {
+        int64_t x = x_major ? maj : mn, y = x_major ? mn : maj;
+        if (x >= 0 && y >= 0 && x < (int64_t)c->w && y < (int64_t)c->h) gc_pset(c, (int)x, (int)y, color);
+        if (i == iters) break;
+        /* one Zingl step with a >= b: the major axis always advances */
+        int64_t e2 = 2 * err;
+        err -= b; maj += smaj;
+        if (e2 <= a) { err += a; mn += smin; }
     }
 }
 
-void gc_blit(gc_canvas *c, int x, int y, const uint32_t *src, int w, int h, int stride) {
-    if (w <= 0 || h <= 0) return;
-    int sx = 0, sy = 0;
-    if (x < 0) { sx = -x; x = 0; }
-    if (y < 0) { sy = -y; y = 0; }
-    int cw = w - sx, ch = h - sy;
-    if (x + cw > (int)c->w) cw = (int)c->w - x;
-    if (y + ch > (int)c->h) ch = (int)c->h - y;
-    if (cw <= 0 || ch <= 0) return;
-    for (int j = 0; j < ch; ++j) {
-        const uint32_t *s = src + (size_t)(sy + j) * stride + sx;
-        uint32_t *d = c->work + (size_t)(y + j) * c->w + x;
-        if (memcmp(d, s, (size_t)cw * 4) == 0) continue;   /* whole row unchanged */
-        memcpy(d, s, (size_t)cw * 4);
-        gc_damage(c, x, y + j, cw, 1);
+void gc_line(gc_canvas *c, int ix0, int iy0, int ix1, int iy1, uint32_t color) {
+    int64_t x0 = ix0, y0 = iy0, x1 = ix1, y1 = iy1;
+    int64_t dx = x1 - x0, dy = y1 - y0;                 /* |coords| <= 2^31 so these fit in int64 */
+    int64_t a = dx < 0 ? -dx : dx, b = dy < 0 ? -dy : dy;
+    int64_t sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    if (a == 0 && b == 0) { if (x0 >= 0 && y0 >= 0 && x0 < (int64_t)c->w && y0 < (int64_t)c->h) gc_pset(c, (int)x0, (int)y0, color); return; }
+    if (a >= b) gc_line_major(c, x0, y0, a, b, sx, sy, 0, (int64_t)c->w - 1, true, color);
+    else        gc_line_major(c, y0, x0, b, a, sy, sx, 0, (int64_t)c->h - 1, false, color);
+}
+
+void gc_blit(gc_canvas *c, int ix, int iy, const uint32_t *src, int w, int h, int stride) {
+    if (!src || w <= 0 || h <= 0 || stride < w) return;
+    gc_span s;
+    if (!gc_clip_rect(c, ix, iy, w, h, &s)) return;
+    int64_t sx = s.x0 - ix, sy = s.y0 - iy;          /* source offset of the clipped origin, >= 0 */
+    int64_t cw = s.x1 - s.x0 + 1, ch = s.y1 - s.y0 + 1;
+    for (int64_t j = 0; j < ch; ++j) {
+        const uint32_t *sp = src + (size_t)(sy + j) * (size_t)stride + (size_t)sx;
+        uint32_t *d = c->work + (size_t)(s.y0 + j) * c->w + (size_t)s.x0;
+        if (memcmp(d, sp, (size_t)cw * 4) == 0) continue;   /* whole row unchanged */
+        memcpy(d, sp, (size_t)cw * 4);
+        gc_damage(c, (int)s.x0, (int)(s.y0 + j), (int)cw, 1);
     }
 }
 

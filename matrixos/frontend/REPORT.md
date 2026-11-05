@@ -37,6 +37,17 @@ Baseline defects fixed (each has a regression test):
 | MXSB `BUILD_INFO` | `--emit-build-info` writes `profile`, `simd_tier`, `source_sha256`, `toolchain` per contract section 3.3 |
 | baseline still builds | the uploaded prototype compiles with the default profile on both compilers (4 VLA warnings; `--strict` makes them errors) |
 
+## Independent audit (2026-11-05), frontend items
+
+| audit finding | status |
+|---|---|
+| Issue 1 (HIGH): `-- -fplugin=...` bypassed the deny policy and a plugin constructor ran | fixed in `src/mxcc.c` 1.0.1: one check on every argument path, paired values checked; `tests/driver/plugin_regression.sh` reproduces the attack with a real shared object (control run writes the marker) and requires refusal with no marker for 11 shapes on gcc and clang, all passing |
+| Harness: missing compiler counted as a passing rejection | fixed: setup probe through mxcc (exit 3 on failure), fail cases need a real compiler diagnostic |
+| Driver tests: 13 false failures from bare `clang` outside the fixed directories | fixed: real-compile blocks use absolute paths; search list widened (still no `$PATH`) |
+| Canvas integer overflow (issue 2) | not this module; belongs to the canvas thread |
+
+No commit or PR: the control plan's decision 4 keeps all code in the project files until the user names a GitHub repository.
+
 ## What is planned, not done
 
 1. **clang-tidy check** for the two C escape hatches (`.v` access and brace

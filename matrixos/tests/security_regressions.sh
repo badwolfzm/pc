@@ -15,6 +15,10 @@ fails=0
 t(){ local name="$1" want="$2" got="$3"; if [[ "$got" == *"$want"* ]]; then echo "PASS $name"; else echo "FAIL $name: want [$want] got [${got:0:160}]"; fails=$((fails+1)); fi; }
 skip(){ echo "SKIP $1: $2"; }
 SAN="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+# Sanitizer builds need a compiler whose ASan runtime is installed. In this container clang 18 has
+# none (libclang_rt.asan missing), so sanitizer builds fall back to gcc with the same -D/-I flags.
+SANCC="$CC"; echo 'int main(void){return 0;}' > sancheck.c
+if ! $CC $SAN -o sancheck sancheck.c >/dev/null 2>&1; then SANCC="gcc ${CC#* }"; [[ "$CC" == *" "* ]] || SANCC="gcc"; echo "note: $CC cannot link sanitizer builds here; using $SANCC for them"; fi
 export ASAN_OPTIONS=detect_leaks=0:halt_on_error=1
 
 # ---- F1/F1b against the asset store (module API) when ASSETS_DIR is set --------
@@ -80,7 +84,18 @@ t "F1b guest path of 600 bytes is refused (not truncated to 512)" "len=600 rc=-"
 t "F1b guest path of 550 bytes is refused (not truncated to 512)" "len=550 rc=-" "$O"
 
 # ---- F2: typed-input rule ---------------------------------------------------
-skip "F2 typed-input rule (input 0..0x10FFFF, control above)" "no C implementation exists yet; test lands with the frontend module (reference: warden-caps cells.rs)"
+if [[ -n "${FRONTEND_DIR:-}" ]]; then
+  # The frontend module implements the rule (include/mx_input.h, src/mx_input.c) and ships the shared
+  # vector file tests/vectors/cells.vec plus 18 must-not-compile cases. Its make test is the oracle.
+  FE="$( cd "$FRONTEND_DIR" && make -s test 2>&1 )"
+  echo "     $(grep -E 'typed_input:|cells.vec|SKIP rust' <<<"$FE" | tr '\n' ' ')"
+  t "F2 typed-input: frontend typed_input cases (compile-must-fail + pass) all hold" "typed_input: 48 cases, 0 failures" "$FE"
+  t "F2 typed-input: C runner matches cells.vec (57 vectors)" "cells.vec (C): 57 vectors, 0 failures" "$FE"
+  t "F2 typed-input: frontend suite green" "all frontend tests passed" "$FE"
+  grep -q "SKIP rust" <<<"$FE" && skip "F2 rust side (cells.vec vs kernel warden-caps cells.rs)" "cargo or WARDEN_CELLS_RS not available here; C side ran"
+else
+  skip "F2 typed-input rule (input 0..0x10FFFF, control above)" "set FRONTEND_DIR=<writable copy of matrixos/frontend> to run its typed-input suite"
+fi
 
 # ---- F3: wrapper must not forward plugin/spec/response-file flags, and must exec an absolute path
 mkdir -p fakebin; cat > fakebin/clang <<'SH'
@@ -102,30 +117,41 @@ t "F3 wrapper does not resolve the compiler through PATH (planted clang must not
 cat > f4.c <<'C'
 #include "mx_lib.c"
 int main(void){ const char *s="/sandbox/hello.txt"; size_t n=strlen(s); char *p=malloc(n+1); memcpy(p,s,n+1);
-  printf("dotdot=%d\n", mx_path_has_dotdot_segment(p)); free(p); return 0; }
+  /* mx_guest_path_allowed exists in the baseline and in the VFS replacement; the baseline's calls the over-reading dotdot check */
+  printf("allowed=%d\n", (int)mx_guest_path_allowed(p)); free(p); return 0; }
 C
-$CC $SAN -w -o f4 f4.c && O="$(./f4 2>&1)"; RC=$?
+$SANCC $SAN -w -o f4 f4.c && O="$(./f4 2>&1)"; RC=$?
 t "F4 dotdot check reads no byte past NUL (ASan clean)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && echo ok)"
 
 # ---- F5: fuzzer must reach the jail (some generated paths accepted) ----------
 cat > f5.c <<'C'
 #include "mx_lib.c"
 int main(void){ mx_oracle o; mx_oracle_bootstrap(&o,MX_CAP_FS_READ|MX_CAP_FS_WRITE|MX_CAP_SUPEROP|MX_CAP_GPU,true);
-  mx_fuzz_stats fs; mx_fuzz_run(&o,&fs,20000); printf("iters=%u vfs_rejects=%u accepted=%u\n",fs.iterations,fs.vfs_rejects,fs.iterations-fs.vfs_rejects); return 0; }
+  mx_fuzz_stats fs; mx_fuzz_run(&o,&fs,20000); printf("iters=%u vfs_rejects=%u accepted=%u crashes=%u",fs.iterations,fs.vfs_rejects,fs.iterations-fs.vfs_rejects,fs.crashes);
+#ifdef MX_FUZZ_COMPAT
+  printf(" reads_ok=%u writes_ok=%u escapes=%u invariant_fails=%u sniff=%u/%u/%u/%u/%u",fs.reads_ok,fs.writes_ok,fs.escapes,fs.invariant_fails,fs.sniff_hits[0],fs.sniff_hits[1],fs.sniff_hits[2],fs.sniff_hits[3],fs.sniff_hits[4]);
+#endif
+  printf("\n"); return 0; }
 C
-$CC $SAN -w -o f5 f5.c && O="$(./f5 2>&1)"
+$SANCC $SAN -w -o f5 f5.c && O="$(./f5 2>&1)"
 echo "     $O"
 t "F5 fuzzer produces accepted in-jail paths (coverage)" "ok" "$(awk '/accepted=/{split($3,a,"="); if (a[2]+0 >= 100) print "ok"}' <<<"$O")"
 t "F5 fuzz run is ASan/UBSan clean" "ok" "$(grep -q 'Sanitizer\|runtime error' <<<"$O" || echo ok)"
+t "F5 fuzz reports no escape or invariant violation" "crashes=0" "$O"
 
 # ---- F6: super-op dispatch must not trust caller lengths -----------------------
 cat > f6.c <<'C'
 #include "mx_lib.c"
+#ifdef MX_SUPEROPS_COMPAT_H
+#define DISPATCH(o,id,a0,a1,a2,a3,ret) mx_superop_dispatch_b((o),(id),(a0),16,(a1),(a2),0,(a3),(ret))   /* real capacity: 16 bytes */
+#else
+#define DISPATCH(o,id,a0,a1,a2,a3,ret) mx_superop_dispatch((o),(id),(a0),(a1),(a2),(a3),(ret))
+#endif
 int main(void){ mx_oracle o; mx_oracle_bootstrap(&o,MX_CAP_SUPEROP|MX_CAP_GPU,true); uint8_t *b=calloc(16,1); uint64_t r=0;
-  int rc=mx_superop_dispatch(&o,MX_SUPEROP_CRC32,b,32,NULL,0,&r); printf("crc_over rc=%d\n",rc);
-  rc=mx_superop_dispatch(&o,MX_SUPEROP_GPU_CLEAR,b,32,NULL,0,&r); printf("clear_over rc=%d\n",rc); free(b); return 0; }
+  int rc=DISPATCH(&o,MX_SUPEROP_CRC32,b,32,NULL,0,&r); printf("crc_over rc=%d\n",rc);
+  rc=DISPATCH(&o,MX_SUPEROP_GPU_CLEAR,b,32,NULL,0,&r); printf("clear_over rc=%d\n",rc); free(b); return 0; }
 C
-$CC $SAN -w -o f6 f6.c && O="$(./f6 2>&1)"; RC=$?
+$SANCC $SAN -w -o f6 f6.c && O="$(./f6 2>&1)"; RC=$?
 t "F6 crc32 with length beyond buffer is refused (no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q 'crc_over rc=-' <<<"$O" && echo ok)"
 
 # ---- F7: MXSB loader header validation -----------------------------------------

@@ -37,6 +37,7 @@
 #define RCS_FRAME_TRIANGLE_BUDGET 20000u           /* triangles per frame */
 #define RCS_MAX_FENCES_PER_BATCH  16u
 #define RCS_SLOT_NONE             0xFFFFFFFFu
+#define RCS_TILE                  16u              /* damage tracking granularity, pixels */
 
 /* ---- rights on the render capability --------------------------------- */
 enum rcs_right {
@@ -185,7 +186,17 @@ typedef struct {
     bool      live;
     uint32_t  w, h, format;
     uint32_t *px;       /* w*h entries; A8 stores one byte per pixel in the low 8 bits */
+    uint32_t  tw, th;   /* damage tiles across and down (RCS_TILE pixels each) */
+    uint8_t  *tiles;    /* tw*th bits, row-major; set when a draw wrote into the tile since the last PRESENT */
+    uint32_t  dirty;    /* number of set tiles */
 } rcs_surface;
+
+/* What PRESENT hands to the compositor (service -> canvas, not on the client ring).
+ * The bitmap is bounded by the surface: at most (4096/16)^2 bits = 8 KiB, 450 bytes at 720p. */
+typedef struct {
+    uint32_t       slot, frame_no, tw, th, dirty_tiles;
+    const uint8_t *tiles;   /* tw*th bits; valid until the next batch on this client */
+} rcs_present_info;
 
 /* An entry in the client's granted asset table. Filled by policy/storage, never by
  * the client. The reference points data at harness memory; the real service pulls
@@ -215,6 +226,7 @@ typedef struct {
     uint32_t    clip_target;
     rcs_rect    clip;
     uint64_t    presents;         /* count, for tests */
+    rcs_present_info last_present; /* filled by PRESENT; tiles cleared at the next BEGIN_FRAME */
     uint32_t    fence_log[RCS_MAX_FENCES_PER_BATCH];
 } rcs_client;
 

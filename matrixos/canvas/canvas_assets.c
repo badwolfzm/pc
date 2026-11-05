@@ -12,15 +12,15 @@ int gc_blit_image(gc_canvas *c, int dx, int dy, const uint32_t *img, uint32_t im
 int gc_restore_tiled_bg(gc_canvas *c, const uint32_t *tiles, uint32_t bg_w, uint32_t bg_h, int x, int y, int w, int h) {
     if (!tiles || bg_w != c->w || bg_h != c->h) return GC_ASSET_BAD_GEOMETRY;
     if (w <= 0 || h <= 0) return 0;
-    int x1 = x + w - 1, y1 = y + h - 1;
-    if (x < 0) x = 0; if (y < 0) y = 0;
-    if (x1 >= (int)c->w) x1 = (int)c->w - 1;
-    if (y1 >= (int)c->h) y1 = (int)c->h - 1;
-    if (x > x1 || y > y1) return 0;
+    int64_t x0 = x, y0 = y, x1 = (int64_t)x + w - 1, y1 = (int64_t)y + h - 1;   /* 64-bit: no overflow at INT_MAX */
+    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
+    if (x1 >= (int64_t)c->w) x1 = (int64_t)c->w - 1;
+    if (y1 >= (int64_t)c->h) y1 = (int64_t)c->h - 1;
+    if (x0 > x1 || y0 > y1) return 0;
     uint32_t tw = (bg_w + GC_TILE - 1) / GC_TILE;
-    for (uint32_t ty = (uint32_t)y >> GC_TILE_SHIFT; ty <= ((uint32_t)y1 >> GC_TILE_SHIFT); ++ty) {
+    for (uint32_t ty = (uint32_t)y0 >> GC_TILE_SHIFT; ty <= ((uint32_t)y1 >> GC_TILE_SHIFT); ++ty) {
         uint32_t py0 = ty << GC_TILE_SHIFT, py1 = py0 + GC_TILE; if (py1 > c->h) py1 = c->h;
-        for (uint32_t tx = (uint32_t)x >> GC_TILE_SHIFT; tx <= ((uint32_t)x1 >> GC_TILE_SHIFT); ++tx) {
+        for (uint32_t tx = (uint32_t)x0 >> GC_TILE_SHIFT; tx <= ((uint32_t)x1 >> GC_TILE_SHIFT); ++tx) {
             uint32_t px0 = tx << GC_TILE_SHIFT, px1 = px0 + GC_TILE; if (px1 > c->w) px1 = c->w;
             const uint32_t *tile = tiles + ((size_t)ty * tw + tx) * GC_TILE * GC_TILE;   /* 1 KiB per tile, always full-size in the pack */
             for (uint32_t py = py0; py < py1; ++py)

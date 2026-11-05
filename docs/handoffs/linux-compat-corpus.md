@@ -45,8 +45,8 @@ still grow with max-files.
 
 ## Acceptance and handoff
 
-- [ ] Python corpus plus existing preflight regressions pass.
-- [ ] GitHub runner scans a bounded real host executable directory.
+- [x] Python corpus plus existing preflight regressions: **24/24 passed** in [GitHub Actions run 42011678262](https://github.com/badwolfzm/pc/actions/runs/42011678262).
+- [x] GitHub Ubuntu runner scanned 100 files from `/usr/bin` without executing them: 1 ELF preflight candidate, 43 ELF blocked; the remaining files were non-ELF. This reflects only the deterministic first 100 files, not Linux-wide compatibility.
 - [ ] Independent review of sorting, symlink handling, limits and honest
       reporting.
 - [ ] Named unchanged Linux executables actually booted in Warden/QEMU.

@@ -43,8 +43,8 @@ This is a fail-closed contract, **not dynamic Linux compatibility**.
 documents (respect PRs #24/#26/#34 and other agents).
 
 **Acceptance:**
-- [ ] Rust ELF crate regression and workspace-library unit tests pass.
-- [ ] Bare-metal Warden boots in QEMU, and existing in-guest tests pass.
+- [x] Rust ELF crate regression and workspace-library unit tests passed in GitHub Actions [run 42009404278](https://github.com/badwolfzm/pc/actions/runs/42009404278) (41 Rust tests, 0 failed).
+- [x] Bare-metal Warden booted under QEMU: **183 checks, 0 failed** in the same run.
 - [ ] Independent security review of program-header parsing.
 - [ ] Windows/WSL2 target-host verification.
 

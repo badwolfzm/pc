@@ -17,5 +17,5 @@ The reporting mode uses no external packages; its tests use synthetic dispatcher
 ## Evidence (this agent session)
 
 - `python3 -m unittest -v test_audit.py` in a local Python container: 6 passed, including mutation, missing-arm, malformed-source and assertion-exit checks.
-- Published contents require GitHub readback verification.
+- GitHub file readback was performed on the audit, tests and this README before this update.
 - Running against the complete checked-out repository, Rust compilation, real QEMU guest probes, PC/WSL2 and independent review: **not performed**.

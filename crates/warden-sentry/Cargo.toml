@@ -1,0 +1,16 @@
+[package]
+name = "warden-sentry"
+description = "Phase 0 host prototype of Warden's Linux personality: runs unmodified Linux binaries under a seccomp user-notification supervisor that enforces a capability manifest and per-library approvals."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "warden"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+warden-abi = { path = "../warden-abi" }
+warden-caps = { path = "../warden-caps" }
+warden-libgrant = { path = "../warden-libgrant" }

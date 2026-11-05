@@ -1,0 +1,8 @@
+[package]
+name = "warden-abi"
+description = "Warden's Linux syscall boundary: every x86-64 Linux syscall classified as passthrough, mediated, denied or unimplemented, plus the versioned ABI schema the DSL workstream consumes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

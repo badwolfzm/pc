@@ -1,0 +1,8 @@
+[package]
+name = "warden-caps"
+description = "Warden capability object model (no_std): rights, CSpaces, mint/revoke derivation tree, untyped memory budgets, input cells."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

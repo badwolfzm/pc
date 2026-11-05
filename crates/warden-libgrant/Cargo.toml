@@ -1,0 +1,9 @@
+[package]
+name = "warden-libgrant"
+description = "Per-library permission requests and checkbox approval records, bound to the library's SHA-256."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sha2 = "0.10"

@@ -515,6 +515,7 @@ pub fn finish(k: &mut Kernel) -> ! {
         check(k, report(40) == Some(60), "game-probe completed 60 ring-3 frames");
         check(k, report(41).is_some(), "game-probe reported a frame digest");
         check(k, acc == 60, "game-probe sent 60 framebuffer presents");
+        check(k, report(42) == Some(lfb_hash()), "game-probe physical framebuffer matches final guest image");
         check(k, hostile_acc == 0 && hostile_ref > 0, "hostile present attempts were denied");
         check(k, k.threads[pong].death == Some(Death::Exited(0)), "game-probe exited normally");
         kprintln!("game-probe: reported digest {:?}, {} accepted presents, {} hostile presents refused", report(41), acc, hostile_ref);

@@ -34,7 +34,8 @@ Source documents: `control/CONTROL.md`, `control/STATUS.md`,
       (initial run).
 - [x] Full Rust host-compatible unit test run passes (GitHub Actions run 42006988389).
 - [x] `tests/kernel/run.sh` passes in QEMU TCG (run 42006988389).
-- [x] Test socket/listener/epoll compartment exhaustion and stream reclaim in the host integration harness.\n- [ ] Test all object teardown and resource contention under QEMU with hostile concurrent guests.
+- [x] Test socket/listener/epoll compartment exhaustion and stream reclaim in the host integration harness.
+- [ ] Test all object teardown and resource contention under QEMU with hostile concurrent guests.
 - [ ] Verify on target Windows/WSL2 computer.
 
 ## Security limitations (do not represent as solved)

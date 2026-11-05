@@ -108,9 +108,12 @@ mxs_err mxs_line(mxs_surface *dst, int32_t x0, int32_t y0, int32_t x1, int32_t y
  * incremental kernel even on a SIMD tier, because the per-row vector setup costs more
  * than it saves on short spans (measured: see README "Triangle span threshold"). 0 forces
  * SIMD on every row, UINT32_MAX forces scalar; returns the value in effect. */
-uint32_t mxs_set_tri_simd_min_span(uint32_t px);
-uint32_t mxs_get_tri_simd_min_span(void);
-#define MXS_TRI_SIMD_MIN_SPAN_DEFAULT 96u
+uint32_t mxs_set_tri_simd_min_span(uint32_t px);     /* override for every tier */
+void     mxs_reset_tri_simd_min_span(void);         /* back to the per-tier defaults below */
+uint32_t mxs_get_tri_simd_min_span(void);           /* value in effect for the current tier */
+#define MXS_TRI_SIMD_MIN_SPAN_V128 128u              /* SSE2/NEON: wins clearly from 128 px, marginal at 96 */
+#define MXS_TRI_SIMD_MIN_SPAN_V256 96u               /* AVX2: wins from 96 px */
+#define MXS_TRI_SIMD_MIN_SPAN_DEFAULT MXS_TRI_SIMD_MIN_SPAN_V256   /* kept for older callers */
 
 /* Flat-color triangle, integer pixel vertices, clipped to `clip` (inside dst). Same inside
  * test and fill convention as rcs.c DRAW_TRIANGLES. Rows are rasterised with SIMD. */

@@ -74,6 +74,36 @@ class ClaimTests(unittest.TestCase):
             with self.subTest(bad=repr(bad)), self.assertRaises(ValueError):
                 checker.normalize(bad)
 
+    def test_review_finding_nul_rejected_in_cli(self):
+        # The independent review at dc3f47e found that an invalid NUL path
+        # could previously produce a misleading exit-0 "no overlap" result.
+        for bad_field in ("path", "agent"):
+            with self.subTest(field=bad_field), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "claims.json"
+                agents = [
+                    {"id": "a", "paths": ["src/real.rs"]},
+                    {"id": "b", "paths": ["src/\x00hidden.rs"]},
+                ]
+                if bad_field == "agent":
+                    agents[1]["paths"] = ["src/other.rs"]
+                    agents[1]["id"] = "b\x00spoof"
+                path.write_text(json.dumps({"agents": agents}), encoding="utf-8")
+                run = subprocess.run([sys.executable, str(ROOT / "check.py"), str(path)],
+                                     capture_output=True, text=True, check=False)
+                self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+                self.assertIn("INVALID CLAIMS", run.stderr)
+                self.assertNotIn("0 overlap(s)", run.stdout)
+
+    def test_file_directory_boundary_exact_match(self):
+        self.assertEqual(len(self.check([
+            {"id": "a", "paths": ["source"]},
+            {"id": "b", "paths": ["source/**"]},
+        ])), 1)
+        self.assertEqual(self.check([
+            {"id": "a", "paths": ["source"]},
+            {"id": "b", "paths": ["source/file.py"]},
+        ]), [])
+
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "claims.json"

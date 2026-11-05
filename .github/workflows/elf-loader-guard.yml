@@ -1,0 +1,29 @@
+name: Warden static ELF loader guard
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-elf/**'
+      - 'docs/elf-loader-dynamic-guard.md'
+      - '.github/workflows/elf-loader-guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-elf-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kernel/QEMU build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install Rust bare-metal target
+        run: rustup target add x86_64-unknown-none
+      - name: Rust library unit tests
+        run: cargo test --workspace --exclude warden-kernel
+      - name: Boot Warden in QEMU and execute in-guest regression suite
+        run: tests/kernel/run.sh

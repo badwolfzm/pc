@@ -86,7 +86,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let (mm_checks, mm_fails) = mm::self_test(&mut frames);
     let user_code = unsafe { core::slice::from_raw_parts(us as *const u8, (ue - us) as usize) };
     let mut k = Kernel {
-        caps: warden_caps::CapTable::with_capacity(256, 128), frames, endpoints: alloc::collections::BTreeMap::new(),
+        caps: warden_caps::CapTable::with_capacity(256, 128), frames, endpoints: alloc::collections::BTreeMap::new(), ep_over_capacity: 0, ep_refused: 0,
         user_frames: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
         cap_nodes_baseline: 0, heap_baseline: 0, heap_carved_baseline: 0, frames_baseline: 0,
@@ -118,25 +118,53 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let server = k.threads.iter().position(|t| t.name == "ipc server").unwrap();
     let client = k.threads.iter().position(|t| t.name == "ipc client").unwrap();
     let eaves = k.threads.iter().position(|t| t.name == "ipc eavesdropper").unwrap();
-    thread::root_endpoint(&mut k, server, 6, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 4);
-    thread::mint_to(&mut k, server, 6, client, 6, Rights::WRITE, 42);
+    // The server creates it and pays for it, queues included, from its own
+    // untyped memory (capacity 4 per direction). The client's copy carries
+    // GRANT so it can try to copy and re-badge it.
+    let before = (k.caps.len(), k.caps.live_objects(), heap::used(), k.endpoints.len());
+    let refused = thread::create_endpoint(&mut k, server, 3, 6, warden_caps::ENDPOINT_MAX_QUEUE + 1);
+    k.checks += 1;
+    if refused == Err(warden_caps::CapError::OutOfBudget) && before == (k.caps.len(), k.caps.live_objects(), heap::used(), k.endpoints.len())
+        && k.caps.budget(&k.threads[server].cspace, 3) == Ok(1 << 20) {
+        kprintln!("PASS endpoint with an over-budget queue refused: nothing allocated or charged");
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL over-budget endpoint creation: {refused:?}, state before {before:?}");
+    }
+    thread::create_endpoint(&mut k, server, 3, 6, 4).expect("ipc endpoint");
+    thread::mint_to(&mut k, server, 6, client, 6, Rights::WRITE.union(Rights::GRANT), 42);
     thread::mint_to(&mut k, server, 6, eaves, 6, Rights::WRITE, 7);
     // Flood target: an endpoint nobody ever receives on, with room for two
     // waiting senders. Three threads send; the third must be refused, not
     // queued in freshly allocated kernel memory.
     let flood: alloc::vec::Vec<usize> = ["flood sender 1", "flood sender 2", "flood sender 3"]
         .iter().map(|n| k.threads.iter().position(|t| t.name == *n).unwrap()).collect();
-    thread::root_endpoint(&mut k, flood[0], 8, Rights::WRITE.union(Rights::GRANT), 2);
+    thread::create_endpoint(&mut k, flood[0], 3, 8, 2).expect("flood endpoint");
     thread::mint_to(&mut k, flood[0], 8, flood[1], 8, Rights::WRITE, 0);
     thread::mint_to(&mut k, flood[0], 8, flood[2], 8, Rights::WRITE, 0);
     // A second endpoint for the revocation test: the revoker holds the root,
     // the victim a READ|WRITE copy badged 9 that the revoker kills first.
     let revoker = k.threads.iter().position(|t| t.name == "ipc revoker").unwrap();
     let victim = k.threads.iter().position(|t| t.name == "ipc victim").unwrap();
-    thread::root_endpoint(&mut k, revoker, 9, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 1);
+    thread::create_endpoint(&mut k, revoker, 3, 9, 1).expect("revocation endpoint");
     thread::mint_to(&mut k, revoker, 9, victim, 9, Rights::READ.union(Rights::WRITE), 9);
     // Phase 2b: the personality server and the three applications.
     apps::setup(&mut k);
+    // Each creator paid for its endpoint (object plus queues at the chosen
+    // capacity, plus one node) and for every copy minted from it; a holder
+    // paid nothing. The queue budget is ordinary untyped accounting.
+    let price = |cap: u64, copies: u64| (1u64 << 20) - warden_caps::endpoint_bytes(cap) - (1 + copies) * warden_caps::NODE_BYTES;
+    let left = |k: &Kernel, t: usize| k.caps.budget(&k.threads[t].cspace, 3);
+    let got = (left(&k, server), left(&k, flood[0]), left(&k, revoker), left(&k, client));
+    let want = (Ok(price(4, 2)), Ok(price(2, 2)), Ok(price(1, 1)), Ok(1 << 20));
+    k.checks += 1;
+    if got == want {
+        kprintln!("PASS endpoint creators paid for their queues from untyped memory ({}, {} and {} bytes); holders paid nothing",
+            (1u64 << 20) - price(4, 2), (1u64 << 20) - price(2, 2), (1u64 << 20) - price(1, 1));
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL endpoint charges: got {got:?}, want {want:?}");
+    }
     k.cap_nodes_baseline = k.caps.len();
     k.heap_baseline = heap::used();
     k.heap_carved_baseline = heap::carved();
@@ -219,6 +247,16 @@ pub fn finish(k: &mut Kernel) -> ! {
     } else {
         k.failures += 1;
         kprintln!("FAIL kernel heap high-water mark grew {carved} bytes during the run (limit {CARVE_LIMIT})");
+    }
+    // Recorded before the endpoints were reclaimed with their holders: no
+    // queue ever held more threads than its creator paid for, and exactly the
+    // one sender over capacity was turned away (test 29).
+    k.checks += 1;
+    if k.ep_over_capacity == 0 && k.ep_refused == 1 {
+        kprintln!("PASS no endpoint queue exceeded its paid capacity; {} over-capacity IPC call refused", k.ep_refused);
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL {} endpoint queues exceeded capacity, {} IPC calls refused (want 1)", k.ep_over_capacity, k.ep_refused);
     }
     kprintln!();
     kprintln!("{}: {} checks, {} failed, {} timer ticks, {} frames, heap {} bytes in use ({} carved)", if k.failures == 0 { "ALL HELD" } else { "KERNEL TEST FAILED" }, k.checks, k.failures, k.ticks, k.frames.used, heap::used(), heap::carved());

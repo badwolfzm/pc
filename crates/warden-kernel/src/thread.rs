@@ -53,11 +53,18 @@ pub struct Endpoint {
     senders: Vec<usize>,
     receivers: Vec<usize>,
     capacity: usize,
+    /// Deepest the sender queue ever got; checked against `capacity` at the end.
+    pub peak_senders: usize,
+    /// Sends and recvs refused because the queue was at its capacity.
+    pub refused: u32,
 }
 
 impl Endpoint {
     pub fn with_capacity(capacity: usize) -> Self {
-        Endpoint { senders: Vec::with_capacity(capacity), receivers: Vec::with_capacity(capacity), capacity }
+        Endpoint { senders: Vec::with_capacity(capacity), receivers: Vec::with_capacity(capacity), capacity, peak_senders: 0, refused: 0 }
+    }
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
     /// Append without ever reallocating.
     fn enqueue(q: &mut Vec<usize>, capacity: usize, t: usize) -> bool {
@@ -140,6 +147,10 @@ pub struct Kernel {
     pub caps: CapTable,
     pub frames: FrameAlloc,
     pub endpoints: BTreeMap<u32, Endpoint>,
+    /// Endpoint statistics folded in when an endpoint is reclaimed, so the
+    /// final checks still see them after every object is gone.
+    pub ep_over_capacity: u32,
+    pub ep_refused: u32,
     /// Backing frames of user-created Frame objects, by object id.
     pub user_frames: BTreeMap<u32, FrameRec>,
     pub threads: Vec<Thread>,
@@ -258,6 +269,10 @@ impl Kernel {
                 }
                 ObjectKind::Endpoint => {
                     if let Some(ep) = self.endpoints.remove(&id.0) {
+                        self.ep_refused += ep.refused;
+                        if ep.peak_senders > ep.capacity {
+                            self.ep_over_capacity += 1;
+                        }
                         for t in ep.senders.into_iter().chain(ep.receivers) {
                             if self.threads[t].death.is_none() {
                                 self.threads[t].frame.rax = err(CapError::Revoked);
@@ -362,13 +377,11 @@ pub const SYS_LOG: u64 = 0; // (console_slot, test_id, observed)
 pub const SYS_INVOKE: u64 = 1; // (slot, rights) -> 0
 pub const SYS_MINT: u64 = 2; // (src_slot, dst_slot, mask) -> rights obtained
 pub const SYS_REVOKE: u64 = 3; // (slot) -> count revoked
-pub const SYS_RETYPE: u64 = 4; // (untyped_slot, kind, dst_slot, size[r10]) -> remaining budget
+pub const SYS_RETYPE: u64 = 4; // (untyped_slot, kind, dst_slot, size[r10]) -> remaining budget; for an Endpoint, size = queue capacity (0 = default 4, max 8)
 pub const SYS_YIELD: u64 = 5;
 pub const SYS_EXIT: u64 = 6; // (code)
 pub const SYS_HOST_EXIT: u64 = 7; // (host_slot, code): stop the machine
 pub const SYS_SEND: u64 = 8; // (slot, w0, w1, w2) blocks until received -> 0
-/// Wait-queue capacity of an endpoint a thread creates by retype.
-pub const USER_ENDPOINT_CAPACITY: usize = 4;
 /// Returned by SEND/RECV when the endpoint's fixed queue is full.
 pub const E_QUEUE_FULL: u64 = -(7i64) as u64;
 pub const SYS_RECV: u64 = 9; // (slot) blocks until sent -> rax=0, rdi=badge, rsi/rdx/r10/r8=words
@@ -503,8 +516,10 @@ fn retype(k: &mut Kernel, untyped_slot: usize, kind_code: u64, dst_slot: usize, 
     let cs = &mut k.threads[cur].cspace;
     let (obj, remaining) = k.caps.retype(cs, untyped_slot, kind, size, dst_slot).map_err(err)?;
     if kind == ObjectKind::Endpoint {
-        // The 256-byte object price covers the fixed wait queues.
-        k.endpoints.insert(obj.0, Endpoint::with_capacity(USER_ENDPOINT_CAPACITY));
+        // The price the table just charged includes both wait queues at this
+        // capacity (warden_caps::endpoint_bytes); allocate exactly that.
+        let capacity = warden_caps::endpoint_capacity(size).expect("table accepted the size") as usize;
+        k.endpoints.insert(obj.0, Endpoint::with_capacity(capacity));
     }
     if kind == ObjectKind::Frame {
         match k.frames.alloc() {
@@ -606,6 +621,7 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             return Ok(After::Resume(0));
         }
         if !Endpoint::enqueue(&mut ep.receivers, ep.capacity, cur) {
+            ep.refused += 1;
             return Ok(After::Resume(E_QUEUE_FULL));
         }
         k.threads[cur].state = State::RecvBlocked(ep_id);
@@ -627,8 +643,10 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
         return Ok(After::Resume(E_AGAIN));
     }
     if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
+        ep.refused += 1;
         return Ok(After::Resume(E_QUEUE_FULL));
     }
+    ep.peak_senders = ep.peak_senders.max(ep.senders.len());
     k.threads[cur].pending = msg;
     k.threads[cur].state = match reply_ep {
         Some(rep) => State::CallBlocked(rep),
@@ -721,8 +739,8 @@ pub fn root_cap(k: &mut Kernel, thread: usize, slot: usize, kind: ObjectKind, ri
     k.caps.create_root(&mut t.cspace, slot, kind, rights, budget).expect("root cap")
 }
 
-/// Create an endpoint whose wait queues hold at most `capacity` threads each.
-/// The queues are the creator's one-time cost; the IPC path never allocates.
+/// Boot-time endpoint the kernel itself grants (the per-thread console):
+/// nobody is charged. Endpoints a thread owns go through `create_endpoint`.
 pub fn root_endpoint(k: &mut Kernel, thread: usize, slot: usize, rights: Rights, capacity: usize) -> ObjectId {
     let id = root_cap(k, thread, slot, ObjectKind::Endpoint, rights, 0);
     k.endpoints.insert(id.0, Endpoint::with_capacity(capacity));
@@ -755,8 +773,10 @@ pub fn call(k: &mut Kernel, cur: usize, ep_id: u32, rep: u32, msg: Msg) -> bool 
     }
     let ep = k.endpoints.get_mut(&ep_id).unwrap();
     if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
+        ep.refused += 1;
         return false;
     }
+    ep.peak_senders = ep.peak_senders.max(ep.senders.len());
     k.threads[cur].pending = msg;
     k.threads[cur].state = State::CallBlocked(rep);
     true
@@ -773,8 +793,10 @@ pub fn notify(k: &mut Kernel, t: usize, ep_id: u32, msg: Msg) -> bool {
         return true;
     }
     if !Endpoint::enqueue(&mut ep.senders, ep.capacity, t) {
+        ep.refused += 1;
         return false;
     }
+    ep.peak_senders = ep.peak_senders.max(ep.senders.len());
     k.threads[t].pending = msg;
     k.threads[t].state = State::SendBlocked(ep_id);
     true
@@ -785,4 +807,17 @@ pub fn grant(k: &mut Kernel, boot: &CSpace, from_slot: usize, to: usize, to_slot
     let mut dst = k.threads[to].cspace.clone();
     k.caps.mint(boot, from_slot, &mut dst, to_slot, mask, badge).expect("grant");
     k.threads[to].cspace = dst;
+}
+
+/// Boot-time equivalent of a thread's `SYS_RETYPE` of kind Endpoint: the
+/// endpoint and its wait queues (capacity `capacity`, at most
+/// `warden_caps::ENDPOINT_MAX_QUEUE`) are paid for from `creator`'s untyped
+/// capability in `untyped_slot`, and the full-rights root lands in `dst_slot`.
+/// Every check happens before anything is allocated; a refused request
+/// charges nothing and creates nothing.
+pub fn create_endpoint(k: &mut Kernel, creator: usize, untyped_slot: usize, dst_slot: usize, capacity: u64) -> Result<ObjectId, CapError> {
+    let cs = &mut k.threads[creator].cspace;
+    let (obj, _) = k.caps.retype(cs, untyped_slot, ObjectKind::Endpoint, capacity, dst_slot)?;
+    k.endpoints.insert(obj.0, Endpoint::with_capacity(warden_caps::endpoint_capacity(capacity)? as usize));
+    Ok(obj)
 }

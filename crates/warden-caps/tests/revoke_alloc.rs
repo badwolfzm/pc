@@ -33,7 +33,8 @@ fn ten_thousand_revocations_allocate_nothing() {
     let mut child = CSpace::new(2);
     t.mint(&cs, 0, &mut child, 0, Rights::ALL, 1).unwrap();
     let mut grandchild = CSpace::new(2);
-    t.mint(&child, 0, &mut grandchild, 0, Rights::ALL, 2).unwrap();
+    // Badges are sticky: the grandchild inherits badge 1 (0 = keep).
+    t.mint(&child, 0, &mut grandchild, 0, Rights::ALL, 0).unwrap();
     let mut sibling = CSpace::new(2);
     t.mint(&cs, 0, &mut sibling, 0, Rights::READ, 3).unwrap();
 

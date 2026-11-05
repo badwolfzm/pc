@@ -230,3 +230,155 @@ pub fn inspect(bytes: &[u8]) -> Result<Metadata<'_>, Error> {
     }
     Ok(result)
 }
+
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use std::vec::Vec;
+
+    const FILE_LEN: usize = 0x300;
+    const LOAD_OFF: usize = 0x100;
+    const LOAD_VA: u64 = 0x400000;
+    const DYN_OFF: usize = 0x180;
+    const STR_OFF: usize = 0x200;
+    const RELA_OFF: usize = 0x240;
+    const INTERP_OFF: usize = 0x280;
+
+    fn put_u16(b: &mut [u8], off: usize, val: u16) { b[off..off+2].copy_from_slice(&val.to_le_bytes()); }
+    fn put_u32(b: &mut [u8], off: usize, val: u32) { b[off..off+4].copy_from_slice(&val.to_le_bytes()); }
+    fn put_u64(b: &mut [u8], off: usize, val: u64) { b[off..off+8].copy_from_slice(&val.to_le_bytes()); }
+    fn dyn_tag(b: &mut [u8], slot: usize, tag: i64, value: u64) {
+        let p = DYN_OFF + slot * 16;
+        b[p..p+8].copy_from_slice(&tag.to_le_bytes());
+        put_u64(b, p + 8, value);
+    }
+    fn ph(b: &mut [u8], idx: usize, kind: u32, flags: u32, off: usize, va: u64, sz: usize, mem: u64) {
+        let p = 64 + idx * 56;
+        put_u32(b, p, kind);
+        put_u32(b, p+4, flags);
+        put_u64(b, p+8, off as u64);
+        put_u64(b, p+16, va);
+        put_u64(b, p+32, sz as u64);
+        put_u64(b, p+40, mem);
+    }
+    fn valid() -> Vec<u8> {
+        let mut b = std::vec![0u8; FILE_LEN];
+        b[..4].copy_from_slice(b"\x7fELF");
+        b[4] = 2;
+        b[5] = 1;
+        b[6] = 1;
+        put_u16(&mut b, 16, 3); // ET_DYN
+        put_u16(&mut b, 18, 62); // x86-64
+        put_u64(&mut b, 32, 64);
+        put_u16(&mut b, 54, 56);
+        put_u16(&mut b, 56, 3);
+        ph(&mut b, 0, PT_LOAD, 6, LOAD_OFF, LOAD_VA, 0x200, 0x1000);
+        ph(&mut b, 1, PT_DYNAMIC, 6, DYN_OFF, LOAD_VA + 0x80, 7 * 16, 7 * 16);
+        ph(&mut b, 2, PT_INTERP, 4, INTERP_OFF, LOAD_VA + 0x180, 28, 28);
+        b[INTERP_OFF..INTERP_OFF + 28].copy_from_slice(b"/lib64/ld-linux-x86-64.so.2\0");
+        b[STR_OFF..STR_OFF + 13].copy_from_slice(b"\0libfoo.so.1\0");
+        dyn_tag(&mut b, 0, DT_NEEDED, 1);
+        dyn_tag(&mut b, 1, DT_STRTAB, LOAD_VA + 0x100);
+        dyn_tag(&mut b, 2, DT_STRSZ, 13);
+        dyn_tag(&mut b, 3, DT_RELA, LOAD_VA + 0x140);
+        dyn_tag(&mut b, 4, DT_RELASZ, 24);
+        dyn_tag(&mut b, 5, DT_RELAENT, 24);
+        dyn_tag(&mut b, 6, DT_NULL, 0);
+        put_u64(&mut b, RELA_OFF, LOAD_VA + 0x300); // RW region, BSS
+        put_u64(&mut b, RELA_OFF + 8, 8); // R_X86_64_RELATIVE, no symbol
+        put_u64(&mut b, RELA_OFF + 16, 0x1234);
+        b
+    }
+    #[test]
+    fn reads_interpreter_needed_and_relative_rela() {
+        let b = valid();
+        let r = inspect(&b).unwrap();
+        assert_eq!(r.interpreter, Some(&b"/lib64/ld-linux-x86-64.so.2"[..]));
+        assert_eq!(r.needed_count, 1);
+        assert_eq!(r.needed[0], Some(&b"libfoo.so.1"[..]));
+        assert_eq!(r.rela_count, 1);
+        assert_eq!(r.relas[0], Rela { target: LOAD_VA + 0x300, addend: 0x1234 });
+    }
+    #[test]
+    fn rejects_truncation_and_wrong_abi() {
+        assert!(matches!(inspect(&valid()[..32]), Err(Error::Truncated)));
+        let mut b = valid(); b[4] = 1;
+        assert!(matches!(inspect(&b), Err(Error::InvalidHeader)));
+        let mut b = valid(); put_u16(&mut b, 18, 183);
+        assert!(matches!(inspect(&b), Err(Error::WrongArchitecture)));
+        let mut b = valid(); put_u16(&mut b, 16, 1);
+        assert!(matches!(inspect(&b), Err(Error::UnsupportedElfType)));
+        let mut b = valid(); put_u16(&mut b, 56, 65);
+        assert!(matches!(inspect(&b), Err(Error::TooManyHeaders)));
+    }
+    #[test]
+    fn rejects_bad_header_bounds_and_oversized_segments() {
+        let mut b = valid(); put_u64(&mut b, 32, u64::MAX);
+        assert!(inspect(&b).is_err());
+        let mut b = valid(); put_u64(&mut b, 64 + 32, u64::MAX);
+        assert!(matches!(inspect(&b), Err(Error::InvalidProgramHeader)));
+        let mut b = valid(); put_u64(&mut b, 64 + 8, u64::MAX);
+        assert!(inspect(&b).is_err());
+    }
+    #[test]
+    fn rejects_unsupported_relocation_types_or_symbol_refs() {
+        for info in [1u64, 6, 7, 9, (1u64 << 32) | 8] {
+            let mut b = valid(); put_u64(&mut b, RELA_OFF + 8, info);
+            assert!(matches!(inspect(&b), Err(Error::UnsupportedRelocation)));
+        }
+    }
+    #[test]
+    fn refuses_text_relocations_and_cross_boundary_targets() {
+        let mut b = valid(); put_u32(&mut b, 64 + 4, 5); // RX load segment
+        assert!(matches!(inspect(&b), Err(Error::TextRelocation)));
+        let mut b = valid(); put_u64(&mut b, RELA_OFF, LOAD_VA + 0xffc);
+        assert!(matches!(inspect(&b), Err(Error::TextRelocation)));
+        let mut b = valid(); put_u64(&mut b, RELA_OFF, u64::MAX);
+        assert!(matches!(inspect(&b), Err(Error::TextRelocation)));
+    }
+    #[test]
+    fn missing_string_table_or_invalid_name_refused() {
+        let mut b = valid(); dyn_tag(&mut b, 1, 0x6fff_ffff, 1);
+        assert!(inspect(&b).is_err());
+        let mut b = valid(); dyn_tag(&mut b, 0, DT_NEEDED, 99);
+        assert!(matches!(inspect(&b), Err(Error::InvalidLibraryName)));
+        let mut b = valid(); b[STR_OFF + 4] = b'/';
+        assert!(matches!(inspect(&b), Err(Error::InvalidLibraryName)));
+    }
+    #[test]
+    fn malformed_dynamic_table_and_rela_sizes_fail() {
+        let mut b = valid(); dyn_tag(&mut b, 5, DT_RELAENT, 16);
+        assert!(matches!(inspect(&b), Err(Error::InvalidDynamicTable)));
+        let mut b = valid(); dyn_tag(&mut b, 4, DT_RELASZ, 25);
+        assert!(matches!(inspect(&b), Err(Error::InvalidDynamicTable)));
+        let mut b = valid(); dyn_tag(&mut b, 4, DT_RELASZ, 65 * 24);
+        assert!(matches!(inspect(&b), Err(Error::TooManyRelocations)));
+        let mut b = valid(); dyn_tag(&mut b, 0, DT_TEXTREL, 1);
+        assert!(matches!(inspect(&b), Err(Error::UnsupportedDynamicFeature)));
+    }
+    #[test]
+    fn rejects_duplicate_dynamic_table_or_bad_interpreter() {
+        let mut b = valid(); ph(&mut b, 2, PT_DYNAMIC, 6, DYN_OFF, LOAD_VA + 0x80, 7 * 16, 7 * 16);
+        assert!(matches!(inspect(&b), Err(Error::MultipleDynamicTables)));
+        let mut b = valid(); b[INTERP_OFF + 27] = b'X';
+        assert!(matches!(inspect(&b), Err(Error::InvalidInterpreter)));
+    }
+    #[test]
+    fn no_panic_on_10000_mutated_inputs() {
+        let baseline = valid();
+        let mut seed = 0x9e37_79b9u32;
+        for _ in 0..10_000 {
+            let mut b = baseline.clone();
+            for _ in 0..4 {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let idx = (seed as usize) % b.len();
+                b[idx] = (seed >> 8) as u8;
+            }
+            let _ = inspect(&b);
+        }
+    }
+}

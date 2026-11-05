@@ -22,3 +22,5 @@ jobs:
         run: |
           make -C tools/game-probe clean
           make -C tools/game-probe CFLAGS='-std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all' test
+      - name: Compile freestanding Warden guest blobs (not QEMU)
+        run: bash tools/game-probe/build-warden-guest.sh /tmp/g0-guest-build

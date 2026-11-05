@@ -1,0 +1,34 @@
+name: Warden Linux compatibility corpus
+
+on:
+  pull_request:
+    paths:
+      - 'tools/linux-compat/corpus.py'
+      - 'tools/linux-compat/test_corpus.py'
+      - 'docs/handoffs/linux-compat-corpus.md'
+      - '.github/workflows/linux-compat-corpus.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run static ELF and corpus regression suites
+        run: python3 -m unittest discover -v -s tools/linux-compat -p 'test_*.py'
+      - name: Report host executable corpus without executing programs
+        run: |
+          python3 tools/linux-compat/corpus.py --max-files 100 /usr/bin > /tmp/warden-elf-inventory.json
+          python3 - <<'PY'
+          import json
+          r=json.load(open('/tmp/warden-elf-inventory.json'))
+          assert r["schema"]==1
+          assert r["summary"]["files_checked"] <= 100
+          assert "No Linux software was executed" in r["disclaimer"]
+          print("scanned",r["summary"]["files_checked"],
+                "ELF candidates",r["summary"]["elf_candidates"],
+                "ELF blocked",r["summary"]["elf_blocked"])
+          PY

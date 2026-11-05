@@ -42,7 +42,7 @@ int main(void) {
         assert(memcmp(a.pixels, b.pixels, sizeof a.pixels) == 0);
     }
     probe_render(0u, a.pixels);
-    probe_render(1u, b.pixels);
+    probe_render(40u, b.pixels);
     assert(memcmp(a.pixels, b.pixels, sizeof a.pixels) != 0);
     probe_render(UINT32_MAX, a.pixels);
     guards(a.before, a.after);

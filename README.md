@@ -120,9 +120,27 @@ join the process's authority only once that library is actually loaded.
 - **Opens** are performed by the supervisor with `openat2(RESOLVE_BENEATH)`
   from the granted root and the resulting fd is installed into the caller
   (`SECCOMP_IOCTL_NOTIF_ADDFD`). `..`, symlinks and races cannot leave a grant.
+  `O_PATH` opens get a read-only fd to the same pinned inode instead (the
+  kernel refuses to install `O_PATH` fds); `O_PATH` on a symlink is `ELOOP`.
+- **Metadata** (`stat`, `statx`, `access`, `readlink`, `statfs`, xattrs) is
+  read by the supervisor through a pinned `O_PATH` fd and the result is
+  copied into the caller's buffer; the kernel never re-reads the path.
+- **Create, delete, rename, link, symlink, chmod, truncate** are performed
+  by the supervisor as `*at` calls on a pinned parent directory under a write
+  grant, with the caller's umask. A hard link needs its source under a write
+  grant too.
+- **exec** is checked on a pinned fd (grant, `#!` line, ELF interpreter), then
+  the kernel runs it; right after, the supervisor verifies the new image is the
+  checked inode and that every file-backed mapping lies under a grant, and
+  SIGKILLs it otherwise. The check runs at the task's next mediated syscall or
+  within 5 ms, whichever comes first.
 - **connect/bind** are performed by the supervisor on a duplicate of the
   caller's socket with its own copy of the address, so the address can't be
   swapped after the check.
+- **Library grants are per process**: a permission a ticked box brought
+  applies only to a process that has that library mapped, for as long as it
+  stays mapped (read from `/proc/PID/maps` at check time). A child that never
+  loads the library, or a process that `exec`s, does not have it.
 - Libraries: any ELF shared object opened for reading (and the ELF
   interpreter at exec) must have an approval with the load box ticked.
 - Every mediated decision goes to `audit.log`, with untrusted text escaped.
@@ -130,10 +148,11 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 25 unit tests across the crates
+cargo test                      # 26 unit tests across the crates
 tests/kernel/run.sh             # 83 in-guest checks against the kernel
-tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
-tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
+tests/escape/run.sh             # 67 attack checks: hostile program (58) plus the harness's
+                                #   inspection of a directory outside every grant (9)
+tests/compat/run.sh             # 14 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```
 
 ## ABI contract
@@ -146,14 +165,25 @@ nothing from v0.1 changed. A test fails if the file and the table drift.
 ## Known Phase 0 limits
 
 - Runs on the host kernel; a host kernel bug in a `pass` syscall is out of scope here.
-- `stat`/`access`/`readlink`, create/delete/rename and `execve` are checked by
-  path and then run by the kernel, so a racing thread can swap the path in
-  between. For metadata calls the worst case is leaking metadata; for
-  create/delete/rename and exec it is a real race. Phase 1 removes paths from
-  the kernel interface entirely.
+- `chdir` is the one path call the kernel still re-reads after the check. A
+  cwd outside every grant conveys nothing (relative paths are re-resolved
+  from `/proc/PID/cwd` and re-checked), but the kernel's answer tells the
+  caller whether the swapped-in directory exists.
+- `execve` cannot be done on the caller's behalf, so a swapped-in image can
+  run until the supervisor's post-exec check: its first mediated syscall or
+  about 5 ms. In that window it has only `pass` syscalls (its own fds, memory,
+  time). An exec-only (mode 0111) file outside the exec grant could leak its
+  bytes that way. The escape suite swaps a `#!/bin/sh` script in 300 times:
+  every loaded swap was killed, none ran to completion.
+- A library-brought grant is recognized by the library's (real path, inode)
+  in `/proc/PID/maps`. If the sandbox also holds a write grant over the
+  library's directory it could change the file after approval; keep library
+  directories read-only. Phase 1 removes paths from the kernel interface
+  entirely.
 - `ioctl` passes except TIOCSTI/TIOCLINUX. Phase 1 mediates it per request.
 - TCP only: no UDP, so no DNS; use IP literals.
 - Per-library permissions are per process: inside one address space any code
-  can use a permission that one approved library brought. Real per-library
-  isolation needs compartments (Phase 3).
+  can use a permission that one approved library brought (by calling into
+  it, or by issuing the syscall itself while the library is mapped). Real
+  per-library isolation needs compartments (Phase 3).
 - x86-64 only.

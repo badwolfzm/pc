@@ -1,8 +1,11 @@
 /* Hostile workload for the Phase 0 escape suite.
  * Runs INSIDE the sandbox and tries to get out. Every check prints
  * "PASS <name>" when the sandbox held and "FAIL <name>" when it did not.
- * Usage: hostile WDIR ALLOWED_PORT FORBIDDEN_PORT
+ * Usage: hostile WDIR ALLOWED_PORT FORBIDDEN_PORT [OUTSIDE OKBIN]
  *   WDIR is the only writable directory the manifest grants.
+ *   OUTSIDE is a directory no grant covers, prepared by the harness with
+ *   victim files; the harness checks afterwards that nothing in it changed.
+ *   OKBIN is a program inside the exec grant that exits 0.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -17,6 +20,7 @@
 #include <sys/mount.h>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
@@ -44,15 +48,24 @@ static int reads_secret(int fd) {
 /* ---- race: flip a path between allowed and forbidden while opening ---- */
 static char race_path[256];
 static char ok_path[256];
+static char bad_path[256] = "/etc/passwd";
 static volatile int racing = 1;
 static void *flip_path(void *a) {
     (void)a;
     while (racing) {
-        strcpy(race_path, "/etc/passwd");
+        strcpy(race_path, bad_path);
         strcpy(race_path, ok_path);
     }
     return NULL;
 }
+/* Run `body` RACE_N times while a thread flips race_path between ok and bad. */
+static pthread_t race_thread;
+static void race_begin(const char *ok, const char *bad) {
+    strcpy(ok_path, ok); strcpy(bad_path, bad); strcpy(race_path, ok);
+    racing = 1; pthread_create(&race_thread, NULL, flip_path, NULL);
+}
+static void race_end(void) { racing = 0; pthread_join(race_thread, NULL); }
+#define RACE_N 2000
 
 /* ---- race: flip a sockaddr port between allowed and forbidden ---- */
 static struct sockaddr_in race_sa;
@@ -101,20 +114,109 @@ int main(int argc, char **argv) {
     DENIED("stat /root", syscall(SYS_newfstatat, AT_FDCWD, "/root", p, 0));
 
     /* Path race (TOCTOU): never read the secret */
-    snprintf(ok_path, sizeof ok_path, "%s/ok", w);
-    { int fd = open(ok_path, O_CREAT | O_WRONLY | O_TRUNC, 0600); if (write(fd, "harmless\n", 9) != 9) perror("write"); close(fd); }
-    strcpy(race_path, ok_path);
-    pthread_t t; racing = 1;
-    pthread_create(&t, NULL, flip_path, NULL);
+    char okfile[256]; snprintf(okfile, sizeof okfile, "%s/ok", w);
+    { int fd = open(okfile, O_CREAT | O_WRONLY | O_TRUNC, 0600); if (write(fd, "harmless\n", 9) != 9) perror("write"); close(fd); }
+    struct stat okst; stat(okfile, &okst);
+    pthread_t t;
+    race_begin(okfile, "/etc/passwd");
     int leaked = 0, opened = 0;
     for (int i = 0; i < 3000; i++) {
         int fd = open(race_path, O_RDONLY);
         if (fd >= 0) opened++;
         if (reads_secret(fd)) leaked++;
     }
-    racing = 0; pthread_join(t, NULL);
+    race_end();
     snprintf(p, sizeof p, "3000 tries, %d opened, %d leaked", opened, leaked);
     check("open() path race", leaked == 0, p);
+
+    /* Metadata races: the kernel must never act on the swapped-in path. */
+    { int bad = 0, ok = 0; struct stat st;
+      race_begin(okfile, "/etc/passwd");
+      for (int i = 0; i < RACE_N; i++) if (stat(race_path, &st) == 0) { if (st.st_ino == okst.st_ino) ok++; else bad++; }
+      race_end();
+      snprintf(p, sizeof p, "%d tries, %d ok inode, %d foreign inode", RACE_N, ok, bad);
+      check("stat() path race", bad == 0, p); }
+    { int bad = 0, ok = 0; char missing[256]; snprintf(missing, sizeof missing, "%s/does-not-exist", w);
+      race_begin(missing, "/etc/passwd");
+      for (int i = 0; i < RACE_N; i++) if (access(race_path, R_OK) == 0) bad++; else ok++;
+      race_end();
+      snprintf(p, sizeof p, "%d tries, %d refused, %d said /etc/passwd is readable", RACE_N, ok, bad);
+      check("access() path race", bad == 0, p); }
+    { int bad = 0, ok = 0; char lnk[256], tgt[256]; snprintf(lnk, sizeof lnk, "%s/ok-link", w);
+      unlink(lnk); if (symlink("harmless", lnk) != 0) perror("symlink");
+      race_begin(lnk, "/proc/self/exe");
+      for (int i = 0; i < RACE_N; i++) { ssize_t n = readlink(race_path, tgt, sizeof tgt - 1);
+          if (n > 0) { tgt[n] = 0; if (strcmp(tgt, "harmless") == 0) ok++; else bad++; } }
+      race_end();
+      snprintf(p, sizeof p, "%d tries, %d ok, %d read a foreign link", RACE_N, ok, bad);
+      check("readlink() path race", bad == 0, p); }
+    { int bad = 0, ok = 0; struct stat st;
+      race_begin(okfile, "/etc/passwd");
+      for (int i = 0; i < RACE_N; i++) { int fd = open(race_path, O_PATH);
+          if (fd >= 0) { if (fstat(fd, &st) == 0 && st.st_ino != okst.st_ino) bad++; else ok++; close(fd); } }
+      race_end();
+      snprintf(p, sizeof p, "%d tries, %d ok, %d fd to a foreign inode", RACE_N, ok, bad);
+      check("open(O_PATH) path race", bad == 0, p); }
+
+    /* Mutating races against a directory outside every grant. The harness
+     * prepared OUTSIDE and checks afterwards that nothing in it changed;
+     * here we only report whether the kernel ever claimed success. */
+    if (argc >= 6) {
+        const char *out = argv[4];
+        char okp[256], badp[256];
+    /* The verdict for these is the harness's inspection of OUTSIDE after
+     * the run: in here, success on the granted path is normal and the
+     * flipping thread makes "which path was it" unknowable. */
+#define MUTATE(name, okname, badname, expr) do { int okays = 0; \
+        snprintf(okp, sizeof okp, "%s/%s", w, okname); snprintf(badp, sizeof badp, "%s/%s", out, badname); \
+        race_begin(okp, badp); \
+        for (int i = 0; i < RACE_N; i++) { if ((expr) == 0) okays++; } \
+        race_end(); \
+        snprintf(p, sizeof p, "%d tries, %d succeeded; verdict: harness inspects the outside dir", RACE_N, okays); \
+        check(name, 1, p); } while (0)
+        MUTATE("unlink() path race", "missing", "victim-unlink", unlink(race_path));
+        MUTATE("rmdir() path race", "missing", "victim-rmdir", rmdir(race_path));
+        MUTATE("mkdir() path race", "race-dir", "escaped-dir", mkdir(race_path, 0700));
+        MUTATE("symlink() path race", "race-sym", "escaped-sym", symlink("/etc/passwd", race_path));
+        MUTATE("chmod() path race", "ok", "victim-chmod", chmod(race_path, 0777));
+        MUTATE("truncate() path race", "ok", "victim-trunc", truncate(race_path, 0));
+        { char src[256]; snprintf(src, sizeof src, "%s/ok", w);
+          MUTATE("link() path race", "race-hard", "escaped-hard", link(src, race_path));
+          snprintf(src, sizeof src, "%s/rename-src", w);
+          close(open(src, O_CREAT | O_WRONLY, 0600));
+          MUTATE("rename() path race", "rename-dst", "escaped-rename", rename(src, race_path)); }
+        /* Destination side of rename: flip the source across the boundary too. */
+        { snprintf(okp, sizeof okp, "%s/rename-src2", w); close(open(okp, O_CREAT | O_WRONLY, 0600));
+          snprintf(badp, sizeof badp, "%s/victim-rename", out);
+          char dst[256]; snprintf(dst, sizeof dst, "%s/rename-dst2", w);
+          race_begin(okp, badp);
+          for (int i = 0; i < RACE_N; i++) rename(race_path, dst);
+          race_end();
+          check("rename() source race", 1, "harness checks the victim is still there"); }
+
+        /* Exec race: a thread swaps the program path for a script outside
+         * the exec grant while a child execs. The kernel may load the swapped
+         * image; the supervisor must then kill it before it gets anywhere.
+         * The script exits 42 if it runs to completion. */
+        { const char *okbin = argv[5]; int escaped = 0, ran_ok = 0, killed = 0, refused = 0, other = 0;
+          snprintf(badp, sizeof badp, "%s/escape.sh", out);
+          for (int i = 0; i < 300; i++) {
+              pid_t c = fork();
+              if (c == 0) {
+                  race_begin(okbin, badp);
+                  for (int k = 0; k < 50; k++) { char *av[] = {race_path, NULL}; execve(race_path, av, NULL); }
+                  _exit(errno == EACCES ? 3 : 4);
+              }
+              int st = 0; waitpid(c, &st, 0);
+              if (WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL) killed++;
+              else if (WIFEXITED(st) && WEXITSTATUS(st) == 42) escaped++;
+              else if (WIFEXITED(st) && WEXITSTATUS(st) == 0) ran_ok++;
+              else if (WIFEXITED(st) && WEXITSTATUS(st) == 3) refused++;
+              else other++;
+          }
+          snprintf(p, sizeof p, "300 tries: %d ran the granted program, %d refused, %d swapped images killed, %d escaped, %d other", ran_ok, refused, killed, escaped, other);
+          check("execve() path race", escaped == 0 && other == 0, p); }
+    }
 
     /* Escape primitives */
     DENIED("ptrace(TRACEME)", ptrace(PTRACE_TRACEME, 0, 0, 0));

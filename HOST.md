@@ -22,9 +22,9 @@ cargo build --release -p warden-kernel --target x86_64-unknown-none
 (5.15+): seccomp user notification with `ADDFD`, `openat2`, `pidfd_getfd`.
 
 ```sh
-cargo test                 # 25 unit tests
-tests/escape/run.sh        # 44 attack checks, run as root inside the sandbox
-tests/compat/run.sh        # 13 checks with ls, sh, tar, python3 ...
+cargo test                 # 26 unit tests
+tests/escape/run.sh        # 67 attack checks, run as root inside the sandbox
+tests/compat/run.sh        # 14 checks with ls, sh, tar, python3 ...
 ```
 
 If `warden run` fails with `could not install seccomp filter`, the WSL2

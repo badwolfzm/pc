@@ -165,3 +165,48 @@ pub fn bind_raw(fd: RawFd, addr: &[u8]) -> i32 {
     let r = unsafe { libc::bind(fd, addr.as_ptr() as *const libc::sockaddr, addr.len() as libc::socklen_t) };
     if r < 0 { io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO) } else { 0 }
 }
+
+/// Write into another process's memory (results the kernel would have
+/// written itself: a `struct stat`, a readlink buffer). FOLL_FORCE writes
+/// through the caller's own read-only private pages but the kernel refuses
+/// them on shared mappings, so a hostile buffer pointer can't make us change
+/// a file; only the caller's own address space is reachable.
+pub fn write_mem(mem: RawFd, addr: u64, buf: &[u8]) -> io::Result<usize> {
+    let r = unsafe { libc::pwrite(mem, buf.as_ptr() as *const _, buf.len(), addr as libc::off_t) };
+    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(r as usize) }
+}
+
+/// SIGKILL through a pidfd: the pid cannot have been recycled.
+pub fn pidfd_kill(pidfd: RawFd) -> io::Result<()> {
+    cvt(unsafe { libc::syscall(libc::SYS_pidfd_send_signal, pidfd, libc::SIGKILL, std::ptr::null::<libc::siginfo_t>(), 0) }).map(|_| ())
+}
+
+/// (st_dev, st_ino) of an open file.
+pub fn ident(fd: RawFd) -> io::Result<(u64, u64)> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    cvt(unsafe { libc::fstat(fd, &mut st) } as libc::c_long)?;
+    Ok((st.st_dev, st.st_ino))
+}
+
+/// (st_dev, st_ino) of a path (following symlinks).
+pub fn ident_path(path: &str) -> io::Result<(u64, u64)> {
+    let c = CString::new(path).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    cvt(unsafe { libc::stat(c.as_ptr(), &mut st) } as libc::c_long)?;
+    Ok((st.st_dev, st.st_ino))
+}
+
+/// The path `/proc/self/fd/N` names the object behind our open fd; a
+/// lookup through it reaches that object and nothing the sandbox can swap.
+pub fn proc_fd_path(fd: RawFd) -> CString {
+    CString::new(format!("/proc/self/fd/{fd}")).unwrap()
+}
+
+pub fn errno() -> i32 {
+    io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO)
+}
+
+/// Device number as `/proc/PID/maps` prints it.
+pub fn maps_dev(dev: u64) -> String {
+    format!("{:02x}:{:02x}", libc::major(dev), libc::minor(dev))
+}

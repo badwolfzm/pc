@@ -10,7 +10,7 @@ ROOT    := $(abspath .)
 # kernel cell model for the shared-vector test (Phase 0 tarball layout)
 WARDEN_CELLS_RS ?= $(abspath ../../kernel/src/crates/warden-caps/src/cells.rs)
 
-.PHONY: all test test-driver test-typed test-unit test-vectors test-vectors-rust clean install
+.PHONY: all test test-tiers test-driver test-typed test-unit test-vectors test-vectors-rust clean install
 
 all: $(B)/mxcc $(B)/libmxinput.a
 
@@ -24,8 +24,13 @@ $(B)/libmxinput.a: src/mx_input.c include/mx_input.h | $(B)
 	$(CC) $(CFLAGS) -Wconversion -Iinclude -c src/mx_input.c -o $(B)/mx_input.o
 	ar rcs $@ $(B)/mx_input.o
 
-test: test-driver test-typed test-unit test-vectors test-vectors-rust
+test: test-tiers test-driver test-typed test-unit test-vectors test-vectors-rust
 	@echo "all frontend tests passed"
+
+# the driver's tier flags must equal the codegen contract, string for string
+test-tiers: $(B)/mxcc | $(B)
+	$(CC) $(CFLAGS) -I../codegen/tiers -o $(B)/test_tiers tests/unit/test_tiers.c
+	$(B)/test_tiers $(ROOT)/$(B)/mxcc
 
 test-driver: $(B)/mxcc
 	bash tests/driver/run.sh $(ROOT)/$(B)/mxcc $(ROOT)

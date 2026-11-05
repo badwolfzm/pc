@@ -13,7 +13,8 @@ int gc_restore_tiled_bg(gc_canvas *c, const uint32_t *tiles, uint32_t bg_w, uint
     if (!tiles || bg_w != c->w || bg_h != c->h) return GC_ASSET_BAD_GEOMETRY;
     if (w <= 0 || h <= 0) return 0;
     int64_t x0 = x, y0 = y, x1 = (int64_t)x + w - 1, y1 = (int64_t)y + h - 1;   /* 64-bit: no overflow at INT_MAX */
-    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
     if (x1 >= (int64_t)c->w) x1 = (int64_t)c->w - 1;
     if (y1 >= (int64_t)c->h) y1 = (int64_t)c->h - 1;
     if (x0 > x1 || y0 > y1) return 0;

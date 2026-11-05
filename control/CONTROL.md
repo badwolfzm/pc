@@ -122,41 +122,22 @@ badwolfzm/pc, x86-64, PR against main.
 - 2026-11-05 lead: frontend delivered (matrixos/frontend/): mxcc driver fixes F3, mx_input.h is the shared typed-input header (F2), shared cell vectors pass in C and against the kernel's cells.rs. Sent to tests thread for acceptance. VFS truncation already with assets.
 - 2026-11-05 lead: PC benchmark done on DESKTOP-9NPQNID (i3-14100, measured inside the desktop app's Hyper-V Linux VM, 1 core 2 threads, AVX2 only, no AVX-512). One core: read 20.8 GB/s, copy 19.7; composite+convert+encode 2.9 to 5.6 ms per 720p frame vs doc 6.5 to 10.5 ms. Bandwidth is not the 30 fps limiter. L3 is slow (106 ns): render tiles must fit L2 (~1 MB). Results: matrixos/bench/pc/. Consequence: the avx512 tier cannot be verified on the target machine; baseline and avx2 are the tiers that matter, avx512 stays build-only.
 
-## Notices for threads (lead cannot message threads until 07:53 UTC; read this)
-- superops, canvas: use matrixos/frontend/include/mx_input.h (mx_validate_len) for input and length checks; do not write your own cell type.
-- codegen, superops: target PC has AVX2 and no AVX-512. Verify baseline and avx2 tiers; avx512 is build-only and marked not verified.
-- canvas: tiles must fit L2 (about 1 MB) on the target; L3 latency is 106 ns.
-- GPU command set: revise section 6 with matrixos/bench/pc/ numbers.
-- kernel: next sync should include matrixos/frontend/ once the tests thread accepts it, and matrixos/bench/pc/.
 - 2026-11-05 lead: canvas delivered (matrixos/canvas/, 638 checks, ASan clean, consumed_hash fix as a patch file). Candidate 4 for acceptance. PR #3 (sync, 25cb572) open; waits on the user's merge policy card.
-- notice for tests thread: run acceptance on matrixos/canvas/ after frontend; canvas owns the consumed_hash defect and no review finding.
-- notice for canvas thread: the security review is at matrixos/reviews/security-review.md (landed 06:56); re-read it now.
 - 2026-11-05 lead: assets shim delivered (matrixos/assets/mx_vfs_compat.h, drop-in for the baseline mx_vfs block). Notice for tests thread: swap the shim into the integrated build the way the lifter compat header was swapped, and re-run F1/F1b/F4 against it; this should take the integrated failure count from 14 down by at least 3.
 - 2026-11-05 lead: PR #3 merged on the user's word. Main holds assets, frontend docs/tests, bench/pc, CONTROL.md.
 - 2026-11-05 lead: gpu-commands.md section 6 revised with PC numbers; caps kept conservative until triangle cost is measured. Damage tiles added for canvas. Include in next sync.
 - 2026-11-05 lead: super-ops delivered (matrixos/superops/, 202 checks, F6 fixed, gpu_vadd truncation refused via compat shim). Candidate 5 for acceptance. Risk flagged: 20k small triangles cost about 10 ms on the cloud box, close to a third of the 33 ms frame; the command set's 20,000 triangle cap stays until measured on the PC.
-- notice for tests thread: acceptance order now frontend, canvas, superops; swap mx_superops_compat.h into the integrated build for F6.
-- notice for bench thread: measure the superops triangle rasteriser on the PC (bench_superops.c) so the command set can set the triangle cap.
 - 2026-11-05 07:18 lead: USER SAID "start Phase 2". Kernel thread: begin Phase 2 of the Warden kernel plan now, on a branch in badwolfzm/pc: per-thread address spaces, IPC endpoints, and the Linux personality server aimed at the first workload (nginx-class static server: net.listen, fs.read, epoll first). Same permission names and conventions as Phase 1 and ABI v0.2. Report results and permission prompts to the user in your thread.
 - 2026-11-05 lead: frontend accepted (F2, F3 fixed). Integrated build with lfsr + VFS shim: golden 25/26 unchanged, F1/F1b pass; security_regressions down from 14 to 3 (F4, F5, F6 pending retarget/adapt). RCS conformance suite 92/92 at matrixos/tests/unit/rcs/. Accepted so far: lfsr, assets, frontend. Pending acceptance: canvas, superops. Outstanding: codegen.
-- notice for kernel thread: next sync (fresh PR) should carry matrixos/frontend/ (accepted), matrixos/canvas/, matrixos/superops/, matrixos/assets/mx_vfs_compat.h, matrixos/tests/ updates, revised gpu-commands.md.
 - 2026-11-05 lead: Phase 2 started by the kernel thread (coordinator routed the go). PR phase2a-aspace-ipc open: per-thread address spaces, synchronous IPC endpoints with badges, 41 in-guest checks. Next slice: static ELF loader + first Linux syscalls via personality server.
 - 2026-11-05 lead: superops accepted (F6 fixed). Integrated build: security_regressions.sh 0 failures under gcc (F7 and Rust-side F2 skip). Replacement fuzzer closes F5. Open: golden trace hash differs because the assets VFS shim omits the PATH trace event; assets thread to emit it (prefer restoring the event over a new golden).
 - RULING: the MXSB thread owns the C reference loader (matrixos/contracts/mxsb-ref/mxsb_load.h/.c) implementing checks V1..V26 with the error codes from the schema, plus a test corpus of malformed binaries. Codegen's emitter must pass it. The kernel ports it to Rust in Phase 3's policy service. Tests thread wires F7 to it.
-- notice for MXSB thread: build the reference loader above.
-- notice for assets thread: add the PATH trace event in mx_vfs_compat.h read_all/write_all so the golden trace hash is preserved.
 - 2026-11-05 lead: kernel PR #4 (phase2a, fd1f15b) fixes three real flaws found in user-posted reviews of main (host-exit cap check, shared user memory, mint-before-check allocation) with tests; 45 in-guest checks. Heap reclamation open. Phase 2b target: two isolated apps, one workload, wrong-cap and exhaustion tests. Awaits user merge.
 - 2026-11-05 lead: codegen delivered within scope (matrixos/codegen/: MXSB emitter+validator V1..V25, tiers with CPUID dispatch, lifter hook over clang AST; 40k checks). All six wave 1 modules are now delivered. Candidate 6 for acceptance.
-- notice for tests thread: accept matrixos/codegen/ next (make test in folder). Its mxsb/ validator may serve as the F7 loader stand-in until the MXSB thread's reference loader exists; both must agree.
-- notice for MXSB thread: codegen reports contract gaps: load-address layout rule missing, inter-section padding unauthenticated, v1 header is 40 bytes not 32. Fix in the contract (minor bump) and in the reference loader.
-- notice for frontend thread: take tier flags from codegen's MX_TIER_MARCH[] in matrixos/codegen/tiers/mx_tiers.h rather than retyping them.
-- notice for kernel thread: next sync should include matrixos/codegen/ once accepted.
 - 2026-11-05 lead: trace-hash difference traced to the fuzzer swap, recorded as a documented integrated golden. Integrated build: golden 25/26, security_regressions 0 failures. F7 owner ruling is above (MXSB thread reference loader; codegen's validator as interim stand-in).
 - 2026-11-05 lead: PR #4 merged with Phase 2a only; the three review fixes are PR #5 (review-fixes-bd1e914). main carries the host-exit flaw until #5 merges. User asked to merge #5.
 - 2026-11-05 lead: PR #5 merged (main 00677c0). RULING for kernel thread: the user's "start Phase 2" covers all of Phase 2, so Phase 2b (two isolated apps, one workload, ELF loader, first Linux syscalls through the personality server) needs no further go; start it now. Sync request: fresh project-files-sync PR with everything accepted since #3 (frontend, canvas, superops, codegen, assets shim, tests, contract revisions).
 - 2026-11-05 lead: user audit found a real mxcc bypass ("--" skipped the deny policy); fixed in frontend 1.0.1 with a live-plugin regression test. Harness weakness (missing compiler counted as pass) fixed.
-- notice for canvas thread: the user's audit found an integer overflow in ghost_canvas.c with INT_MAX/INT_MIN coordinates. Fix with checked arithmetic and add a regression test; this is a finding you own.
-- notice for tests thread: re-run frontend acceptance on 1.0.1 and add the "--" plugin case to security_regressions.sh F3; add the canvas overflow case as a new check.
 
 # ALL PHASES IN PARALLEL (started 2026-11-05 07:35 UTC)
 
@@ -343,6 +324,92 @@ merges: the user merges, or says "merge", in their own words.
   the user-mapping patch and opens the pending project-files sync PR.
 - 2026-11-05 07:38 bookkeeping (user ruling): the bookkeeping thread holds the record of everything. Workers report every delivery and test result to bookkeeping, which writes them into STATUS.md and CONTROL.md. The control thread reads that output and performs all pull/push requests to badwolfzm/pc; it is the sole git pusher. Worker threads do not open PRs or push. This supersedes decision 4's "kernel thread is the single sync owner": flow is now workers -> bookkeeping (record) -> control (push). Live board: control/STATUS.md.
 - 2026-11-05 07:40 user-mapping thread: DELIVERED (not pushed; user rule 07:36 says only the control thread pushes). Patch against main 00677c0: kernel/harden-user-mapping.patch (git am), full files also at kernel/src-harden-user-mapping/. Fixes the three items of the user's third review: (1) map_user checks the VA is free before allocating a frame, so a refused remap takes nothing; (2) W^X: map_user/load take mm::Perm {Code = R-X, Data = RW+NX, RoData = R+NX}; user code is read-only, data and stacks are NX; (3) tests: 14 kernel-side mm checks at boot plus 4 ring-3 cases (write own code, exec data page, exec stack all #PF; a legit thread still reads code and writes data). Verified: tests/kernel/run.sh ALL HELD, 63 checks, 0 failed, QEMU 8.2 TCG in the cloud container; not run on the user's PC.
-- notice for Phase 2b threads (two isolated apps, ELF loader/personality, untyped memory, IPC budget): API change in crates/warden-kernel/src/mm.rs. `map_user(fa, va, perm: Perm)` and `load(fa, va, bytes, perm: Perm)` replace the `writable: bool` argument; `AddressSpace::pte(va)` is new. An ELF loader must map PT_LOAD segments as Perm::Code when the flags are R+X, Perm::Data for RW, Perm::RoData for R; refuse segments that ask for W+X and refuse segments that overlap an already mapped page (map_user returns None without allocating). Rebase on the patch above once the control thread merges it.
 - 2026-11-05 lead: canvas fixed the audit's overflow and unbounded-line findings (64-bit clipping, bounded Bresenham), regression test added, golden unchanged. Both audit findings now fixed; tests thread to re-accept frontend 1.0.1 and canvas.
 - 2026-11-05 lead: kernel PR #6 merged (main 0db603c, 53 in-guest checks, W^X user mappings, fixed endpoint queues). Phase 2b started on a new branch. ABI unchanged; kernel will announce before warden-abi.json changes.
+- 2026-11-05 07:43 lead: pushed. PR #8 = project-files sync (frontend 1.0.1
+  + plugin_regression.sh, canvas, superops, codegen, assets shim, tests,
+  contracts, control plan; 79 files). PR #7 = harden-user-mapping (3715dfd,
+  applied from kernel/harden-user-mapping.patch; cargo test passes here, the
+  kernel builds for x86_64-unknown-none; QEMU is not in the lead's container,
+  so the 63-check ALL HELD count is the delivering thread's). Someone opened
+  #7 seconds after the lead's push; from now on only the lead opens PRs.
+  Both await the user's merge word. Bookkeeping: record #7 and #8 on the board.
+  3715dfd (mm::Perm API) before your handoff, and say so in HANDOFF.md.
+- 2026-11-05 lead: canvas accepted (759+22 own checks, independent dirty-tile oracle 36/36). Accepted: lfsr, assets, frontend (1.0.1 re-accept pending), superops, canvas. Pending: codegen acceptance. Canvas is not in the integrated baseline build (different model), validated via its own suite and the oracle; acceptable.
+- 2026-11-05 kernel/IPC thread ("Budget IPC endpoint queues"): DELIVERED, not pushed (user rule 07:36: only the control thread updates the repository). Patch against main 00677c0: kernel/ipc-queue-budget.patch (git am-able, one commit, branch name used locally: claude/project-thread-8c8nms); QEMU run log: kernel/ipc-queue-budget-run.log. Content: endpoint wait queues are fixed arrays with a per-direction budget (1..8) paid from the creator's untyped budget at Kernel::create_endpoint; nothing is allocated on send/recv; full queue -> E_FULL (-8); endpoint-kind cap with no object (console) -> E_NOOBJ (-7). Extra finding fixed in warden-caps: revoke allocated a table-sized Vec per call on a heap that never frees; now epoch-marked, no allocation. Heap check tightened to exactly 0 bytes for the whole run. Tests added: flood (6 writers, budget 2, 4 refused), forged endpoints (untyped cap send/recv, console send), wrong badge (self-minted copy keeps 42; eavesdropper arrives as 7), creator charge, over-budget creation refused, 2000 repeat revokes. 68/68 checks, clippy clean, cargo test green, measured under QEMU/TCG in the cloud container only. Not done: endpoint creation as a syscall (comes with the Phase 2b loader). ACTION for control thread: apply the patch on a branch from main and open the PR.
+- 2026-11-05 07:48 lead: PR #8 (project-files sync) is merged; main is now
+  6d9f979. The lead did not merge it. Lead asks the user whether they merged
+  #6 and #8 themselves; if yes, the standing policy is "the user merges from
+  GitHub, threads never do", which is consistent with the rule.
+- 2026-11-05 07:48 lead, from the user's status assessment (07:43): RULINGS.
+  (1) Milestone order for the kernel: real application loader FIRST (thread
+  4's elf.rs: static ELF, PT_LOAD with mm::Perm, W^X refused at load), THEN
+  two independently loaded apps talking over IPC (thread 2), THEN attack and
+  isolation tests against both apps in QEMU (threads 2 and 7). The loader is
+  the gate for Phase 2b: thread 2's in-image-blob fallback is for its own
+  development only and is not a deliverable; the Phase 2b PR must load both
+  apps through elf.rs. Thread 4 hands off the loader as its own series before
+  the personality server, so thread 2 can rebase on it early.
+  (2) Independent verification is thread 7's deliverable: on the user's PC
+  under WSL2 with cargo and QEMU (HOST.md), run `cargo test`,
+  `tests/kernel/run.sh` on main 6d9f979 (the 53 claimed checks), and the
+  Phase 0 escape and compat suites; report the counts to bookkeeping as
+  "independently run on DESKTOP-9NPQNID" or "not verified". Every later
+  kernel PR gets the same run before the lead marks it a candidate.
+  (3) The assessment's open items map to owners: memory reclamation and
+  per-application resource accounting -> thread 3 (untyped + heap budget,
+  with SchedContext accounting); queue limits -> thread 5 on top of main's
+  fixed-capacity queues; loader and Linux compatibility -> thread 4;
+  game runtime integration -> thread 9. The honesty rule stands: "Implemented,
+  unverified here" is the label until thread 7 has run it.
+  (4) The six closed findings stay closed only while each has a test; thread
+  7 adds a regression row per finding to tests/README.md.
+- 2026-11-05 07:50 lead: HOLD. Merges of #6 and #8 are unconfirmed by the
+  user. Until the user answers, the lead pushes nothing and opens no PR.
+  Handoffs keep flowing to the board; they queue for the lead.
+- 2026-11-05 kernel/IPC thread, addendum: the IPC patch and kernel/harden-user-mapping.patch (W^X thread) both edit main.rs and tests.rs and conflict on adjacent lines. Resolved: kernel/ipc-queue-budget-after-harden.patch applies cleanly on top of harden-user-mapping.patch (new test ids moved to 50-61 to avoid the W^X thread's id 33). Combined build verified here: 86/86 checks under QEMU. Control thread: apply harden first, then the "-after-harden" patch; if harden is dropped, use ipc-queue-budget.patch directly on main (68/68).
+- 2026-11-05 07:54 lead: USER CONFIRMED they merged #6 and #8 and wants
+  merging automatic. MERGE POLICY (user, 07:45): the lead merges a PR it
+  opened into main when (1) the series applied cleanly on current main, (2)
+  `cargo test` passes and the kernel builds in the lead's container, (3) the
+  delivering thread reports its own suite green (kernel: ALL HELD with the
+  check count; Phase 0: escape and compat), (4) no merge conflict, and (5) the
+  diff touches only the owner's files plus the allowed shared lines. Nothing
+  else merges, and no other thread merges. Every automatic merge is reported
+  to bookkeeping with the PR number and the main commit. HOLD lifted.
+  Independent QEMU verification (thread 7, on the user's PC) stays a separate
+  deliverable; a merge does not mean "independently verified".
+- 2026-11-05 tests thread (Run Rust and QEMU tests on WSL2): all four suites run on the cloud VM (QEMU 8.2.2 TCG, no KVM): cargo test 23/23, kernel 45/45, escape 44/44, compat 13/13. Kernel thread's harden-user-mapping.patch applies clean to main and holds 63/63. Adversarial tests added on top: wrong-capability use, mid-flight revocation, exhaustion floods, stack/data overrun; 92/92 held after one fix. FINDING: SYS_REVOKE allocated per call on the never-freeing kernel heap (5,000 calls = +475 KiB); ring 3 could drain the arena. Fixed allocation-free in warden-caps (kernel thread's crate, separate commit, take or redo). Open question for kernel thread: badge re-write through GRANT (ignored test). Patches and logs: kernel/adversarial-tests/ (REPORT.md). Nothing pushed; control thread to land kernel/harden-user-mapping.patch then 0001, 0002.
+- 2026-11-05 07:40 record (kernel report): PR #6 (review3-mm-wx-ipc, afebdaf -> main 0db603c) merged. Kernel thread pushed the branch ~07:38Z but did NOT open or merge the PR; GitHub shows badwolfzm opened and merged #6 at 07:40:00/07:40:09Z, before the kernel thread's own create_pull_request was refused as a duplicate. The user did not write "merge" to the kernel thread for #6 (merge-policy note for control). #6 adds: check-before-allocate in map_user, W^X user mappings, fixed-capacity endpoint queues. PR #7 (harden-user-mapping) closed unmerged, superseded by #6. PR #8 (project-files-sync-2, d25163a -> main 6d9f979) synced frontend 1.0.1, canvas, superops, codegen, assets shim, tests, contracts; resolves the frontend "no repo" belief.
+- 2026-11-05 07:40 record (kernel report): revoke() per-call allocation (user's 07:43 assessment item) fixed on a local branch, exported as /mnt/project-files/handoff/phase2b-from-kernel/0001-revoke-allocates-nothing.patch. Counting-allocator test: 10,000 revocations, 0 allocations (fails on old code); in-guest 54/54 held; whole-run heap growth 32 bytes (was 112); cargo test 25 passed; clippy clean. Label: implemented, not independently verified. Overlap: heap-budget thread owns heap budgets per ruling; this one-function patch can ride either series. Control to fold into a hardening PR.
+- 2026-11-05 08:00 lead: AUTO-MERGED PR #9 (kernel-revoke-fix, 3b19dc4) into
+  main = 5a817c2. Policy checks: applied cleanly on 6d9f979; cargo test green
+  here (11+5+5+3+1); kernel builds for x86_64-unknown-none; delivering thread
+  reports 54/54 in-guest, heap +32 B; no conflict; touches warden-caps,
+  kernel tests.rs, README only. Bookkeeping: record #9 merged, main 5a817c2.
+  Base for all handoffs is now 5a817c2. Thread 7: rebase adversarial 0001 on
+  5a817c2 (it already carries the revoke fix; drop 0002).
+- 2026-11-05 tests thread: adversarial suite v2 rebased per control ruling. Base: main 6d9f979 merged with kernel-revoke-fix (3b19dc4). One patch, kernel/adversarial-tests/v2/0001-*.patch (tests.rs, main.rs, README, HOST.md only; v1 revoke fix and badge test dropped as ruled). Results on that base: cargo test 25/25, kernel 83/83 (heap +32 B, +3 legit mints), escape 44/44, compat 13/13. Logs and REPORT.md beside the patch. Nothing pushed; control thread lands it after kernel-revoke-fix merges. Not verified on WSL2 or the user's PC.
+- 2026-11-05 07:55 untyped-memory thread: Phase 3 slice DELIVERED, not pushed (user rule: only control pushes). Patch and bundle at project files handoff/phase3-untyped-memory/ (0001-phase3-untyped-memory.patch applies cleanly on main 6d9f979; README there has the details). Every kernel object and capability node is paid for from the thread's untyped; refused requests consume nothing; delete/revoke refund; arena entries, frames and heap are reused (heap is a freeing size-class allocator); dead threads are torn down. Syscalls added: retype(untyped, kind, dst, size), delete, map, budget. Results: in-guest 78/78 (release and dev, TCG), end of run 0 live objects, all user frames back, heap high-water growth 0 bytes; cargo test 29 pass incl. a counting-allocator test (10,000 rounds, 0 allocations); clippy clean. Not verified on the user's PC or under KVM. RULING REQUEST for control: this series supersedes the kernel thread's 0001-revoke-allocates-nothing.patch (handoff/phase2b-from-kernel/); apply one, not both. Next slices: threads and address spaces as retypable objects, frame sharing, unmap without delete.
+- 2026-11-05 07:55 lead: thread message quota lifted; all queued notices delivered directly and pruned from this file.
+- 2026-11-05 08:05 lead: AUTO-MERGED PR #11 (adversarial-tests-v2, bbf6c9a)
+  into main. Policy: applied cleanly on 5a817c2; cargo test 25/25 here;
+  kernel builds; delivering thread reports 83/83 in-guest, escape 44/44,
+  compat 13/13; touches tests.rs, main.rs, README, HOST.md only. Bookkeeping:
+  record #11 merged. Base for all handoffs = current main after #11.
+- 2026-11-05 08:05 lead: Phase 3 untyped handoff (handoff/phase3-untyped-memory/,
+  78/78, cargo 29) was built on 6d9f979 and conflicts with main: #9's
+  non-allocating revoke vs Phase 3's kill_subtree in warden-caps lib.rs, and
+  README counts; after #11 it will also meet the new tests.rs checks. RULING:
+  Phase 3's kill_subtree design wins (covers revoke and delete with a mark
+  bit); #9's `crates/warden-caps/tests/revoke_alloc.rs` counting-allocator
+  test and its in-guest revoke flood must keep passing against it. Thread 3
+  rebases onto current main (after #11), resolves lib.rs by taking
+  kill_subtree, reruns cargo test and tests/kernel/run.sh, and re-hands off as
+  handoff/phase3-untyped-memory/v2/. The lead lands it on arrival. The kernel
+  thread's revoke patch is already merged (#9); nothing more from it.
+- RULE (from three collisions in one hour): before you write the handoff,
+  `git fetch origin main` and rebase onto its tip; write that commit hash in
+  HANDOFF.md. The lead applies within minutes, so a handoff more than one
+  kernel PR behind main goes back unapplied.
+- 2026-11-05 07:58 first lead ("Control the whole effort"): saw the 07:34 round only after my message quota lifted. Retracted my 07:54 instructions to the old kernel thread (no Phase 2b there, no sync PR). Split proposed to the kernel lead ("Control all phases in parallel"): kernel phases, all pushes, PRs, merges and kernel handoff rulings are theirs; the MatrixOS workstream (compiler, GPU, contracts, six modules, their acceptance) and the design doc are mine; accepted MatrixOS deliveries go to STATUS.md as handoffs for the kernel lead to sync. Module threads never push.

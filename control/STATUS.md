@@ -44,18 +44,22 @@ Kernel plan: https://claude.ai/artifact/Npeq8VSVoMrT32Mo69VLLZ
 | #3 | project-files-sync | Re-sync: assets, security regressions, GPU ref | Merged |
 | #4 | phase2a-aspace-ipc | Phase 2a address spaces + IPC | Merged |
 | #5 | review-fixes-bd1e914 | Fix bd1e914 review findings | Merged |
+| #6 | review3-mm-wx-ipc | kernel: check-before-alloc in map_user, W^X user mappings, fixed-capacity IPC queues | Merged (afebdaf → 0db603c) |
+| #7 | harden-user-mapping | Harden user memory mapping (refuse remaps before alloc, W^X) | Closed, NOT merged — superseded by #6 |
+| #8 | project-files-sync-2 | Sync frontend 1.0.1, canvas, superops, codegen, assets shim, tests, contracts | Merged (d25163a → 6d9f979) |
 
-No open PRs. Next expected: a fresh `project-files-sync` PR carrying everything
-accepted since #3 (frontend, canvas, superops, codegen, assets shim, tests,
-contract revisions), and the kernel's Phase 2b PR.
+Main is at **6d9f979**. No open PRs. Next expected: the kernel's `revoke()`
+no-alloc patch (staged, see below) folded into a hardening PR by control, plus
+the two-apps / ELF-loader Phase 2b work.
 
 ## Threads
 
 | Thread | Owns | State |
 |---|---|---|
-| Control (lead) | Scope, rulings, acceptance | Active; cannot message threads until 07:53 UTC |
-| Bookkeeping (this) | This board | Active |
-| Kernel | Warden kernel, single repo-sync owner | Phase 2b in progress; Phase 2a + review fixes merged |
+| MatrixOS lead ("Control the whole effort") | MatrixOS scope, rulings, module acceptance | Active; sends MatrixOS state changes here |
+| Kernel lead ("Control all phases in parallel") | Kernel/phase scope; sole git pusher | Active |
+| Bookkeeping (this) | The record / this board | Active |
+| Kernel | Warden kernel | Phase 2b in progress; through PR #6 merged |
 | Security review | matrixos/reviews/security-review.md | Delivered (wave 0) |
 | MXSB contract | matrixos/contracts/mxsb-manifest.md + C reference loader | Contract landed; reference loader NOT yet built |
 | GPU command set | matrixos/contracts/gpu-commands.md | Delivered; section 6 revised with PC numbers |
@@ -67,6 +71,46 @@ contract revisions), and the kernel's Phase 2b PR.
 | LFSR lifter | matrixos/lfsr/ | Accepted |
 | Canvas | matrixos/canvas/ | Delivered (candidate 4); pending acceptance |
 | Assets | matrixos/assets/ | Accepted (F1, F1b); owes PATH trace event in mx_vfs_compat.h |
+
+## Prototype handoff queue (rapid prototyping — user, 07:49)
+
+Mode: each thread hands off a *working prototype* as soon as it runs; the
+control thread merges from this queue without waiting for the full module.
+Workers report here (via bookkeeping); control pulls, PRs and pushes. "Staged"
+= prototype ready at a path, not yet pushed. "Merged" = on main.
+
+| Thread / work | Prototype state | Where | Control action |
+|---|---|---|---|
+| Kernel: map_user W^X, check-before-alloc, fixed IPC queues | Merged | PR #6 (main 0db603c) | done |
+| Kernel: revoke() allocates nothing | Staged; cross-verified by tests thread (see below) | /mnt/project-files/handoff/phase2b-from-kernel/0001-revoke-allocates-nothing.patch | fold into a hardening PR |
+| Harden user memory mapping | Superseded by #6 | PR #7 closed unmerged | none |
+| Tests: 4 suites + adversarial suite | Staged, verified on cloud VM (TCG, no KVM) | kernel/adversarial-tests/ (REPORT.md, patches 0001, 0002) | land after rebasing onto #6 — see skew note |
+| Build two isolated apps running together | Working (no deliveries recorded yet) | — | awaiting handoff |
+| Run the Linux personality and ELF loader | Working | — | awaiting handoff |
+| Add untyped memory and heap budget | Working (owns heap budgets; revoke patch can ride its series) | — | awaiting handoff |
+| Budget IPC endpoint queues | Working (fixed-capacity queues already in #6 — confirm scope) | — | awaiting handoff |
+| Run Rust and QEMU tests on WSL2 | Delivered (this is the tests row above) | kernel/adversarial-tests/ | awaiting control merge |
+| Harden the Phase 0 supervisor | Working | — | awaiting handoff |
+| Connect game runtime and rendering | Working | — | awaiting handoff |
+
+**Tests thread results (cloud VM, QEMU 8.2.2 TCG, no KVM, not verified on WSL2/PC):**
+cargo test 23/23, kernel 45/45, escape 44/44, compat 13/13. harden-user-mapping.patch
+applies clean to main and holds 63/63. Adversarial suite (wrong-capability use,
+mid-flight revocation, exhaustion floods, stack/data overrun) 92/92 after one fix.
+Independently found the SYS_REVOKE per-call allocation (5,000 calls = +475 KiB,
+ring 3 could drain the arena) and fixed it allocation-free in warden-caps — the
+same defect the kernel thread's 0001 patch fixes. Open question for kernel thread:
+badge re-write through GRANT (one ignored test).
+
+**Base-commit skew (flag for control):** the tests thread's patch series
+(harden-user-mapping.patch, then 0001/0002) is based on main 00677c0, *before*
+PR #6 (0db603c) landed the map_user W^X and check-before-alloc work. #6 already
+contains the mapping hardening, so control must rebase/dedupe this series onto
+current main (6d9f979) before landing 0001/0002; do not double-apply.
+
+Phase 2b design notes (for the two-apps thread) are at
+/mnt/project-files/handoff/phase2b-from-kernel/README.md; the kernel thread
+wrote no Phase 2b code.
 
 ## Parallel round (launched 2026-11-05 07:35)
 
@@ -95,10 +139,11 @@ Prior round's leads are closed: "Control the whole effort" (done) and
 | Assets | yes | yes | F1/F1b fixed; mx_vfs_compat.h shim provided |
 | Frontend | yes | yes | mxcc driver F3; mx_input.h shared typed-input header (F2) |
 | Super-ops | yes | yes | F6 fixed; gpu_vadd truncation refused via compat shim |
-| Canvas | yes | pending | 638 checks, ASan clean; owns consumed_hash defect |
+| Canvas | yes | yes | 638 checks, ASan clean; consumed_hash + INT overflow fixed |
 | Codegen | yes | pending | MXSB emitter+validator V1..V25, tiers, lifter hook; 40k checks |
 
-All six wave-1 modules are delivered. Two await acceptance.
+All six wave-1 modules delivered. Five accepted (lfsr, assets, frontend 1.0.1,
+superops, canvas); only codegen's acceptance is pending.
 
 ## Integrated build (latest reported)
 
@@ -139,11 +184,10 @@ Standing checks (re-verified by this thread at 07:40):
 - **mxcc bypass (frontend):** `--` skipped the deny policy. Fixed in frontend 1.0.1 with a live-plugin regression test. Harness weakness (missing compiler counted as pass) also fixed. Tests thread to re-run frontend acceptance on 1.0.1 and add the `--` plugin case to security_regressions.sh F3.
 - **Canvas integer overflow:** ghost_canvas.c overflows with INT_MAX/INT_MIN coordinates. Canvas owns this finding: fix with checked arithmetic + regression test. Tests thread to add the overflow case as a new check.
 
-## Discrepancy to resolve
+## Discrepancy (resolved)
 
-- **Frontend thread believes no repo exists.** Its 07:37 report says "no GitHub
-  repository exists yet" — it still thinks code stays in project files. But
-  badwolfzm/pc exists with five merged PRs. Consequence: frontend 1.0.1 and the
-  canvas fixes are not yet synced as PRs. Control thread has been told to sync
-  them. Under the new role model, control is the pusher, so workers holding this
-  stale belief is harmless as long as they report deliveries to bookkeeping.
+- **Frontend "no repo exists" belief — resolved.** Frontend's 07:37 report said
+  no repo existed. PR #8 (project-files-sync-2, merged 07:43) synced frontend
+  1.0.1, canvas, superops, codegen, assets shim, tests and contracts to main.
+  Under the role model this is harmless anyway: workers report to bookkeeping,
+  control pushes.

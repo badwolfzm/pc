@@ -25,6 +25,17 @@ fn main() {
         .expect("nasm not found");
     assert!(st.success(), "nasm failed");
     println!("cargo:rerun-if-changed=src/boot.asm");
+    // G0: reuse the existing PR #68 freestanding renderer without adding
+    // any privileged kernel access or guest ABI. The Pong guest remains
+    // independently available in its own feature.
+    if env::var("CARGO_FEATURE_GAME_PROBE").is_ok() {
+        assert!(env::var("CARGO_FEATURE_PONG").is_err(), "pong and game_probe are mutually exclusive");
+        let st = Command::new("bash")
+            .arg(dir.join("../../tools/game-frame-probe/guest/build.sh"))
+            .arg(&out).status().expect("bash not found");
+        assert!(st.success(), "game-frame-probe guest build failed");
+        println!("cargo:rerun-if-changed=../../tools/game-frame-probe");
+    }
     // `--features pong`: build the C guest app into flat blobs that src/pong.rs embeds.
     if env::var("CARGO_FEATURE_PONG").is_ok() {
         let st = Command::new("bash").arg(dir.join("guest/pong/build.sh")).arg(&out).status().expect("bash not found");

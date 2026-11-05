@@ -379,11 +379,23 @@ static long do_bind(struct client *c, long fd, size_t len) {
     int e = parse_port(c, len, &port);
     if (e)
         return e;
+    /* Reserve at bind time, not listen time: otherwise two bound sockets
+     * in the same namespace can both become listeners on the same port.
+     */
+    struct stream *self = &streams[f->idx];
+    if (self->bound_port || self->connected)
+        return -EINVAL;
     for (int i = 0; i < MAX_LISTEN; i++)
         if (listeners[i].used && listeners[i].port == port &&
-             netns_same(c->netns, clients[listeners[i].owner].netns))
+            netns_same(c->netns, clients[listeners[i].owner].netns))
             return -EADDRINUSE;
-    streams[f->idx].bound_port = port;
+    if (port != 0)
+        for (int i = 0; i < MAX_STREAM; i++)
+            if (i != f->idx && streams[i].used &&
+                streams[i].bound_port == port &&
+                netns_same(c->netns, clients[streams[i].owner].netns))
+                return -EADDRINUSE;
+    self->bound_port = port;
     return 0;
 }
 
@@ -398,6 +410,13 @@ static long do_listen(struct client *c, long fd) {
     struct stream *s = &streams[f->idx];
     if (s->bound_port == 0 || s->connected)
         return -EINVAL;
+    /* Defense in depth: never publish two listeners on one namespace/port.
+     * Failure leaves the bound stream owned by the caller and reclaimable.
+     */
+    for (int i = 0; i < MAX_LISTEN; i++)
+        if (listeners[i].used && listeners[i].port == s->bound_port &&
+            netns_same(c->netns, clients[listeners[i].owner].netns))
+            return -EADDRINUSE;
     int used_ns = 0;
     for (int i = 0; i < MAX_LISTEN; i++)
         if (listeners[i].used && netns_same(c->netns, clients[listeners[i].owner].netns))

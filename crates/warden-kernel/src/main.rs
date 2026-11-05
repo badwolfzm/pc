@@ -1,6 +1,7 @@
 //! Warden microkernel, Phase 1.
 #![no_std]
 #![no_main]
+#![cfg_attr(feature = "pong", allow(unreachable_code, unused_variables))]
 
 extern crate alloc;
 
@@ -9,6 +10,7 @@ mod arch;
 mod heap;
 mod loader;
 mod mm;
+mod pong;
 mod serial;
 mod tests;
 mod thread;
@@ -50,6 +52,8 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     }
     let info = unsafe { &*(mbi as *const MultibootInfo) };
     let (lo, hi) = (info.mem_lower, info.mem_upper);
+    #[cfg(feature = "pong")]
+    pong::boot(hi);
     kprintln!("memory: {} KiB low, {} MiB high", lo, hi / 1024);
     if info.flags & (1 << 6) != 0 {
         let (mut p, end) = (info.mmap_addr as u64, (info.mmap_addr + info.mmap_length) as u64);
@@ -145,6 +149,8 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 }
 
 pub fn finish(k: &mut Kernel) -> ! {
+    #[cfg(feature = "pong")]
+    pong::finish(k);
     let expected_logs = tests::EXPECT.len() as u32;
     let logs: u32 = k.threads.iter().map(|t| t.logs).sum();
     k.checks += 1;

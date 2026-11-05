@@ -21,6 +21,13 @@ fn main() {
         .expect("nasm not found");
     assert!(st.success(), "nasm failed");
     println!("cargo:rerun-if-changed=src/boot.asm");
+    // `--features pong`: build the C guest app into flat blobs that src/pong.rs embeds.
+    if env::var("CARGO_FEATURE_PONG").is_ok() {
+        let st = Command::new("bash").arg(dir.join("guest/pong/build.sh")).arg(&out).status().expect("bash not found");
+        assert!(st.success(), "guest/pong/build.sh failed");
+        println!("cargo:rerun-if-changed=guest/pong");
+        println!("cargo:rerun-if-changed=../../matrixos/canvas/ghost_canvas.c");
+    }
     println!("cargo:rerun-if-changed=linker.ld");
     println!("cargo:rustc-link-arg={}", obj.display());
     println!("cargo:rustc-link-arg=-T{}", dir.join("linker.ld").display());

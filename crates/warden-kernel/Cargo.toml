@@ -10,3 +10,7 @@ build = "build.rs"
 warden-caps = { path = "../warden-caps" }
 warden-elf = { path = "../warden-elf" }
 
+
+[features]
+# Pong inside Warden: display + keyboard syscalls, the C guest app and three hostile threads (src/pong.rs).
+pong = []

@@ -389,6 +389,8 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             return Ok(After::Yield);
         }
         SYS_EXIT => return Err(Death::Exited(a)),
+        #[cfg(feature = "pong")]
+        crate::pong::SYS_DISPLAY_INFO..=crate::pong::SYS_REPORT => crate::pong::syscall(k, f),
         SYS_HOST_EXIT => {
             // The capability must name the machine-control object itself;
             // WRITE on some other object (the console) is not enough.

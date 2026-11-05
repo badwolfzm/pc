@@ -1,0 +1,25 @@
+name: Warden freestanding game adapter build
+on:
+  pull_request:
+    paths:
+      - 'tools/warden-game-guest/**'
+      - 'tools/game-frame-probe/render.c'
+      - 'tools/game-frame-probe/render.h'
+      - '.github/workflows/warden-game-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build guest and check executable layout
+        run: |
+          bash tools/warden-game-guest/build.sh
+          readelf -h target/warden-game-guest/game.elf
+          nm target/warden-game-guest/game.elf | grep -E ' (_start|pong_main|probe_render)$'
+          test -s target/warden-game-guest/game_text.bin
+      - name: Verify host renderer still passes
+        run: make -C tools/game-frame-probe test

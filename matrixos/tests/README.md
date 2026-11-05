@@ -30,6 +30,7 @@ Plan: https://claude.ai/artifact/VU7zP9p25aqDQzpSpfYFRp (MatrixOS compiler and G
       integrate.sh             builds integrated.c = frozen baseline + accepted modules swapped in
       fuzz/mx_fuzz_compat.h    replacement fuzzer (finding 5), harness-owned
       unit/rcs/rcs_conformance.c  independent RCS conformance test written from gpu-commands.md (92 checks)
+      unit/canvas/gc_dirty_oracle.c  brute-force tile-diff oracle for the ghost canvas (36 checks, 5 sizes)
 
     # scratch copies, since module Makefiles write build products and the mount is noexec
     cp -r /mnt/project-files/matrixos/{frontend,assets,superops} /tmp/w/
@@ -60,6 +61,7 @@ What integrate.sh swaps (baseline line ranges, each wrapped in an #ifndef so the
 | frontend own tests | | | typed_input 48, cells.vec 57 (C), driver tests; Rust vectors skip |
 | superops own tests | | | 202 passed (gcc) |
 | RCS reference | | | 57,669 passed; harness conformance 92/92 |
+| canvas own tests | | | 759 + 22 passed (gcc, ASan, UBSan, clang); golden ghost hash f7da60a90fb9597f; harness dirty oracle 36/36 |
 
 Not run: anything on the user's machine; cold-cache storage numbers; clang sanitizer builds; the Rust
 side of the typed-input vectors; F7 (no MXSB loader exists yet).

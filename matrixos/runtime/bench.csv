@@ -1,0 +1,5 @@
+scene,w,h,frames,build_us_med,copy_us_med,submit_us_med,composite_us_med,sink_us_med,service_us_med,service_us_p95,tiles_med,bytes_med,pixel_ops_med,consumed_hash,timer_floor_ns
+static,1280,720,101,0.0,0.0,0.4,4.7,0.0,5.3,5.5,0,0,0,d0f551ef666beafc,25
+sprites16,1280,720,101,0.3,0.2,342.8,279.2,121.7,630.6,733.5,356,364544,201408,f409aad0f3baf6b4,25
+sprites16_lines200,1280,720,101,1.2,0.5,1342.6,1565.4,903.2,2917.7,3545.6,2528,2588672,315440,67a402856da341e0,25
+scroll_full,1280,720,101,0.1,0.2,501.0,2264.8,1260.0,2791.1,3541.8,3600,3686400,921600,562c06b45b9013bc,25

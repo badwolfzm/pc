@@ -43,12 +43,20 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#define MXCC_VERSION "1.0.1"
+/* SIMD tier contract owned by codegen: names, -march strings, -DMX_TIER define.
+ * Included from the project layout so the driver and the kernels cannot drift;
+ * tests/unit/test_tiers.c checks the composed command line against it. */
+#include "../../codegen/tiers/mx_tiers.h"
+
+#define MXCC_VERSION "1.0.2"
 #define MXCC_MAX_ARGS 4096          /* hard ceiling on the composed argv */
 #define MXCC_MAX_PATH 4096
 
 typedef enum { PROF_COMPILE_FAST, PROF_MATRIXOS, PROF_BALANCED, PROF_RUNTIME_FAST } profile_t;
-typedef enum { TIER_BASELINE, TIER_AVX2, TIER_AVX512 } tier_t;
+typedef mx_tier tier_t;
+#define TIER_BASELINE MX_TIER_BASELINE
+#define TIER_AVX2 MX_TIER_AVX2
+#define TIER_AVX512 MX_TIER_AVX512
 typedef enum { ARCH_X86_64, ARCH_AARCH64 } arch_t;
 typedef enum { MODE_LINK, MODE_COMPILE, MODE_ASM, MODE_PREPROCESS } mode_t_;
 
@@ -342,10 +350,9 @@ static void parse_args(int argc, char **argv, opts_t *o) {
         } else if (eq(a, "--tier")) { NEEDARG(); a = argv[++i]; goto tier;
         } else if (pfx(a, "--tier=")) { a += 7;
         tier:
-            if (eq(a, "baseline")) o->tier = TIER_BASELINE;
-            else if (eq(a, "avx2")) o->tier = TIER_AVX2;
-            else if (eq(a, "avx512")) o->tier = TIER_AVX512;
-            else die("unsupported tier '%s' (baseline|avx2|avx512)", a);
+            { int t = mx_tier_parse(a);
+              if (t < 0) die("unsupported tier '%s' (baseline|avx2|avx512)", a);
+              o->tier = (tier_t)t; }
         } else if (pfx(a, "--arch=")) {
             a += 7;
             if (eq(a, "x86-64") || eq(a, "x86_64")) o->arch = ARCH_X86_64;
@@ -460,24 +467,19 @@ static void add_profile(argv_t *a, const opts_t *o) {
     push(a, "-fno-ident");
 }
 
-static const char *tier_name(tier_t t) {
-    return t == TIER_BASELINE ? "baseline" : t == TIER_AVX2 ? "avx2" : "avx512";
-}
+static const char *tier_name(tier_t t) { return mx_tier_name(t); }
 
 static void add_tier(argv_t *a, const opts_t *o) {
     if (o->arch == ARCH_X86_64) {
-        /* psABI micro-architecture levels: fixed feature sets, identical on every build host */
-        switch (o->tier) {
-        case TIER_BASELINE: push(a, "-march=x86-64");    break;  /* SSE2 */
-        case TIER_AVX2:     push(a, "-march=x86-64-v3"); break;  /* AVX, AVX2, FMA, BMI1/2, MOVBE, F16C, LZCNT */
-        case TIER_AVX512:   push(a, "-march=x86-64-v4"); break;  /* v3 + AVX-512 F/BW/CD/DQ/VL */
-        }
-        push(a, "-mtune=generic");
+        /* psABI micro-architecture levels from the codegen contract (mx_tiers.h) */
+        push(a, MX_TIER_MARCH[o->tier]);
+        push(a, MX_TIER_MTUNE);
     } else {
         if (o->tier != TIER_BASELINE) die("tiers avx2/avx512 are x86-64 only; aarch64 has baseline (armv8-a) only");
         push(a, "-march=armv8-a");
     }
-    push(a, fmt_arg("-DMX_SIMD_TIER=%d", (int)o->tier));
+    push(a, MX_TIER_DEFINE[o->tier]);                      /* -DMX_TIER=n, read by kernels via mx_tiers.h */
+    push(a, fmt_arg("-DMX_SIMD_TIER=%d", (int)o->tier));   /* kept for the 1.0.0 name */
     push(a, fmt_arg("-DMX_SIMD_TIER_NAME=\"%s\"", tier_name(o->tier)));
 }
 

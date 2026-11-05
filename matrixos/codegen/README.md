@@ -164,7 +164,9 @@ Verified here (this container, x86-64, clang 18.1.3, gcc 13.3, ASan+UBSan):
   baseline object contains no ymm/zmm instructions, avx2 contains ymm and
   no zmm, avx512 contains zmm, wrong-flag builds fail to compile, and the
   dispatcher picks each tier under `MX_TIER=` forcing with identical
-  results (this machine is avx512, so all three bodies really ran).
+  results. This container is avx512, so all three bodies ran here; the
+  user's own PC has no AVX-512 (per the lead thread), so on the target the
+  avx512 body is unverified and the dispatcher will select avx2 there.
 - `tests/run_lifter.sh`: 15 cases compiled from original and hooked source
   print identical output across 8 seeds x 14 trip counts (0 to 1,000,003):
   galois LFSR with affine constant, xorshift32 (`while (n--)`), xorshift64
@@ -185,5 +187,7 @@ Not verified:
 - Ed25519 correctness rests on OpenSSL 3.0.13; no second implementation.
 - The hook was run only on the test corpus and the bench file; it has not
   been run over a real game or library source.
+- The avx512 tier on the user's PC: that machine has no AVX-512, so only
+  baseline and avx2 can be exercised there (`MX_TIER=` forcing covers both).
 - Windows and non-x86 targets: not built.
 - The super-op name table is provisional (see contract notes).

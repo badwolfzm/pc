@@ -37,7 +37,8 @@ typedef struct { int64_t x0, y0, x1, y1; } gc_span;   /* inclusive, clipped, val
 static bool gc_clip_rect(const gc_canvas *c, int64_t x, int64_t y, int64_t w, int64_t h, gc_span *s) {
     if (w <= 0 || h <= 0) return false;
     int64_t x1 = x + w - 1, y1 = y + h - 1;       /* |x|,|w| < 2^31, so no overflow in int64 */
-    if (x < 0) x = 0; if (y < 0) y = 0;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
     if (x1 > (int64_t)c->w - 1) x1 = (int64_t)c->w - 1;
     if (y1 > (int64_t)c->h - 1) y1 = (int64_t)c->h - 1;
     if (x > x1 || y > y1) return false;

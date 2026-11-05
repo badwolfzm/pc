@@ -17,7 +17,7 @@ printf 'int g(void){return 2;}\n' > "$WORK/u.c"
 cd "$WORK"
 
 # --- version / usage: whole string, with newline (baseline bug 1)
-v="$("$MXCC" --version)"; [[ "$v" == "mxcc 1.0.1 (MatrixOS compiler driver)" ]] && ok "version prints whole line" || bad "version" "[$v]"
+v="$("$MXCC" --version)"; [[ "$v" == "mxcc 1.0.2 (MatrixOS compiler driver)" ]] && ok "version prints whole line" || bad "version" "[$v]"
 rc "no input files exits 2" 2 -S
 rc "unknown profile exits 2" 2 --profile=bogus -S t.c -o t.s
 rc "unknown tier exits 2" 2 --tier=sse9 -S t.c -o t.s
@@ -32,6 +32,7 @@ has "baseline tier -> -march=x86-64" "-march=x86-64" -c t.c
 has "avx2 tier -> -march=x86-64-v3" "-march=x86-64-v3" --tier=avx2 -c t.c
 has "avx512 tier -> -march=x86-64-v4" "-march=x86-64-v4" --tier=avx512 -c t.c
 has "tier macro MX_SIMD_TIER=1" "-DMX_SIMD_TIER=1" --tier=avx2 -c t.c
+has "codegen tier define MX_TIER=2" "-DMX_TIER=2" --tier=avx512 -c t.c
 has "tier name macro" '-DMX_SIMD_TIER_NAME="avx512"' --tier=avx512 -c t.c
 for p in compile-fast matrixos balanced runtime-fast; do hasnot "profile $p has no -march=native" "-march=native" --profile=$p -c t.c; done
 rc "-march=native explicit exits 2" 2 -march=native -c t.c

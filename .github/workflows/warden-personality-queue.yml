@@ -1,0 +1,29 @@
+name: Bounded Warden personality queue
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/apps.rs'
+      - 'tests/security/test_personality_queue.py'
+      - '.github/workflows/warden-personality-queue.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guest-queue:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source regression tests
+        run: python3 -m unittest discover -s tests/security -p 'test_personality_queue.py' -v
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install bare-metal target
+        run: rustup target add x86_64-unknown-none
+      - name: Kernel guest integration tests
+        run: bash tests/kernel/run.sh

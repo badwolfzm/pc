@@ -1,0 +1,27 @@
+name: Warden dynamic ELF metadata checks
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-ldso/**'
+      - 'docs/handoffs/warden-ldso.md'
+      - '.github/workflows/warden-ldso.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test bounded no_std dynamic metadata parser
+        run: cargo test --manifest-path crates/warden-ldso/Cargo.toml --verbose
+      - name: Lint dynamic metadata parser
+        run: cargo clippy --manifest-path crates/warden-ldso/Cargo.toml --all-targets -- -D warnings
+      - name: Check no_std build
+        run: |
+          rustup target add x86_64-unknown-none
+          cargo check --manifest-path crates/warden-ldso/Cargo.toml --target x86_64-unknown-none

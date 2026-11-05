@@ -108,7 +108,8 @@ static void test_validators(void) {
     uint64_t len;
     CHECK(mx_validate_len(mx_untrusted_u64_new(16), 0, 16, &len) == MX_OK && len == 16);
     CHECK(mx_validate_len(mx_untrusted_u64_new(17), 0, 16, &len) == MX_E_RANGE);
-    CHECK(mx_validate_len(mx_untrusted_u64_new(1), 16, 16, &len) == MX_OK);
+    CHECK(mx_validate_len(mx_untrusted_u64_new(1), 16, 16, &len) == MX_E_RANGE);  /* offset at end: nothing left */
+    CHECK(mx_validate_len(mx_untrusted_u64_new(0), 16, 16, &len) == MX_OK && len == 0);
     CHECK(mx_validate_len(mx_untrusted_u64_new(1), 17, 16, &len) == MX_E_RANGE);
     CHECK(mx_validate_len(mx_untrusted_u64_new(UINT64_MAX), 1, 16, &len) == MX_E_RANGE); /* no overflow */
     uint32_t r;

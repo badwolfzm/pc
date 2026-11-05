@@ -1,0 +1,41 @@
+name: Warden Linux container checks
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/**'
+      - 'crates/warden-abi/**'
+      - 'crates/warden-caps/**'
+      - 'crates/warden-elf/**'
+      - 'tests/kernel/**'
+      - 'tests/compat/net_namespace*.c'
+      - '.github/workflows/warden-linux-container.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install Rust target
+        run: rustup target add x86_64-unknown-none
+      - name: Namespace policy regression
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/compat/net_namespace.c -o /tmp/warden-netns-policy
+          /tmp/warden-netns-policy
+      - name: Namespace socket integration regression
+        run: |
+          cc -std=c11 -O0 -fno-builtin -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-unused-function tests/compat/net_namespace_integration.c -o /tmp/warden-netns-integration
+          /tmp/warden-netns-integration
+      - name: Rust unit tests
+        run: cargo test --workspace
+      - name: Boot Warden and run its in-guest checks
+        run: tests/kernel/run.sh

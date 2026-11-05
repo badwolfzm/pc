@@ -76,6 +76,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (13, "mint into empty slot 5 then invoke", 1),
     (14, "host-exit via console cap (WRITE, wrong object)", E_KIND),
     (15, "5000 mints into an occupied slot: all refused", 0),
+    (16, "10000 revocations: only the one live child dies", 1),
     (20, "IPC: server sees client's badge", 42),
     (21, "IPC: server gets word 0", 0x1234),
     (22, "IPC: server gets word 3", 0x4444),
@@ -152,6 +153,19 @@ pub extern "C" fn hostile_caps() -> ! {
             i += 1;
         }
         sys!(0, SLOT_CONSOLE, 15, bad);
+        // Assessment finding: revoke() used a temporary Vec per call and the
+        // kernel heap never frees. 10000 revocations: the first one on the
+        // dir kills the READ copy minted into slot 5 above (1), every other
+        // returns 0, and the kernel checks after the run that the heap did
+        // not move.
+        let mut sum = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            sum += sys!(3, SLOT_DIR, 0, 0);
+            sum += sys!(3, SLOT_UNTYPED, 0, 0);
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 16, sum);
         // Finally: write to kernel memory. Expected: #PF, thread killed.
         asm!("mov qword ptr [{0}], 0xDEAD", in(reg) 0x10_0000u64, options(nostack));
         sys!(6, 0, 0, 0);

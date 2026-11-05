@@ -274,23 +274,22 @@ impl CapTable {
 
     /// Revoke every capability derived from the one in `slot` (not the
     /// capability itself). Returns how many were revoked.
+    ///
+    /// Allocates nothing: the kernel heap never reclaims, so a loop of
+    /// revocations must not be able to grow it. Nodes are appended in
+    /// derivation order, so a child always has a larger index than its
+    /// parent, and one forward pass finds the subtree. A node whose parent is
+    /// dead is itself dead (mint refuses dead parents, revoke marks whole
+    /// subtrees), so `alive` alone tells a killed parent from a live one.
     pub fn revoke(&mut self, cs: &CSpace, slot: usize) -> Result<usize, CapError> {
         let root = cs.get(slot)?;
         self.live(root)?;
         let mut count = 0;
-        // Nodes are appended in derivation order, so a child always has a
-        // larger index than its parent: one forward pass marks the subtree.
-        let mut dead = Vec::new();
-        dead.resize(self.nodes.len(), false);
         for i in (root + 1)..self.nodes.len() {
-            if let Some(p) = self.nodes[i].parent {
-                if (p == root || dead[p]) && self.nodes[i].alive {
-                    self.nodes[i].alive = false;
-                    dead[i] = true;
-                    count += 1;
-                } else if p == root || dead[p] {
-                    dead[i] = true;
-                }
+            let Some(p) = self.nodes[i].parent else { continue };
+            if self.nodes[i].alive && (p == root || !self.nodes[p].alive) {
+                self.nodes[i].alive = false;
+                count += 1;
             }
         }
         Ok(count)
@@ -314,6 +313,7 @@ impl CapTable {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn setup() -> (CapTable, CSpace) {
@@ -432,5 +432,29 @@ mod tests {
         }
         // Only the 10,000 legitimate mints allocated.
         assert_eq!(t.len(), before + 10_000);
+    }
+
+    #[test]
+    fn repeated_revoke_changes_nothing() {
+        let (mut t, cs) = setup();
+        // A real subtree so the pass has work to do: three generations.
+        let mut child = CSpace::new(4);
+        t.mint(&cs, 0, &mut child, 0, Rights::ALL, 1).unwrap();
+        let mut grandchild = CSpace::new(4);
+        t.mint(&child, 0, &mut grandchild, 0, Rights::ALL, 2).unwrap();
+        let mut dir = CSpace::new(4);
+        t.mint(&cs, 0, &mut dir, 0, Rights::READ, 3).unwrap();
+        assert_eq!(t.revoke(&cs, 0), Ok(3));
+        assert_eq!(t.invoke(&grandchild, 0, Rights::NONE), Err(CapError::Revoked));
+        let nodes = t.len();
+        for _ in 0..10_000 {
+            // Already-revoked subtree: nothing left to kill, nothing to allocate.
+            assert_eq!(t.revoke(&cs, 0), Ok(0));
+            // Revoking a slot with no children, and revoking through a dead
+            // capability, must also stay allocation-free.
+            assert_eq!(t.revoke(&cs, 1), Ok(0));
+            assert_eq!(t.revoke(&child, 0), Err(CapError::Revoked));
+        }
+        assert_eq!(t.len(), nodes);
     }
 }

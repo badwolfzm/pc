@@ -111,7 +111,7 @@ join the process's authority only once that library is actually loaded.
 
 ```sh
 cargo test                      # 23 unit tests across the crates
-tests/kernel/run.sh             # 45 in-guest checks against the kernel
+tests/kernel/run.sh             # 63 in-guest checks against the kernel
 tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
 tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```

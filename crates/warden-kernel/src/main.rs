@@ -72,21 +72,25 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 
     arch::init();
 
+    let mut frames = frames;
+    let (mm_checks, mm_fails) = mm::self_test(&mut frames);
+
     let user_code = unsafe { core::slice::from_raw_parts(us as *const u8, (ue - us) as usize) };
     let mut k = Kernel {
         caps: warden_caps::CapTable::new(), frames, endpoints: alloc::collections::BTreeMap::new(),
-        threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
+        threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: mm_fails, checks: mm_checks,
         cap_nodes_baseline: 0, expected_mints: 2, heap_baseline: 0, host_object: None, // tests 4 and 13 each mint once
     };
-    // One address space per thread: a private copy of the user code, one
-    // private data page, and a 64 KiB stack, all at the same virtual
-    // addresses in every thread.
+    // One address space per thread: a private copy of the user code
+    // (read-only, executable), one private data page and a 64 KiB stack
+    // (writable, never executable), all at the same virtual addresses in
+    // every thread.
     for c in tests::CASES {
         let mut a = mm::AddressSpace::new(&mut k.frames).expect("page tables");
-        a.load(&mut k.frames, mm::USER_BASE, user_code, true).expect("user code");
-        a.map_user(&mut k.frames, tests::DATA_PAGE, true).expect("data page");
+        a.load(&mut k.frames, mm::USER_BASE, user_code, mm::Perm::Code).expect("user code");
+        a.map_user(&mut k.frames, tests::DATA_PAGE, mm::Perm::Data).expect("data page");
         for i in 0..16 {
-            a.map_user(&mut k.frames, tests::STACK_TOP - (i + 1) * mm::PAGE, true).expect("stack");
+            a.map_user(&mut k.frames, tests::STACK_TOP - (i + 1) * mm::PAGE, mm::Perm::Data).expect("stack");
         }
         let t = k.spawn(c.name, c.entry as usize as u64, tests::STACK_TOP, c.budget, c.expect, a);
         thread::root_cap(&mut k, t, 0, ObjectKind::Endpoint, Rights::WRITE, 0);

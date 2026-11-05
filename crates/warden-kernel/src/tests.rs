@@ -83,6 +83,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (26, "isolation: writer reads back its own page", 0x5EC),
     (27, "isolation: reader sees nothing of the writer", 0),
     (28, "isolation: reader's own page is still writable", 0x7),
+    (33, "W^X: code readable, data writable", 1),
 ];
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {
@@ -314,6 +315,59 @@ pub extern "C" fn iso_reader() -> ! {
     loop {}
 }
 
+// ---- W^X -------------------------------------------------------------------
+// Review finding: user code was mapped writable and data executable. Code is
+// now read-only; data and stack pages carry NX. Each of these must die of #PF.
+
+/// Overwrite the first byte of its own code page.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn wx_write_code() -> ! {
+    unsafe { asm!("mov byte ptr [{0}], 0x90", in(reg) USER_BASE, options(nostack)) };
+    // Still here means the write went through: report it, which is a FAIL.
+    unsafe { sys!(0, SLOT_CONSOLE, 30, 1u64) };
+    loop {}
+}
+/// Write `ret` into the data page and call it.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn wx_exec_data() -> ! {
+    unsafe {
+        asm!("mov byte ptr [{0}], 0xC3", in(reg) DATA_PAGE, options(nostack));
+        asm!("call {0}", in(reg) DATA_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 31, 1u64);
+    }
+    loop {}
+}
+/// Write `ret` onto the stack and call it.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn wx_exec_stack() -> ! {
+    unsafe {
+        let p = STACK_TOP - 0x100;
+        asm!("mov byte ptr [{0}], 0xC3", in(reg) p, options(nostack));
+        asm!("call {0}", in(reg) p, options(nostack));
+        sys!(0, SLOT_CONSOLE, 32, 1u64);
+    }
+    loop {}
+}
+/// Legit: read a byte of its own code, write and read the data page, then
+/// exit 0. Proves R-X and RW- still work after the tightening.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn wx_legit() -> ! {
+    unsafe {
+        let v: u64;
+        asm!("movzx {0}, byte ptr [{1}]", out(reg) v, in(reg) USER_BASE, options(nostack));
+        asm!("mov qword ptr [{0}], 0x33", in(reg) DATA_PAGE, options(nostack));
+        let w: u64;
+        asm!("mov {0}, qword ptr [{1}]", out(reg) w, in(reg) DATA_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 33, if w == 0x33 && v <= 0xFF { 1 } else { 0 });
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+
 pub struct Case {
     pub name: &'static str,
     pub entry: extern "C" fn() -> !,
@@ -340,4 +394,8 @@ pub const CASES: &[Case] = &[
     Case { name: "ipc eavesdropper", entry: ipc_eavesdropper, expect: Death::Exited(0), budget: 50 },
     Case { name: "isolation writer", entry: iso_writer, expect: Death::Exited(0), budget: 50 },
     Case { name: "isolation reader", entry: iso_reader, expect: Death::Exited(0), budget: 50 },
+    Case { name: "W^X write own code", entry: wx_write_code, expect: Death::Fault(14), budget: 50 },
+    Case { name: "W^X exec data page", entry: wx_exec_data, expect: Death::Fault(14), budget: 50 },
+    Case { name: "W^X exec stack", entry: wx_exec_stack, expect: Death::Fault(14), budget: 50 },
+    Case { name: "W^X legit", entry: wx_legit, expect: Death::Exited(0), budget: 50 },
 ];

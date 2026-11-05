@@ -63,6 +63,39 @@ int main(void) {
         check_no_events(c, epfd);
     }
     assert(epolls[c->fds[epfd].idx].n == 0);
+
+    /* A close must remove the same watched fd from ALL epoll objects that
+     * belong to the caller, without touching another caller's watch. */
+    int epfd2 = (int)do_epoll_create(c);
+    assert(epfd2 >= 0);
+    int shared = (int)do_socket(c, AF_INET, SOCK_STREAM);
+    assert(shared >= 0);
+    set_event(EPOLLOUT, UINT64_C(0xDEAD));
+    assert(do_epoll_ctl(c, epfd, EPOLL_CTL_ADD, shared) == 0);
+    set_event(EPOLLOUT, UINT64_C(0xBEEF));
+    assert(do_epoll_ctl(c, epfd2, EPOLL_CTL_ADD, shared) == 0);
+
+    struct client *other = &clients[4];
+    static uint8_t otherbuf[BUF_SIZE];
+    other->perms = manifest[4].perms;
+    other->netns = manifest[4].netns;
+    other->buf = otherbuf;
+    int other_epfd = (int)do_epoll_create(other);
+    int other_stream = (int)do_socket(other, AF_INET, SOCK_STREAM);
+    assert(other_epfd >= 0 && other_stream >= 0);
+    struct epoll_event other_ev = {EPOLLOUT, UINT64_C(0xFACE)};
+    memcpy(otherbuf + BUF_DATA_OFF, &other_ev, sizeof other_ev);
+    assert(do_epoll_ctl(other, other_epfd, EPOLL_CTL_ADD, other_stream) == 0);
+    assert(do_close(c, shared) == 0);
+    check_no_events(c, epfd);
+    check_no_events(c, epfd2);
+    assert(do_epoll_wait(other, other_epfd, 8, 0) == 1);
+    struct epoll_event other_got;
+    memcpy(&other_got, otherbuf + BUF_DATA_OFF, sizeof other_got);
+    assert(other_got.data == UINT64_C(0xFACE));
+    assert(do_close(other, other_stream) == 0);
+    assert(do_close(other, other_epfd) == 0);
+    assert(do_close(c, epfd2) == 0);
     assert(do_close(c, epfd) == 0);
     puts("PASS: epoll cleanup prevents stale watcher reuse");
     return 0;

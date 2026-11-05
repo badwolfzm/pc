@@ -10,6 +10,7 @@ const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
 const PF_W: u32 = 2;
+const PF_X: u32 = 1;
 const DT_NULL: i64 = 0;
 const DT_NEEDED: i64 = 1;
 const DT_STRTAB: i64 = 5;
@@ -37,6 +38,7 @@ pub enum Error {
     OutOfBounds, TooManyNeeded, TooManyRelocations,
     InvalidLibraryName, UnsupportedRelocation, TextRelocation,
     UnsupportedDynamicFeature, InvalidInterpreter,
+    OverlappingLoadSegments, WritableAndExecutable,
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -131,6 +133,7 @@ pub fn inspect(bytes: &[u8]) -> Result<Metadata<'_>, Error> {
     let mut loads = [EMPTY_LOAD; MAX_PHDRS];
     let mut nload = 0;
     let mut dyn_slice = None;
+    let mut dyn_va = None;
     let mut interp = None;
     for i in 0..phnum {
         let p = phoff + i * phent;
@@ -145,9 +148,23 @@ pub fn inspect(bytes: &[u8]) -> Result<Metadata<'_>, Error> {
                 if filesz as u64 > memsz || addr.checked_add(memsz).is_none() {
                     return Err(Error::InvalidProgramHeader)
                 }
+                if flags & (PF_W | PF_X) == (PF_W | PF_X) {
+                    return Err(Error::WritableAndExecutable)
+                }
                 region(bytes, off, filesz)?;
-                loads[nload] = Load { addr, memsz, off, filesz, flags };
-                nload += 1;
+                if memsz != 0 {
+                    let start_page = addr / 4096;
+                    let end_page = (addr + memsz - 1) / 4096;
+                    for previous in &loads[..nload] {
+                        let a = previous.addr / 4096;
+                        let b = (previous.addr + previous.memsz - 1) / 4096;
+                        if start_page <= b && a <= end_page {
+                            return Err(Error::OverlappingLoadSegments)
+                        }
+                    }
+                    loads[nload] = Load { addr, memsz, off, filesz, flags };
+                    nload += 1;
+                }
             }
             PT_DYNAMIC => {
                 if dyn_slice.is_some() { return Err(Error::MultipleDynamicTables) }
@@ -155,6 +172,7 @@ pub fn inspect(bytes: &[u8]) -> Result<Metadata<'_>, Error> {
                     return Err(Error::InvalidDynamicTable)
                 }
                 dyn_slice = Some(region(bytes, off, filesz)?);
+                dyn_va = Some(addr);
             }
             PT_INTERP => {
                 if interp.is_some() { return Err(Error::InvalidInterpreter) }
@@ -170,6 +188,13 @@ pub fn inspect(bytes: &[u8]) -> Result<Metadata<'_>, Error> {
         }
     }
     let ds = dyn_slice.ok_or(Error::InvalidDynamicTable)?;
+    // The dynamic table must be the exact file-backed bytes in a PT_LOAD:
+    // a standalone or conflicting program-header mapping is not authority.
+    let mapped = file_va(bytes, &loads[..nload],
+                         dyn_va.ok_or(Error::InvalidDynamicTable)?, ds.len())?;
+    if !core::ptr::eq(ds.as_ptr(), mapped.as_ptr()) {
+        return Err(Error::InvalidDynamicTable)
+    }
     let mut needed_off = [0usize; MAX_NEEDED];
     let mut needed_n = 0usize;
     let mut strtab = None;
@@ -365,6 +390,24 @@ mod tests {
         assert!(matches!(inspect(&b), Err(Error::MultipleDynamicTables)));
         let mut b = valid(); b[INTERP_OFF + 27] = b'X';
         assert!(matches!(inspect(&b), Err(Error::InvalidInterpreter)));
+    }
+    #[test]
+    fn load_permissions_overlap_and_dynamic_mapping_must_be_valid() {
+        let mut b = valid();
+        put_u32(&mut b, 64 + 4, 7); // RWX
+        assert!(matches!(inspect(&b), Err(Error::WritableAndExecutable)));
+        let mut b = valid();
+        // Second PT_LOAD overlaps first by even a single mapped page.
+        ph(&mut b, 2, PT_LOAD, 4, INTERP_OFF, LOAD_VA + 0x800, 28, 32);
+        assert!(matches!(inspect(&b), Err(Error::OverlappingLoadSegments)));
+        let mut b = valid();
+        // Dynamic table points at bytes outside any file-backed LOAD.
+        put_u64(&mut b, 64 + 56 + 16, LOAD_VA + 0x2000);
+        assert!(matches!(inspect(&b), Err(Error::OutOfBounds)));
+        let mut b = valid();
+        // Same virtual address but a different file offset must be rejected.
+        put_u64(&mut b, 64 + 56 + 8, DYN_OFF as u64 + 16);
+        assert!(matches!(inspect(&b), Err(Error::InvalidDynamicTable)));
     }
     #[test]
     fn no_panic_on_10000_mutated_inputs() {

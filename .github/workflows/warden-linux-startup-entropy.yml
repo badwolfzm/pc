@@ -1,0 +1,31 @@
+name: Warden Linux startup entropy guard
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/linux.rs'
+      - 'tests/security/test_linux_auxv_random.py'
+      - '.github/workflows/warden-linux-startup-entropy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auxv-entropy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject predictable AT_RANDOM source
+        run: python3 -m unittest discover -s tests/security -p 'test_linux_auxv_random.py' -v
+      - name: Install kernel and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install Rust target
+        run: rustup target add x86_64-unknown-none
+      - name: Kernel and supporting Rust unit tests
+        run: cargo test --workspace --exclude warden-kernel
+      - name: Boot Warden and execute in-guest suite
+        run: bash tests/kernel/run.sh

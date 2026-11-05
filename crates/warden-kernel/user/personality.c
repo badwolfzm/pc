@@ -27,6 +27,10 @@
 #define MAX_LISTEN 4
 #define MAX_STREAM 8
 #define MAX_EPOLL 16
+/* Fixed reservation: neither compartment can consume the other half. */
+#define STREAMS_PER_NETNS (MAX_STREAM / 2)
+#define LISTENERS_PER_NETNS (MAX_LISTEN / 2)
+#define EPOLLS_PER_NETNS (MAX_EPOLL / 2)
 #define EP_ITEMS 8
 #define BACKLOG 8
 #define RING 32768
@@ -134,6 +138,13 @@ static int fd_alloc(struct client *c, int type, int idx) {
     return -EMFILE;
 }
 static int stream_alloc(int owner) {
+    unsigned ns = clients[owner].netns;
+    int used = 0;
+    if (ns == NETNS_NONE) return -1;
+    for (int i = 0; i < MAX_STREAM; i++)
+        if (streams[i].used && netns_same(ns, clients[streams[i].owner].netns))
+            used++;
+    if (used >= STREAMS_PER_NETNS) return -1;
     for (int i = 0; i < MAX_STREAM; i++)
         if (!streams[i].used) {
             memset(&streams[i], 0, sizeof streams[i]);
@@ -387,6 +398,11 @@ static long do_listen(struct client *c, long fd) {
     struct stream *s = &streams[f->idx];
     if (s->bound_port == 0 || s->connected)
         return -EINVAL;
+    int used_ns = 0;
+    for (int i = 0; i < MAX_LISTEN; i++)
+        if (listeners[i].used && netns_same(c->netns, clients[listeners[i].owner].netns))
+            used_ns++;
+    if (used_ns >= LISTENERS_PER_NETNS) return -ENOMEM;
     int li = -1;
     for (int i = 0; i < MAX_LISTEN; i++)
         if (!listeners[i].used) {
@@ -460,6 +476,11 @@ static long do_connect(struct client *c, long fd, size_t len) {
 }
 
 static long do_epoll_create(struct client *c) {
+    int used_ns = 0;
+    for (int i = 0; i < MAX_EPOLL; i++)
+        if (epolls[i].used && netns_same(c->netns, clients[epolls[i].owner].netns))
+            used_ns++;
+    if (used_ns >= EPOLLS_PER_NETNS) return -ENOMEM;
     int ei = -1;
     for (int i = 0; i < MAX_EPOLL; i++)
         if (!epolls[i].used) {

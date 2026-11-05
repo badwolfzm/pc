@@ -56,9 +56,11 @@ Kernel plan: https://claude.ai/artifact/Npeq8VSVoMrT32Mo69VLLZ
 | #14 | phase3-untyped | Phase 3: untyped memory pays for every kernel object; heap frees and reclaims | Merged |
 | #15 | project-files-sync-4 | Sync MatrixOS wave 2 (codegen, frontend 1.0.2), control plan, board | Merged |
 | #16 | phase2b-isolated-apps | Phase 2b: two isolated applications over a user-space Linux personality server | Merged |
+| #17 | dev-profile-fix | Kernel tests yield inside flood loops so the dev profile passes | Merged |
+| #18 | mxsb-ref | MXSB reference loader, tests F7 wiring, control docs | Merged |
 
-Main is at **cc904bc**. No open PRs. Staged and not yet pushed: the Pong guest
-(needs the 60..64 syscall ruling) and the tests thread's dev-profile fix (below).
+Main is at **2be8761**. No open PRs. Staged and not yet pushed: the Pong guest
+(syscalls 60..64 now granted — unblocked) plus the matrixos/runtime/ game runtime lib.
 
 ## Threads
 
@@ -120,13 +122,14 @@ Workers report here (via bookkeeping); control pulls, PRs and pushes. "Staged"
 | Harden the Phase 0 supervisor | Merged — path races, exec verify, per-process library grants | PR #13 | done |
 | gpusim (GPU prototype) | Merged — simulated memory-based GPU in CPU RAM | PR #10 | done |
 | Game runtime host lib (Run Pong inside Warden) | Delivered, cloud-only: test_runtime 229 pass, ASan/UBSan clean; 720p 0.6–2.8 ms/frame, paced demo 30.8 fps | matrixos/runtime/ (NEW folder) | sync after lead accepts |
-| Pong as a native Warden guest | Delivered, cloud TCG only (not independently verified): pong.sh 15/15 ALL HELD, 30 fps 0 missed slots, 2.7 ms median input latency, heap +0, hostile writer/forger/spinner refused/killed; escape suite 54/54 | handoff/pong-in-warden/ (series/0001 on main 5a817c2, HANDOFF.md, pong-screen.png, pong-serial.log) | needs syscall 60..64 ABI ruling + rebase on aa06bf0 before push |
+| Pong as a native Warden guest | Delivered, cloud TCG only. **v2 rebased on main 2be8761** by the Pong thread (the v1 export no longer git am'd after #18 changed the Kernel struct + heap-free). v2 applies with git am, re-verified: pong.sh 15/15 (29.99 fps, 0 missed slots, 2.6 ms median latency, heap carved 0); run.sh without the feature 131/131 matching main | handoff/pong-in-warden/series/0001 (v2); HANDOFF.md notes the v2 changes | ready for control to apply **v2** (not the earlier export) + syscalls 60..64 granted |
 | MatrixOS sync (canvas fixes, oracles, codegen notes, board) | Merged | PR #12 | done |
 | Run the Linux personality and ELF loader (Phase 2b) | Merged (PR #16) | on main | done |
 | Build two isolated apps running together | Merged (PR #16) — HTTP server + client, two isolated processes, loopback | on main | done |
 | Budget IPC endpoint queues | Fixed-capacity queues landed in #6 — confirm any remaining scope | — | — |
 | MatrixOS codegen + frontend 1.0.2 sync | Merged (PR #15) | on main | done |
-| Tests: dev-profile kernel suite fix | Staged, cloud-VM verified: release 131/131, dev 131/131 | kernel/dev-profile-fix/0001-*.patch (git am on cc904bc; NOTE.md + before/after logs) | push (clean on current main) |
+| Tests: dev-profile kernel suite fix | Merged (PR #17) | on main | done |
+| MXSB reference loader + tests F7 wiring | Merged (PR #18) | on main | done |
 
 **Tests thread results (cloud VM, QEMU 8.2.2 TCG, no KVM, not verified on WSL2/PC):**
 cargo test 23/23, kernel 45/45, escape 44/44, compat 13/13. harden-user-mapping.patch
@@ -196,20 +199,24 @@ module (no new failure vs the frozen baseline; every owned finding fixed).
 - Everything up to PR #8 is on main; anything accepted after #8 is a handoff for the kernel lead to sync.
 - F7 remains interim (codegen's mxsb_contract.c) until contracts/mxsb-ref/ is built by the MXSB thread.
 
-## Open gaps (reported to control)
+## Open items
 
-1. ~~MXSB reference loader not built.~~ **Resolved.** matrixos/contracts/mxsb-ref/ is built and accepted: run_tests.sh 348/0, 0 divergences from codegen (68-file corpus, goldens, 20k mutation fuzz under ASan/UBSan), contract test 43/43. It is now the F7 primary oracle, codegen the second oracle. Ready to sync.
-2. **Contract fixes owed by MXSB thread** (from codegen): missing load-address layout rule, unauthenticated inter-section padding, v1 header is 40 bytes not 32. Needs a minor contract bump + reference loader.
-3. **Canvas and codegen pending acceptance** by the tests thread (order: canvas then codegen).
-4. **Assets owes PATH trace event** in mx_vfs_compat.h read_all/write_all to restore the golden trace hash.
-5. **Next sync PR not yet opened** (fresh project-files-sync from main) with all accepted deliveries since #3.
-6. **Superops triangle rasteriser PC bench pending** (NOT an acceptance gate). The span-threshold fix (scalar below 96 px, SIMD above) is in matrixos/superops/; the perfcheck was reworked to compare only where the paths differ and now passes 3/3 in-container (~20 s each), unit suite 203/203 under ASan/UBSan. Still open: PC runs of `make tri-sweep` and `make perfcheck` (bench thread) to set the 20,000-triangle cap on DESKTOP-9NPQNID; DRAW_TRIANGLES texture sampling rule (next wave); NEON build untested.
-7. ~~Kernel heap reclamation open.~~ **Resolved** in PR #14 (Phase 3): untyped memory pays for every kernel object and the heap frees and reclaims.
-10. **Pong guest needs an ABI ruling:** syscall numbers 60..64 requested from the kernel lead (recorded in CONTROL.md). Blocks the Pong-in-Warden push until assigned. New files: matrixos/runtime/ (game runtime host lib) and control/contracts/runtime.md.
-11. **Dev-profile test false-fail (fixed, staged):** on main cc904bc, PROFILE=dev run.sh killed "capability attacks" and "exhaustion floods" as budget deaths (128 checks, 3 failed). Fix makes the flood loops yield every 512 iterations, no check changed; release 131/131 and dev 131/131 after. Patch at kernel/dev-profile-fix/, not yet pushed.
-12. **User-action blocker — PC/WSL2 verification.** Everything so far is verified on the cloud VM under QEMU TCG only. Nothing is verified on the user's PC (DESKTOP-9NPQNID) or WSL2, which is the stated acceptance target (CONTROL.md decision 5). The tests thread is waiting on the user to reply in its own thread so it can reach the device.
-8. **avx512 tier build-only / not verified** on the target PC (AVX2 only, no AVX-512).
-9. ~~Frontend to take tier flags from codegen's MX_TIER_MARCH[] in mx_tiers.h.~~ **Resolved** in frontend 1.0.2 (sourced from mx_tiers.h with a drift test; pending tests-thread re-acceptance, then a kernel-lead sync handoff).
+1. **PC/WSL2 verification — user-action blocker.** Everything so far is verified on the cloud VM under QEMU TCG only. Nothing is verified on the user's PC (DESKTOP-9NPQNID) or WSL2, the stated acceptance target (CONTROL.md decision 5). The tests thread is waiting on the user to reply in its own thread so it can reach the device.
+2. **Superops triangle PC bench** (NOT an acceptance gate). Span threshold is now per tier (128 px for v128, 96 px for v256, after the tests thread reproduced a real v128 loss at 96 px); perfcheck 3/3, unit suite 203/203. Still open: PC runs of `make tri-sweep` and `make perfcheck` (bench thread) to set the 20,000-triangle cap; DRAW_TRIANGLES texture sampling rule (next wave); NEON build untested.
+3. **avx512 tier build-only / not verified** on the target PC (AVX2 only, no AVX-512).
+4. **Pong + runtime push pending.** Unblocked and rebased: apply **v2** at handoff/pong-in-warden/series/0001 (git am clean on 2be8761, re-verified 15/15), plus matrixos/runtime/ and control/contracts/runtime.md. Do not use the earlier export.
+5. **Confirm the MXSB contract carries the minor bump** codegen reported (load-address layout rule, inter-section padding authentication, 40-byte v1 header). mxsb-ref was accepted with 0 divergences from codegen, so this is likely folded in; verify the contract doc text reflects it.
+
+## Resolved
+
+- MXSB reference loader built and accepted; F7 now has a real oracle (PR #18).
+- Kernel heap reclamation — untyped memory accounting (PR #14).
+- Pong ABI ruling — syscalls 60..64 granted (CONTROL.md 08:40).
+- Dev-profile test false-fail — flood loops yield (PR #17).
+- Frontend tier flags sourced from codegen's mx_tiers.h with a drift test (1.0.2, PR #15).
+- Canvas and codegen accepted; all six modules in the integrated build.
+- Assets trace hash — recorded as a documented integrated golden (GOLDEN_TRACE=0x3b3805a77980eee1).
+- Project-files syncs landed (PRs #12, #15, #18); frontend "no repo" belief moot.
 
 ## Handover and standing integrity checks
 

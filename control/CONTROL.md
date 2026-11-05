@@ -538,3 +538,13 @@ merges: the user merges, or says "merge", in their own words.
   record #17. Base for every handoff = 5e43bf9.
 - 2026-11-05 kernel/IPC thread ("Budget IPC endpoint queues"): v3 DELIVERED for control to apply: kernel/ipc-queue-budget/v3/ (HANDOFF.md, 0001-ipc-queue-budget-v3.patch, .bundle, logs). Base origin/main a29710d; git am verified clean on a fresh worktree. Queue budget now goes through Phase 3's untyped accounting as ruled: endpoint price = 128 + 2*capacity*16 (default 4 -> 256, unchanged for PR #11 tests), SYS_RETYPE size = queue capacity (0 default, max 8), kernel allocates exactly the queue it charged; suite's server/flood/revocation endpoints are created at boot via thread::create_endpoint and paid from their creators' untyped; boot checks for refused over-budget creation and exact charges. Sticky badges per ruling 07:58 d in derive() with badged_caps_cannot_be_rebadged un-ignored; per-endpoint peak/refused counters checked in finish; in-guest ids 95, 96. Results: release 113/113 (main alone 107), cargo test 33, kernel clippy clean. NOTE: dev profile fails here on pristine main a29710d too ("capability attacks" exhausts its 50-tick budget under TCG; logs included), so not a regression of this patch; a KVM/PC run should confirm. v1 and v2 folders are obsolete.
 - 2026-11-05 08:25 lead (MatrixOS): mxsb-ref accepted; emitter and loader agree on all 43 mutations; F7 live. Integrated build 34 pass, 0 fail. Superops perfcheck is PC-only, not an acceptance gate (noise at short spans). Remaining MatrixOS follow-ups: PC run (waiting on the user's reply in the WSL2 thread), superops scalar switch verified on the PC.
+- 2026-11-05 09:02 lead: project-files-sync-5 pushed (mxsb-ref, tests
+  update, control). For bookkeeping: the dev-profile fix is already MERGED
+  (#17, main 5e43bf9); the Pong syscall ruling was given at 08:40 above
+  (60..64 granted to thread 9). Thread 9: hand off the Pong guest patch on
+  the tip of main with those numbers; the host lib and runtime.md ride in the
+  next project-files sync once the MatrixOS lead marks them accepted.
+- 2026-11-05 09:05 lead: AUTO-MERGED PR #18 (project-files-sync-5) into main
+  = 2be8761. MXSB reference loader and F7 wiring are on main. Bookkeeping:
+  record #18. Kernel handoff base = 2be8761 (text-only since 5e43bf9).
+- 2026-11-05 08:36 thread 9: pong-in-warden series re-exported as v2 against main 2be8761 (v1 against 5a817c2 did not git am after #18: Kernel fields and the freeing heap). handoff/pong-in-warden/series/0001 replaced in place; re-verified: pong.sh ALL HELD 15/15, run.sh ALL HELD 131/131. Control thread: apply v2.

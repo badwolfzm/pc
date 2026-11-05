@@ -72,10 +72,13 @@ side of the typed-input vectors. F7 runs against the reference loader (contract 
 
 ## Not an acceptance gate here: superops `make perfcheck`
 
-`bench_tri_sweep --check` requires the default triangle path to be within 25% of forced scalar at every
-span. In this shared container it failed 2 of 3 interleaved runs, every flag at spans under 64 px where
-auto and scalar are the same code (sub-100 ns per row), so the allowance sits inside the machine's noise.
-Runs only count on the user's PC (asked of the bench thread). superops acceptance rests on its unit suite.
+`bench_tri_sweep --check` (revised): at spans >= 96 px the chosen SIMD path must be within 25% of forced
+scalar; below 96 px it only checks that forced SIMD does not beat scalar by 2x. On the first version, 2 of 3
+runs here flagged sub-64 px spans where both paths are the same code (noise). On the revised version, 2 of 3
+runs here flagged span 96 on the v128 tier: SIMD 1.34x and 1.51x slower than scalar, same span and tier each
+time, so that one looks like a real threshold miss for v128 on this CPU rather than noise (reported to
+superops). Runs only count on the user's PC (asked of the bench thread). superops acceptance rests on its
+unit suite (203/203).
 
 ## Evidence rules (short form; full text in the plan)
 

@@ -49,7 +49,7 @@ the backing span anyway, so a validator bug becomes a refused call, not a write.
 | `mxs_fill_rect`, `mxs_clear` | FILL_RECT / CLEAR | scalar, v128, v256 | |
 | `mxs_blit` COPY / ALPHA / ADD | BLIT | all | ALPHA and ADD follow `gpu-commands.md` "Blend arithmetic" bit for bit; `test_blend_oracle` holds the four `rcs_test.c` cases and an exhaustive channel sweep was run against `rcs.c blend_px` |
 | `mxs_line` | LINE, Bresenham, clipped per pixel | scalar only | not a SIMD shape |
-| `mxs_triangle` | DRAW_TRIANGLES flat, same inside test as `rcs.c` | all, with a span threshold | barycentric weights stepped incrementally; rows shorter than `MXS_TRI_SIMD_MIN_SPAN_DEFAULT` (96 px) always run the scalar kernel, longer rows run 32-bit SIMD lanes when the triangle fits a 2^14 window, int64 lanes otherwise (see "Triangle span threshold"). Sampling rule for `texture`/`BAKED` is **not defined yet** (open point 4 of the contract) |
+| `mxs_triangle` | DRAW_TRIANGLES flat, same inside test as `rcs.c` | all, with a span threshold | barycentric weights stepped incrementally; rows shorter than the per-tier threshold (128 px on v128, 96 px on v256) always run the scalar kernel, longer rows run 32-bit SIMD lanes when the triangle fits a 2^14 window, int64 lanes otherwise (see "Triangle span threshold"). Sampling rule for `texture`/`BAKED` is **not defined yet** (open point 4 of the contract) |
 | `mxs_blit_dirty` | copy + per-pixel XOR shadow bit + changed count | all | optional for the canvas thread, which tracks tiles itself |
 | `mxs_vadd_f32`, `mxs_vmul_f32`, `mxs_vfma_f32`, `mxs_vadd_sat_u8` | element-wise | all | VFMA is two roundings (`a*b` then `+d`); never fused, so it equals C under `-ffp-contract=off` |
 | `mxs_reduce_sum_f32`, `mxs_dot_f32` | reductions | all | fixed 8-lane strided order, then a fixed tree; bit-identical on every tier. Differs from a sequential C sum, so the lowering only takes these under fast-math |
@@ -128,14 +128,16 @@ Not verified:
 The lead's PC measurement (i3-14100, `../bench/pc/pc_superops_bench.csv`) showed the
 reverse of the cloud box for 20 000 small triangles: 7.4 ms scalar, 10.4 ms v128, 11.4 ms
 v256. Short rows pay the per-row vector setup and gain nothing. The fix: `mxs_triangle` runs
-the scalar incremental kernel for any row shorter than `MXS_TRI_SIMD_MIN_SPAN_DEFAULT`
-(96 px) and the SIMD kernel otherwise; `mxs_set_tri_simd_min_span()` overrides it (0 forces
-SIMD, `UINT32_MAX` forces scalar).
+the scalar incremental kernel for any row shorter than a per-tier threshold
+(`MXS_TRI_SIMD_MIN_SPAN_V128` = 128 px, `MXS_TRI_SIMD_MIN_SPAN_V256` = 96 px) and the SIMD
+kernel otherwise; `mxs_set_tri_simd_min_span()` overrides both (0 forces SIMD, `UINT32_MAX`
+forces scalar), `mxs_reset_tri_simd_min_span()` restores the defaults.
 
-Why 96: the sweep below (cloud container, 21 interleaved runs per span, median ns per row)
-shows SIMD at best neutral below 64 px and 2 to 3.5× faster from 96 px up, on both tiers.
-The PC data covers only the 20 px case, where scalar wins by 40%; 96 leaves margin for the
-PC's faster scalar core. The bench thread should run `make B=... tri-sweep` on the PC; if SIMD
+Why 96 and 128: the sweep below (cloud container, interleaved runs, median ns per row) shows
+SIMD at best neutral below 64 px on both tiers. v256 wins 2 to 3.5× from 96 px. v128 at 96 px
+was marginal: it won in my sweep but lost 1.3 to 1.5× in two of the tests thread's three runs
+on the same container, and wins clearly from 128 px, so v128 starts at 128. The PC data covers
+only the 20 px case, where scalar wins by 40%. The bench thread should run `make B=... tri-sweep` on the PC; if SIMD
 already wins at 48 or 64 px there, lower the default.
 
 | span px | v128 scalar | v128 SIMD | v256 scalar | v256 SIMD | default path |
@@ -151,8 +153,8 @@ already wins at 48 or 64 px there, lower the default.
 
 Bench-backed check: `make B=/tmp/x perfcheck` builds `bench_tri_sweep --check`, which times
 forced-scalar, forced-SIMD and the default path interleaved (11 runs, order rotated) and fails
-when the default path is a wrong choice: at spans of 96 px and more, if the chosen SIMD path is
-slower than scalar by more than 25%; below 96 px the chosen path is the scalar code itself, so
+when the default path is a wrong choice: at spans at or above the tier's threshold, if the chosen SIMD path is
+slower than scalar by more than 25%; below it the chosen path is the scalar code itself, so
 auto-vs-scalar is not compared (the tests thread showed that comparison is inside this shared
 container's noise), and it fails instead if forced SIMD beats scalar by more than 2x, which
 would mean the threshold is too high on that machine. It is a separate target, not part of the

@@ -19,7 +19,7 @@
 //!   62 KEY          (slot)                -> next scancode or 0
 //!   63 TICKS        (slot)                -> partition timer ticks
 //!   64 REPORT       (console_slot, key, value) -> 0; printed as `report <thread> <key> <value>`
-#![cfg(feature = "pong")]
+#![cfg(any(feature = "pong", feature = "game_probe"))]
 #![allow(clippy::empty_loop)]
 
 use crate::mm::{self, AddressSpace, FrameAlloc, Perm};
@@ -47,8 +47,14 @@ const STACK_TOP: u64 = 0xA0_0000;
 const HOSTILE_CODE: u64 = 0x80_0000;
 const MAX_THREADS: usize = 8;
 
+#[cfg(feature = "pong")]
 static PONG_TEXT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pong_text.bin"));
+#[cfg(feature = "pong")]
 static PONG_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pong_data.bin"));
+#[cfg(feature = "game_probe")]
+static PONG_TEXT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game-probe_text.bin"));
+#[cfg(feature = "game_probe")]
+static PONG_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game-probe_data.bin"));
 
 /// A fallback framebuffer in kernel memory when no VGA device is found, so the
 /// run (and its checks) work on a machine without a display.
@@ -437,7 +443,7 @@ pub fn boot(mem_upper_kib: u32) -> ! {
         map_lfb_into(a.cr3, unsafe { LFB_PD }, disp.lfb);
     }
     let pong_frames = k.frames.used;
-    let pong = k.spawn("pong", CODE_BASE, STACK_TOP, 50, Death::Exited(0), a);
+    let pong = k.spawn(if cfg!(feature = "game_probe") { "game-probe" } else { "pong" }, CODE_BASE, STACK_TOP, 50, Death::Exited(0), a);
     unsafe { PONG_THREAD = pong };
     thread::root_endpoint(&mut k, pong, 0, Rights::WRITE, 1);
     disp.object = Some(thread::root_cap(&mut k, pong, 1, ObjectKind::Frame, Rights::READ.union(Rights::WRITE), 0));
@@ -502,6 +508,19 @@ pub fn finish(k: &mut Kernel) -> ! {
     let (acc, refused, bytes) = unsafe { (PRESENTS[pong][0], PRESENTS[pong][1], PRESENTS[pong][2]) };
     let hostile_acc: u64 = (0..k.threads.len()).filter(|&i| i != pong).map(|i| unsafe { PRESENTS[i.min(MAX_THREADS - 1)][0] }).sum();
     let hostile_ref: u64 = (0..k.threads.len()).filter(|&i| i != pong).map(|i| unsafe { PRESENTS[i.min(MAX_THREADS - 1)][1] }).sum();
+    #[cfg(feature = "game_probe")]
+    {
+        // Exact PR #68 renderer, executed in ring 3 via capability-granted
+        // SYS_PRESENT. Never infer Doom compatibility from this workload.
+        check(k, report(40) == Some(60), "game-probe completed 60 ring-3 frames");
+        check(k, report(41).is_some(), "game-probe reported a frame digest");
+        check(k, acc == 60, "game-probe sent 60 framebuffer presents");
+        check(k, hostile_acc == 0 && hostile_ref > 0, "hostile present attempts were denied");
+        check(k, k.threads[pong].death == Some(Death::Exited(0)), "game-probe exited normally");
+        kprintln!("game-probe: reported digest {:?}, {} accepted presents, {} hostile presents refused", report(41), acc, hostile_ref);
+        kprintln!("{}: {} checks, {} failed", if k.failures == 0 { "ALL HELD" } else { "GAME PROBE FAILED" }, k.checks, k.failures);
+        arch::qemu_exit(if k.failures == 0 { 0 } else { 1 });
+    }
     kprintln!();
     kprintln!("pong: {acc} tile presents accepted ({} KiB to the screen), {refused} refused; hostile presents accepted {hostile_acc}, refused {hostile_ref}; keys seen {}",
         bytes / 1024, unsafe { KEYS_SEEN });

@@ -19,7 +19,27 @@ macro_rules! sys {
              options(nostack));
         r
     }};
+    ($n:expr, $a:expr, $b:expr, $c:expr, $d:expr) => {{
+        let r: u64;
+        asm!("int 0x80", inlateout("rax") $n as u64 => r, in("rdi") $a as u64, in("rsi") $b as u64, in("rdx") $c as u64,
+             in("r10") $d as u64, options(nostack));
+        r
+    }};
 }
+/// retype(untyped_slot, kind, dst_slot, size) -> remaining budget
+macro_rules! retype {
+    ($u:expr, $kind:expr, $dst:expr, $size:expr) => {
+        sys!(4, $u, $kind, $dst, $size)
+    };
+}
+const K_UNTYPED: u64 = 0;
+const K_FRAME: u64 = 1;
+const K_ENDPOINT: u64 = 2;
+const FRAME_COST: u64 = 4096 + 64; // object + its capability node
+const EP_COST: u64 = 256 + 64;
+/// Untyped budget of the memory accountant: exactly three frames.
+pub const ACCOUNTANT_BUDGET: u64 = 3 * FRAME_COST;
+const MAP_PAGE: u64 = 0x91_0000;
 
 const SLOT_CONSOLE: u64 = 0; // Endpoint, WRITE only
 const SLOT_DIR: u64 = 1; // Dir, READ | GRANT
@@ -68,11 +88,11 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (5, "invoke minted copy for WRITE", E_RIGHTS),
     (6, "revoke parent removes 1 child", 1),
     (7, "invoke revoked copy", E_REVOKED),
-    (8, "retype 2 MiB from 1 MiB budget", E_BUDGET),
+    (8, "retype 2 MiB untyped from 1 MiB budget", E_BUDGET),
     (9, "host-exit via slot not held", E_INVALID),
     (10, "mint from cap without GRANT", E_RIGHTS),
-    (11, "retype 1 MiB from 1 MiB budget (legit)", 0),
-    (12, "retype 1 more byte", E_BUDGET),
+    (11, "retype one frame from 1 MiB (legit)", (1 << 20) - FRAME_COST),
+    (12, "retype unknown kind 99", E_KIND),
     (13, "mint into empty slot 5 then invoke", 1),
     (14, "host-exit via console cap (WRITE, wrong object)", E_KIND),
     (15, "5000 mints into an occupied slot: all refused", 0),
@@ -93,7 +113,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (41, "recv via dir cap (READ, wrong kind)", E_KIND),
     (42, "retype via dir cap (wrong kind)", E_KIND),
     (43, "host-exit via untyped cap (ALL rights)", E_KIND),
-    (44, "retype on a minted untyped copy (no budget)", E_BUDGET),
+    (44, "retype through an untyped copy spends the parent's budget", (1 << 20) - FRAME_COST),
     (45, "invoke console asking for every right bit", E_RIGHTS),
     (46, "mint a slot onto itself", E_OCCUPIED),
     (47, "revoke an empty slot", E_INVALID),
@@ -107,14 +127,33 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     // neither succeed nor consume anything. The kernel's heap and capability
     // table checks at the end measure the "consume" half.
     (60, "flood: 5000 retypes past budget: all refused", 0),
-    (61, "flood: budget still 0 afterwards", 0),
-    (62, "flood: 5000 revokes of a childless cap: all 0", 0),
+    (61, "flood: budget reads exactly 0 afterwards", 0),
+    (62, "flood: 5000 revokes of the untyped: first reclaims its child, rest 0", 1),
     (63, "flood: 5000 sends via wrong kind: all refused", 0),
     (64, "flood: 5000 recvs on empty slot: all refused", 0),
     (65, "flood: 5000 invokes of slot 2^32-1: all refused", 0),
     (66, "flood: 5000 mints without GRANT: all refused", 0),
     (67, "flood: 5000 host-exits via console: all refused", 0),
     (68, "flood: 2000 yields come back", 2000),
+    (70, "memory: frame 1 of 3 from untyped", 2 * FRAME_COST),
+    (71, "memory: frame 2 of 3", FRAME_COST),
+    (72, "memory: frame 3 of 3", 0),
+    (73, "memory: frame 4 refused", E_BUDGET),
+    (74, "memory: 5000 over-budget retypes, all refused", 0),
+    (75, "memory: budget still exactly 0 after them", 0),
+    (76, "memory: delete one frame cap frees 1 node", 1),
+    (77, "memory: budget refunded one frame", FRAME_COST),
+    (78, "memory: frame 4 now fits", 0),
+    (79, "memory: map frame, write, read back", 0xABC),
+    (80, "memory: map same frame twice refused", E_OCCUPIED),
+    (81, "memory: map onto an occupied address refused", E_OCCUPIED),
+    (82, "memory: map with READ-only cap as writable refused", E_RIGHTS),
+    (83, "memory: 1000 endpoint create/delete cycles, all consistent", 0),
+    (84, "memory: delete the mapped frame", 1),
+    (85, "memory: budget after deleting the mapped frame", 2 * FRAME_COST),
+    (90, "untyped death: frame cap paid by deleted untyped", E_REVOKED),
+    (91, "untyped death: deleted untyped slot is empty", E_INVALID),
+    (92, "untyped death: delete freed the untyped and its frame (2 nodes)", 2),
 ];
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {
@@ -150,16 +189,17 @@ pub extern "C" fn hostile_caps() -> ! {
         sys!(0, SLOT_CONSOLE, 6, r);
         let r = sys!(1, SLOT_FREE, 0, 0);
         sys!(0, SLOT_CONSOLE, 7, r);
-        let r = sys!(4, SLOT_UNTYPED, 2u64 << 20, 0);
+        let r = retype!(SLOT_UNTYPED, K_UNTYPED, SLOT_FREE, 2u64 << 20);
         sys!(0, SLOT_CONSOLE, 8, r);
         let r = sys!(7, SLOT_HOST, 0, 0);
         sys!(0, SLOT_CONSOLE, 9, r);
         let r = sys!(2, SLOT_CONSOLE, SLOT_LOCK, 0x1F);
         sys!(0, SLOT_CONSOLE, 10, r);
-        let r = sys!(4, SLOT_UNTYPED, 1u64 << 20, 0);
+        let r = retype!(SLOT_UNTYPED, K_FRAME, SLOT_FREE, 0);
         sys!(0, SLOT_CONSOLE, 11, r);
-        let r = sys!(4, SLOT_UNTYPED, 1, 0);
+        let r = retype!(SLOT_UNTYPED, 99u64, SLOT_EMPTY, 0);
         sys!(0, SLOT_CONSOLE, 12, r);
+        let _ = sys!(10, SLOT_FREE, 0, 0); // delete the frame again
         // Legit attenuation: mint console (no GRANT) is refused above, so mint
         // from the dir cap failed too after revoke? No: revoke kills children,
         // not the parent. Mint a READ-only copy into slot 5 and read it.
@@ -431,16 +471,18 @@ pub extern "C" fn wrong_kind() -> ! {
         let (r, _, _, _, _, _) = recv!(SLOT_DIR);
         sys!(0, SLOT_CONSOLE, 41, r);
         // Dir is not untyped memory.
-        let r = sys!(4, SLOT_DIR, 1u64, 0);
+        let r = retype!(SLOT_DIR, K_FRAME, SLOT_FREE, 0);
         sys!(0, SLOT_CONSOLE, 42, r);
         // ALL rights on untyped memory do not reach the machine.
         let r = sys!(7, SLOT_UNTYPED, 0, 0);
         sys!(0, SLOT_CONSOLE, 43, r);
-        // A copy of the untyped cap keeps the rights but not the budget: the
-        // parent's budget cannot be spent twice through a derived cap.
+        // A copy of the untyped cap names the same memory: spending through
+        // the copy spends the parent's budget, never a second one.
         let _ = sys!(2, SLOT_UNTYPED, SLOT_FREE, 0x1F);
-        let r = sys!(4, SLOT_FREE, 1u64, 0);
+        let _ = retype!(SLOT_FREE, K_FRAME, SLOT_LOCK, 0);
+        let r = sys!(12, SLOT_UNTYPED, 0, 0);
         sys!(0, SLOT_CONSOLE, 44, r);
+        let _ = sys!(10, SLOT_LOCK, 0, 0); // give the frame back; slot 5 is empty again
         // Bits above Rights::ALL are masked off; asking for 0xFF is asking
         // for ALL, which the WRITE-only console does not have.
         let r = sys!(1, SLOT_CONSOLE, 0xFFu64, 0);
@@ -495,29 +537,29 @@ pub extern "C" fn ipc_victim() -> ! {
 #[inline(never)]
 pub extern "C" fn exhaust() -> ! {
     unsafe {
-        // Spend the whole budget legitimately, then hammer it.
-        let _ = sys!(4, SLOT_UNTYPED, 1u64 << 20, 0);
+        // Spend the whole budget legitimately (one child untyped that costs
+        // exactly the 1 MiB with its node), then hammer it.
+        let _ = retype!(SLOT_UNTYPED, K_UNTYPED, SLOT_FREE, (1u64 << 20) - 64);
         let mut bad = 0u64;
         let mut i = 0u64;
         while i < 5000 {
-            if sys!(4, SLOT_UNTYPED, 1u64 << 20, 0) != E_BUDGET {
+            if retype!(SLOT_UNTYPED, K_FRAME, SLOT_LOCK, 0) != E_BUDGET {
                 bad += 1;
             }
             i += 1;
         }
         sys!(0, SLOT_CONSOLE, 60, bad);
-        // retype of 0 bytes reports the remaining budget without spending.
-        let r = sys!(4, SLOT_UNTYPED, 0, 0);
+        let r = sys!(12, SLOT_UNTYPED, 0, 0);
         sys!(0, SLOT_CONSOLE, 61, r);
-        let mut bad = 0u64;
+        // Revoking the untyped takes the child untyped it paid for (1 node,
+        // and the whole budget comes back); every later revoke finds nothing.
+        let mut sum = 0u64;
         let mut i = 0u64;
         while i < 5000 {
-            if sys!(3, SLOT_UNTYPED, 0, 0) != 0 {
-                bad += 1;
-            }
+            sum += sys!(3, SLOT_UNTYPED, 0, 0);
             i += 1;
         }
-        sys!(0, SLOT_CONSOLE, 62, bad);
+        sys!(0, SLOT_CONSOLE, 62, sum);
         let mut bad = 0u64;
         let mut i = 0u64;
         while i < 5000 {
@@ -616,43 +658,158 @@ pub extern "C" fn yield_forever_then_exit() -> ! {
     loop {}
 }
 
+/// Phase 3: everything a thread creates is paid for from its untyped memory,
+/// a refused request consumes nothing, and what it frees it can use again.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn memory_accountant() -> ! {
+    unsafe {
+        // Slots 2, 5, 7 take frames; slot 6 is the one that must fail.
+        let r = retype!(SLOT_UNTYPED, K_FRAME, SLOT_FREE, 0);
+        sys!(0, SLOT_CONSOLE, 70, r);
+        let r = retype!(SLOT_UNTYPED, K_FRAME, SLOT_LOCK, 0);
+        sys!(0, SLOT_CONSOLE, 71, r);
+        let r = retype!(SLOT_UNTYPED, K_FRAME, SLOT_EMPTY, 0);
+        sys!(0, SLOT_CONSOLE, 72, r);
+        let r = retype!(SLOT_UNTYPED, K_FRAME, SLOT_EP, 0);
+        sys!(0, SLOT_CONSOLE, 73, r);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if retype!(SLOT_UNTYPED, K_FRAME, SLOT_EP, 0) != E_BUDGET {
+                bad += 1;
+            }
+            if retype!(SLOT_UNTYPED, K_ENDPOINT, SLOT_EP, 0) != E_BUDGET {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 74, bad);
+        let r = sys!(12, SLOT_UNTYPED, 0, 0);
+        sys!(0, SLOT_CONSOLE, 75, r);
+        let r = sys!(10, SLOT_EMPTY, 0, 0);
+        sys!(0, SLOT_CONSOLE, 76, r);
+        let r = sys!(12, SLOT_UNTYPED, 0, 0);
+        sys!(0, SLOT_CONSOLE, 77, r);
+        let r = retype!(SLOT_UNTYPED, K_FRAME, SLOT_EP, 0);
+        sys!(0, SLOT_CONSOLE, 78, r);
+        // Map the first frame, use it.
+        let r = sys!(11, SLOT_FREE, MAP_PAGE, 1);
+        let v: u64;
+        if r == 0 {
+            asm!("mov qword ptr [{0}], 0xABC", in(reg) MAP_PAGE, options(nostack));
+            asm!("mov {0}, qword ptr [{1}]", out(reg) v, in(reg) MAP_PAGE, options(nostack));
+        } else {
+            v = r;
+        }
+        sys!(0, SLOT_CONSOLE, 79, v);
+        let r = sys!(11, SLOT_FREE, MAP_PAGE + 0x1000, 1);
+        sys!(0, SLOT_CONSOLE, 80, r);
+        let r = sys!(11, SLOT_LOCK, MAP_PAGE, 1);
+        sys!(0, SLOT_CONSOLE, 81, r);
+        // Free frame 4 (slot 6) so there is budget for a 64-byte node again.
+        let _ = sys!(10, SLOT_EP, 0, 0);
+        // A READ|MAP copy of frame 2 may not be mapped writable. Slot 7 is
+        // free again (deleted above); free the copy afterwards.
+        let _ = sys!(2, SLOT_LOCK, SLOT_EMPTY, 1u64 | 8u64);
+        let r = sys!(11, SLOT_EMPTY, MAP_PAGE + 0x2000, 1);
+        sys!(0, SLOT_CONSOLE, 82, r);
+        let _ = sys!(10, SLOT_EMPTY, 0, 0);
+        // Churn: an endpoint created and deleted 1000 times must always fit,
+        // cost the same, and leave the budget where it was.
+        let base = sys!(12, SLOT_UNTYPED, 0, 0);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 1000 {
+            if retype!(SLOT_UNTYPED, K_ENDPOINT, SLOT_EMPTY, 0) != base - EP_COST {
+                bad += 1;
+            }
+            if sys!(10, SLOT_EMPTY, 0, 0) != 1 {
+                bad += 1;
+            }
+            if sys!(12, SLOT_UNTYPED, 0, 0) != base {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 83, bad);
+        // Delete the mapped frame: the kernel unmaps it and the page below
+        // is gone. Budget: frames in slots 2 and 5 were held; now only 5.
+        let r = sys!(10, SLOT_FREE, 0, 0);
+        sys!(0, SLOT_CONSOLE, 84, r);
+        let r = sys!(12, SLOT_UNTYPED, 0, 0);
+        sys!(0, SLOT_CONSOLE, 85, r);
+        // Touching the unmapped page is a #PF; the thread dies holding one
+        // frame (slot 5), which teardown must return.
+        let v: u64;
+        asm!("mov {0}, qword ptr [{1}]", out(reg) v, in(reg) MAP_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 99, v);
+    }
+    loop {}
+}
+
+/// Deleting an untyped takes every object it paid for, mapped or not.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn untyped_death() -> ! {
+    unsafe {
+        let _ = retype!(SLOT_UNTYPED, K_FRAME, SLOT_FREE, 0);
+        let _ = sys!(11, SLOT_FREE, MAP_PAGE, 1);
+        asm!("mov qword ptr [{0}], 0x77", in(reg) MAP_PAGE, options(nostack));
+        let n = sys!(10, SLOT_UNTYPED, 0, 0);
+        let r = sys!(1, SLOT_FREE, 0, 0);
+        sys!(0, SLOT_CONSOLE, 90, r);
+        let r = sys!(12, SLOT_UNTYPED, 0, 0);
+        sys!(0, SLOT_CONSOLE, 91, r);
+        sys!(0, SLOT_CONSOLE, 92, n);
+        let v: u64;
+        asm!("mov {0}, qword ptr [{1}]", out(reg) v, in(reg) MAP_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 99, v);
+    }
+    loop {}
+}
+
 pub struct Case {
     pub name: &'static str,
     pub entry: extern "C" fn() -> !,
     pub expect: Death,
     pub budget: u32,
+    /// Bytes of untyped memory in slot 3.
+    pub untyped: u64,
 }
 
 pub const CASES: &[Case] = &[
-    Case { name: "capability attacks", entry: hostile_caps, expect: Death::Fault(14), budget: 50 },
-    Case { name: "cli", entry: hostile_cli, expect: Death::Fault(13), budget: 50 },
-    Case { name: "hlt", entry: hostile_hlt, expect: Death::Fault(13), budget: 50 },
-    Case { name: "infinite loop", entry: hostile_spin, expect: Death::Budget, budget: 5 },
-    Case { name: "out to debug-exit port", entry: hostile_outport, expect: Death::Fault(13), budget: 50 },
-    Case { name: "int 0x81", entry: hostile_badvector, expect: Death::Fault(13), budget: 50 },
-    Case { name: "read kernel memory", entry: hostile_readkernel, expect: Death::Fault(14), budget: 50 },
-    Case { name: "jump into kernel code", entry: hostile_callkernel, expect: Death::Fault(14), budget: 50 },
-    Case { name: "mov cr3", entry: hostile_cr3, expect: Death::Fault(13), budget: 50 },
-    Case { name: "rdmsr", entry: hostile_rdmsr, expect: Death::Fault(13), budget: 50 },
-    Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::Fault(6), budget: 50 },
-    Case { name: "stack outside partition", entry: hostile_stack_outside, expect: Death::Fault(14), budget: 50 },
-    Case { name: "write own code (W^X)", entry: hostile_write_code, expect: Death::Fault(14), budget: 50 },
-    Case { name: "execute data page (NX)", entry: hostile_exec_data, expect: Death::Fault(14), budget: 50 },
-    Case { name: "execute stack (NX)", entry: hostile_exec_stack, expect: Death::Fault(14), budget: 50 },
-    Case { name: "flood sender 1", entry: flood_sender, expect: Death::Budget, budget: 50 },
-    Case { name: "flood sender 2", entry: flood_sender, expect: Death::Budget, budget: 50 },
-    Case { name: "flood sender 3", entry: flood_sender_last, expect: Death::Exited(0), budget: 50 },
-    Case { name: "good citizen", entry: good_citizen, expect: Death::Exited(7), budget: 50 },
-    Case { name: "ipc server", entry: ipc_server, expect: Death::Exited(0), budget: 50 },
-    Case { name: "ipc client", entry: ipc_client, expect: Death::Exited(0), budget: 50 },
-    Case { name: "ipc eavesdropper", entry: ipc_eavesdropper, expect: Death::Exited(0), budget: 50 },
-    Case { name: "isolation writer", entry: iso_writer, expect: Death::Exited(0), budget: 50 },
-    Case { name: "isolation reader", entry: iso_reader, expect: Death::Exited(0), budget: 50 },
-    Case { name: "wrong-kind caps", entry: wrong_kind, expect: Death::Exited(0), budget: 50 },
-    Case { name: "ipc revoker", entry: ipc_revoker, expect: Death::Exited(0), budget: 50 },
-    Case { name: "ipc victim", entry: ipc_victim, expect: Death::Exited(0), budget: 50 },
-    Case { name: "exhaustion floods", entry: exhaust, expect: Death::Exited(0), budget: 50 },
-    Case { name: "stack overflow", entry: stack_overflow, expect: Death::Fault(14), budget: 50 },
-    Case { name: "data page overrun", entry: data_page_overrun, expect: Death::Fault(14), budget: 50 },
-    Case { name: "yield then exit", entry: yield_forever_then_exit, expect: Death::Exited(9), budget: 2 },
+    Case { name: "capability attacks", entry: hostile_caps, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "cli", entry: hostile_cli, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
+    Case { name: "hlt", entry: hostile_hlt, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
+    Case { name: "infinite loop", entry: hostile_spin, expect: Death::Budget, budget: 5, untyped: 1 << 20 },
+    Case { name: "out to debug-exit port", entry: hostile_outport, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
+    Case { name: "int 0x81", entry: hostile_badvector, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
+    Case { name: "read kernel memory", entry: hostile_readkernel, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "jump into kernel code", entry: hostile_callkernel, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "mov cr3", entry: hostile_cr3, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
+    Case { name: "rdmsr", entry: hostile_rdmsr, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
+    Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::Fault(6), budget: 50, untyped: 1 << 20 },
+    Case { name: "stack outside partition", entry: hostile_stack_outside, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "write own code (W^X)", entry: hostile_write_code, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "execute data page (NX)", entry: hostile_exec_data, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "execute stack (NX)", entry: hostile_exec_stack, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "flood sender 1", entry: flood_sender, expect: Death::Budget, budget: 50, untyped: 1 << 20 },
+    Case { name: "flood sender 2", entry: flood_sender, expect: Death::Budget, budget: 50, untyped: 1 << 20 },
+    Case { name: "flood sender 3", entry: flood_sender_last, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "good citizen", entry: good_citizen, expect: Death::Exited(7), budget: 50, untyped: 1 << 20 },
+    Case { name: "ipc server", entry: ipc_server, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "ipc client", entry: ipc_client, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "ipc eavesdropper", entry: ipc_eavesdropper, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "isolation writer", entry: iso_writer, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "isolation reader", entry: iso_reader, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "wrong-kind caps", entry: wrong_kind, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "ipc revoker", entry: ipc_revoker, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "ipc victim", entry: ipc_victim, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "exhaustion floods", entry: exhaust, expect: Death::Exited(0), budget: 50, untyped: 1 << 20 },
+    Case { name: "stack overflow", entry: stack_overflow, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "data page overrun", entry: data_page_overrun, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
+    Case { name: "yield then exit", entry: yield_forever_then_exit, expect: Death::Exited(9), budget: 2, untyped: 1 << 20 },
+    Case { name: "memory accountant", entry: memory_accountant, expect: Death::Fault(14), budget: 50, untyped: ACCOUNTANT_BUDGET },
+    Case { name: "untyped death", entry: untyped_death, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
 ];

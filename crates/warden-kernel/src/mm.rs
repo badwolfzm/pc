@@ -6,6 +6,7 @@
 //! private page table of 4 KiB frames, so one thread's user memory is never
 //! visible to another.
 
+use alloc::vec::Vec;
 use core::ptr;
 
 pub const PAGE: u64 = 4096;
@@ -31,27 +32,48 @@ extern "C" {
     static boot_pd0: [u64; 512];
 }
 
-/// Bump allocator over physical memory above the kernel and the boot image.
+/// Physical frame allocator: a free list of returned frames in front of a
+/// bump pointer over the memory above the kernel and the boot image.
 pub struct FrameAlloc {
+    start: u64,
     next: u64,
     end: u64,
+    free: Vec<u64>,
+    /// Frames currently handed out (net).
     pub used: u64,
 }
 
 impl FrameAlloc {
     pub fn new(start: u64, end: u64) -> Self {
-        FrameAlloc { next: start, end, used: 0 }
+        FrameAlloc { start, next: start, end, free: Vec::with_capacity(64), used: 0 }
     }
     /// A zeroed 4 KiB frame. Physical == virtual in the kernel identity map.
+    /// A frame freed earlier is reused before fresh memory is touched.
     pub fn alloc(&mut self) -> Option<u64> {
-        if self.next + PAGE > self.end {
-            return None;
-        }
-        let f = self.next;
-        self.next += PAGE;
+        let f = match self.free.pop() {
+            Some(f) => f,
+            None => {
+                if self.next + PAGE > self.end {
+                    return None;
+                }
+                let f = self.next;
+                self.next += PAGE;
+                f
+            }
+        };
         self.used += 1;
         unsafe { ptr::write_bytes(f as *mut u8, 0, PAGE as usize) };
         Some(f)
+    }
+    /// Return a frame. The caller guarantees no page table maps it any more.
+    pub fn free(&mut self, frame: u64) {
+        debug_assert!(frame.is_multiple_of(PAGE));
+        self.used -= 1;
+        self.free.push(frame);
+    }
+    /// Frames ever taken from fresh memory (high-water mark).
+    pub fn high_water(&self) -> u64 {
+        (self.next - self.start) / PAGE
     }
 }
 
@@ -81,23 +103,54 @@ impl AddressSpace {
         Some(AddressSpace { cr3: pml4, pt_user })
     }
 
-    /// Map a fresh zeroed frame at `va` inside the user window. Every check
-    /// runs before the frame is allocated, so a refused mapping costs nothing.
-    pub fn map_user(&mut self, fa: &mut FrameAlloc, va: u64, perm: Perm) -> Option<u64> {
+    fn pte(&self, va: u64) -> Option<*mut u64> {
         if !(USER_BASE..USER_END).contains(&va) || !va.is_multiple_of(PAGE) {
             return None;
         }
         let idx = ((va - USER_BASE) / PAGE) as usize;
-        let e = unsafe { (self.pt_user as *mut u64).add(idx) };
+        Some(unsafe { (self.pt_user as *mut u64).add(idx) })
+    }
+
+    /// Map an existing frame at `va` inside the user window. Fails if the
+    /// address is outside the window or already mapped (the frame is then
+    /// untouched and still the caller's to free). W^X: `Rw` is NX.
+    pub fn map_frame(&mut self, frame: u64, va: u64, perm: Perm) -> Option<()> {
+        let e = self.pte(va)?;
         if unsafe { *e } & P != 0 {
             return None;
         }
-        let frame = fa.alloc()?;
         let bits = match perm {
             Perm::Rx => P | U,
             Perm::Rw => P | U | W | NX,
         };
         unsafe { *e = frame | bits };
+        Some(())
+    }
+
+    /// Unmap `va`; returns the frame that was there. Flushes the TLB entry
+    /// (the kernel also reloads CR3 on every return to user space).
+    pub fn unmap(&mut self, va: u64) -> Option<u64> {
+        let e = self.pte(va)?;
+        unsafe {
+            if *e & P == 0 {
+                return None;
+            }
+            let frame = *e & 0x000F_FFFF_FFFF_F000;
+            *e = 0;
+            core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+            Some(frame)
+        }
+    }
+
+    /// Map a fresh zeroed frame at `va` inside the user window. Every check
+    /// runs before the frame is allocated, so a refused mapping costs nothing.
+    pub fn map_user(&mut self, fa: &mut FrameAlloc, va: u64, perm: Perm) -> Option<u64> {
+        let e = self.pte(va)?;
+        if unsafe { *e } & P != 0 {
+            return None;
+        }
+        let frame = fa.alloc()?;
+        self.map_frame(frame, va, perm).expect("checked free");
         Some(frame)
     }
 

@@ -195,6 +195,7 @@ static mxsb_err decode_impl(const uint8_t *buf, size_t len, mxsb_image *im, mxsb
             return fail(d, MXSB_E_TABLE, "V9", "section table read failed");
         /* V10 */
         if (res != 0) return fail(d, MXSB_E_TABLE, "V10", "entry %u reserved != 0", i);
+        if (t[i].type == 0) return fail(d, MXSB_E_TABLE, "V10", "entry %u has type 0 (refused; 8..0x7FFF are reserved and skipped)", i);
         bool mem = t[i].type == MXSB_S_TEXT || t[i].type == MXSB_S_DATA || t[i].type == MXSB_S_BSS;
         if (!mem && t[i].flags != 0) return fail(d, MXSB_E_TABLE, "V10", "entry %u (type %u) has flags 0x%x", i, t[i].type, t[i].flags);
         if (t[i].type == MXSB_S_TEXT && t[i].flags != (MXSB_SF_R | MXSB_SF_X)) return fail(d, MXSB_E_TABLE, "V10", "TEXT flags must be R+X");
@@ -238,7 +239,7 @@ static mxsb_err decode_impl(const uint8_t *buf, size_t len, mxsb_image *im, mxsb
         return fail(d, MXSB_E_MISSING_SECTION, "V15", "MANIFEST, TEXT and SIGNATURE are required");
     /* V16 */
     if (t[idx[MXSB_S_SIGNATURE]].size != MXSB_SIGNATURE_SIZE) return fail(d, MXSB_E_TABLE, "V16", "SIGNATURE size != 96");
-    if (idx[MXSB_S_SUPEROPS] >= 0 && t[idx[MXSB_S_SUPEROPS]].size % 4 != 0) return fail(d, MXSB_E_TABLE, "V16", "SUPEROPS size not a multiple of 4");
+    if (idx[MXSB_S_SUPEROPS] >= 0 && (t[idx[MXSB_S_SUPEROPS]].size % 4 != 0 || t[idx[MXSB_S_SUPEROPS]].size > 256 * 4)) return fail(d, MXSB_E_TABLE, "V16", "SUPEROPS size not a multiple of 4 or more than 256 ids");
     if (t[idx[MXSB_S_MANIFEST]].size > MXSB_MANIFEST_MAX) return fail(d, MXSB_E_TABLE, "V16", "MANIFEST > 64 KiB");
     if (idx[MXSB_S_BUILD_INFO] >= 0 && t[idx[MXSB_S_BUILD_INFO]].size > MXSB_BUILD_INFO_MAX) return fail(d, MXSB_E_TABLE, "V16", "BUILD_INFO > 64 KiB");
     /* V17 */

@@ -1,0 +1,26 @@
+mxsb v2.0 header_size=64 flags=0x0 sections=6 entry_off=4576 caps_summary=0x39 file_size=17136
+  digest sha256=169336e7e6c5f01d7e2aa5a3da663d8fe58ee4d8533eede633465c9e2d89bd0c
+  [ 0] MANIFEST   type=1     flags=--- offset=256      size=216
+       | mxsb-manifest 1
+       | name codegen-golden-guest
+       | abi native
+       | build_id 83415302b75d2b9873871ab0c6bcd8856b5f05b826fb993341187022fe797743
+       | require clock=coarse
+       | require fs.read=/sandbox/assets
+       | require render
+       | require superop=blit
+  [ 1] TEXT       type=2     flags=R-X offset=480      size=12288
+  [ 2] DATA       type=3     flags=RW- offset=12768    size=4096
+  [ 3] SUPEROPS   type=5     flags=--- offset=16864    size=4
+       | 19(blit)
+  [ 4] BUILD_INFO type=7     flags=--- offset=16880    size=147
+       | format=mxsb-2.0
+       | profile=matrixos
+       | simd_tier=multi
+       | toolchain=clang+mxsb_emit
+       | load_base=0x0
+       | pie=0
+       | layout=text-then-data-page-aligned
+       | golden=codegen-1
+  [ 5] SIGNATURE  type=6     flags=--- offset=17040    size=96
+       | key_id=3b07500bb5019e7dc7f6fb786764126c5122d9d54e18d2575c91580f9a60073c

@@ -17,6 +17,8 @@ canvas: | $(OUT)
 	$(OUT)/gc_dirty_oracle
 
 mxsb: | $(OUT)
+	$(CC) $(CFLAGS) $(SAN) -D_GNU_SOURCE -DMXSB_CONTRACT_REF -I$(MX)/contracts/mxsb-ref -o $(OUT)/mxsb_contract_ref mxsb/mxsb_contract.c $(MX)/contracts/mxsb-ref/mxsb_load.c
+	$(OUT)/mxsb_contract_ref
 	$(CC) $(CFLAGS) $(SAN) -D_GNU_SOURCE -I$(MX)/codegen/mxsb -o $(OUT)/mxsb_contract mxsb/mxsb_contract.c $(MX)/codegen/mxsb/mxsb.c
 	$(OUT)/mxsb_contract
 

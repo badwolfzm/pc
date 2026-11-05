@@ -1,0 +1,7 @@
+# Container for the codegen golden guest (goldens/codegen/manifest.txt):
+# exactly what it requires and nothing more.
+[grants]
+fs.read = ["/sandbox/assets"]
+render = true
+superops = ["blit"]
+clock = "coarse"

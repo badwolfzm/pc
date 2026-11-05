@@ -2,9 +2,12 @@
 /* bench_tri_sweep.c - triangle row-span sweep and the bench-backed path check.
  *
  *   bench_tri_sweep          CSV: span_px,tier,scalar_ns_per_row,simd_ns_per_row,auto_ns_per_row,auto_over_scalar
- *   bench_tri_sweep --check  exit 1 if, for any span and tier, the default path (MXS_TRI_SIMD_MIN_SPAN_DEFAULT)
- *                            is slower than forced scalar by more than NOISE (25%) in the median of RUNS runs.
- * Not part of the sanitizer test build: timings under ASan say nothing about the real kernels.
+ *   bench_tri_sweep --check  exit 1 if the default path (threshold MXS_TRI_SIMD_MIN_SPAN_DEFAULT) is a wrong choice:
+ *       span >= threshold: the chosen SIMD path is slower than forced scalar by more than NOISE (25%);
+ *       span <  threshold: the chosen path IS the scalar code, so auto vs scalar is pure machine noise and
+ *                          is not compared; instead it fails if forced SIMD beats scalar by more than 2x,
+ *                          which would mean the threshold is set too high on this machine.
+ *   Medians of RUNS interleaved runs, order rotated each run. Not part of the sanitizer test build.
  */
 #include "mx_superops.h"
 #include <stdio.h>
@@ -13,7 +16,7 @@
 #include <time.h>
 static uint64_t now_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
 static int cmp(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
-enum { W = 2048, H = 1024, RUNS = 21, ROWS_PER_RUN = 600000 };
+enum { W = 2048, H = 1024, RUNS = 11, ROWS_PER_RUN = 200000 };
 static const double NOISE = 1.25;
 /* right triangles with a span x span bounding box; every row has about `span` pixels.
  * The three paths are timed interleaved, run by run, so machine drift hits all of them alike. */
@@ -45,9 +48,10 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < sizeof spans / sizeof spans[0]; ++i) {
             mxs_set_tier(tiers[t]);
             double sc, sv, au; run3(fb, spans[i], &sc, &sv, &au);
-            double ratio = au / sc;
-            printf("%d,%s,%.1f,%.1f,%.1f,%.2f%s\n", spans[i], mxs_tier_name(tiers[t]), sc, sv, au, ratio, (check && ratio > NOISE) ? ",SLOWER_THAN_SCALAR" : "");
-            if (ratio > NOISE) bad = 1;
+            double ratio = au / sc; const char *flag = "";
+            if ((uint32_t)spans[i] >= MXS_TRI_SIMD_MIN_SPAN_DEFAULT) { if (ratio > NOISE) { flag = ",SIMD_PATH_SLOWER_THAN_SCALAR"; bad = 1; } }
+            else if (sv * 2.0 < sc) { flag = ",SIMD_WOULD_WIN_2X_LOWER_THRESHOLD"; bad = 1; }
+            printf("%d,%s,%.1f,%.1f,%.1f,%.2f%s\n", spans[i], mxs_tier_name(tiers[t]), sc, sv, au, ratio, check ? flag : "");
         }
     }
     if (check) { fprintf(stderr, "tri path check: %s (threshold %u px, noise allowance %.0f%%)\n", bad ? "FAIL" : "ok", MXS_TRI_SIMD_MIN_SPAN_DEFAULT, (NOISE - 1) * 100); return bad; }

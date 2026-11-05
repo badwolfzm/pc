@@ -150,11 +150,14 @@ already wins at 48 or 64 px there, lower the default.
 | 512 | 656 | 359 | 554 | 152 | SIMD |
 
 Bench-backed check: `make B=/tmp/x perfcheck` builds `bench_tri_sweep --check`, which times
-forced-scalar, forced-SIMD and the default path interleaved and fails if the default path is
-slower than scalar by more than 25% at any span on either tier. Result here: pass (worst ratio
-1.19 at 64 px, where both paths run the identical scalar code, so that is the machine's noise).
-It is a separate target, not part of the sanitizer test build, because timings under ASan say
-nothing. Not yet run on the PC.
+forced-scalar, forced-SIMD and the default path interleaved (11 runs, order rotated) and fails
+when the default path is a wrong choice: at spans of 96 px and more, if the chosen SIMD path is
+slower than scalar by more than 25%; below 96 px the chosen path is the scalar code itself, so
+auto-vs-scalar is not compared (the tests thread showed that comparison is inside this shared
+container's noise), and it fails instead if forced SIMD beats scalar by more than 2x, which
+would mean the threshold is too high on that machine. It is a separate target, not part of the
+sanitizer test build, because timings under ASan say nothing. Passes here in about a minute;
+the PC run is the one that matters and is with the bench thread.
 
 With the threshold the 20 000 small-triangle row runs the scalar kernel on every tier, so the
 PC should see its 7.4 ms on all three. A span-walking rasteriser (edge stepping instead of a

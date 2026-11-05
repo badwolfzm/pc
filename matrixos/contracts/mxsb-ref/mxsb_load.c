@@ -423,6 +423,7 @@ mxsb_ld_err mxsb_ld_check(const uint8_t *buf, size_t len, const mxsb_ld_policy *
     }
     /* V20 */
     memcpy(im->key_id, buf + tsig->offset, 32);
+    if (pol && pol->digest_only) { im->text_off = tx->offset; im->text_size = tx->size; return MXSB_LD_OK; }
     if (!pol || !pol->skip_signature) {
         bool all_zero = true; for (uint32_t k = 0; k < 96; ++k) if (buf[tsig->offset + k]) { all_zero = false; break; }
         if (all_zero) {

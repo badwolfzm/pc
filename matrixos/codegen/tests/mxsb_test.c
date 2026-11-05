@@ -91,6 +91,10 @@ static void mutation_tests(void) {
     RESET(); wr32(b + entry_off(&im, ti) + 4, MXSB_SF_R | MXSB_SF_W | MXSB_SF_X); expect_result(b, len, (expect){"V10 TEXT RWX", MXSB_E_TABLE, "V10"});
     RESET(); wr32(b + entry_off(&im, di) + 4, MXSB_SF_R | MXSB_SF_X); expect_result(b, len, (expect){"V10 DATA R+X", MXSB_E_TABLE, "V10"});
     RESET(); wr32(b + entry_off(&im, mi) + 4, MXSB_SF_R); expect_result(b, len, (expect){"V10 MANIFEST has flags", MXSB_E_TABLE, "V10"});
+    RESET(); wr32(b + entry_off(&im, bii), 0); expect_result(b, len, (expect){"V10 type 0 refused", MXSB_E_TABLE, "V10"});
+    RESET(); wr32(b + entry_off(&im, bii), 9); expect_result(b, len, (expect){"reserved type 9 skipped", MXSB_OK, "ok"});
+    RESET(); wr32(b + entry_off(&im, bii), 9); wr32(b + entry_off(&im, bii) + 4, 1); expect_result(b, len, (expect){"V10 reserved type with flags", MXSB_E_TABLE, "V10"});
+    RESET(); wr64(b + entry_off(&im, soi) + 16, 257 * 4); expect_result(b, len, (expect){"V16 SUPEROPS > 256 ids (bounds permitting)", MXSB_E_BOUNDS, "V11"});
     RESET(); wr64(b + entry_off(&im, ti) + 8, im.sec[ti].offset + 8); expect_result(b, len, (expect){"V11 misaligned", MXSB_E_BOUNDS, "V11"});
     RESET(); wr64(b + entry_off(&im, mi) + 8, 64); expect_result(b, len, (expect){"V11 inside table", MXSB_E_BOUNDS, "V11"});
     RESET(); wr64(b + entry_off(&im, ti) + 16, 0); expect_result(b, len, (expect){"V11 size 0", MXSB_E_BOUNDS, "V11"});

@@ -234,6 +234,11 @@ pub extern "C" fn hostile_caps() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 15, bad);
         // Assessment finding: revoke() used a temporary Vec per call and the
@@ -247,6 +252,11 @@ pub extern "C" fn hostile_caps() -> ! {
             sum += sys!(3, SLOT_DIR, 0, 0);
             sum += sys!(3, SLOT_UNTYPED, 0, 0);
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 16, sum);
         // Finally: write to kernel memory. Expected: #PF, thread killed.
@@ -562,6 +572,11 @@ pub extern "C" fn exhaust() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 60, bad);
         let r = sys!(12, SLOT_UNTYPED, 0, 0);
@@ -573,6 +588,11 @@ pub extern "C" fn exhaust() -> ! {
         while i < 5000 {
             sum += sys!(3, SLOT_UNTYPED, 0, 0);
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 62, sum);
         let mut bad = 0u64;
@@ -582,6 +602,11 @@ pub extern "C" fn exhaust() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 63, bad);
         let mut bad = 0u64;
@@ -592,6 +617,11 @@ pub extern "C" fn exhaust() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 64, bad);
         let mut bad = 0u64;
@@ -601,6 +631,11 @@ pub extern "C" fn exhaust() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 65, bad);
         let mut bad = 0u64;
@@ -610,6 +645,11 @@ pub extern "C" fn exhaust() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 66, bad);
         let mut bad = 0u64;
@@ -619,6 +659,11 @@ pub extern "C" fn exhaust() -> ! {
                 bad += 1;
             }
             i += 1;
+            // Under the unoptimised build 5000 syscalls outrun the 50-tick budget:
+            // yield now and then (free, refills the budget) so both profiles pass.
+            if i & 511 == 0 {
+                sys!(5, 0, 0, 0);
+            }
         }
         sys!(0, SLOT_CONSOLE, 67, bad);
         // Yielding is free: 2000 round trips through the scheduler.

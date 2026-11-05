@@ -14,7 +14,8 @@ DT_NEEDED, DT_STRTAB, DT_STRSZ and RELA relocation tables.
 - No heap allocation, unsafe code, executable loading, relocation writes
   or host filesystem access.
 - Strict header bounds, no more than 64 program headers, 16 dependencies,
-  or 64 relocation records.
+  or 64 relocation records. Refuse overlapping PT_LOAD pages, W+X load
+  segments, and PT_DYNAMIC pointers not backed by the matching PT_LOAD bytes.
 - All inspected string/relocation virtual addresses must map into the
   file-backed portion of an ELF PT_LOAD segment.
 - Only R_X86_64_RELATIVE relocations with symbol index zero are recognized.
@@ -26,8 +27,7 @@ DT_NEEDED, DT_STRTAB, DT_STRSZ and RELA relocation tables.
 
 ## Evidence and explicit limits
 
-The PR runs unit tests with malformed inputs and 10,000 deterministic
-mutations in GitHub CI, clippy, and a no_std cross-target check.
+Verified in GitHub-hosted CI run [42014039451](https://github.com/badwolfzm/pc/actions/runs/42014039451): **10 Rust tests passed, 0 failed**, including 10,000 deterministic malformed-input mutations; **Clippy -D warnings passed**; **x86_64-unknown-none no_std cargo check passed**. This is parser-level evidence, not a kernel boot or execution test.
 
 **This does not implement a dynamic linker or run Linux software.**
 No library loading, per-process address-space assembly, relocation

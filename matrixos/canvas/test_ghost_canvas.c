@@ -169,7 +169,33 @@ static void test_deterministic_hash(void) {
     printf("golden ghost hash (480x270, 30 scripted frames): %016llx\n", (unsigned long long)hs[0]);
 }
 
+/* Regression for the baseline bench: XORing identical per-iteration values over an
+ * even number of iterations cancels to 0, so "output consumed" proved nothing.
+ * The fixed mixing (iteration index folded in, whole buffer hashed) must be
+ * nonzero, and must change when one pixel changes. */
+static uint64_t fnv_mix(uint64_t h, const void *d, size_t n) {
+    const uint8_t *p = (const uint8_t *)d; if (!h) h = 1469598103934665603ULL;
+    for (size_t k = 0; k < n; ++k) { h ^= p[k]; h *= 1099511628211ULL; } return h;
+}
+static void test_consumed_hash_does_not_cancel(void) {
+    uint64_t old = 0, fixed = 0, fixed2 = 0;
+    for (uint64_t i = 0; i < 18; ++i) {
+        gc_canvas c; CHECK(gc_init(&c, 480, 270) == 0);
+        for (int f = 0; f < 30; ++f) { gc_clear(&c, 0x101010u + (uint32_t)(f & 0x1F)); gc_rect(&c, (f * 3) % 300, 20, 80, 50, 0xFFAA00); gc_present(&c, NULL, NULL); }
+        uint64_t changed = c.last.pixels_emitted;
+        old ^= changed ^ c.work[12345];                                   /* baseline scheme */
+        fixed ^= fnv_mix(fixed ^ (i + 1) * 0x9E3779B97F4A7C15ULL, c.work, 480 * 270 * 4) ^ (changed * (i + 1));
+        if (i == 17) c.work[777] ^= 1;                                      /* one pixel differs */
+        fixed2 ^= fnv_mix(fixed2 ^ (i + 1) * 0x9E3779B97F4A7C15ULL, c.work, 480 * 270 * 4) ^ (changed * (i + 1));
+        gc_free(&c);
+    }
+    CHECK(old == 0);          /* the baseline's cancellation, reproduced */
+    CHECK(fixed != 0);
+    CHECK(fixed != fixed2);
+}
+
 int main(void) {
+    test_consumed_hash_does_not_cancel();
     test_first_present_sends_everything();
     test_old_toggle_loses_abc();
     test_aba_is_suppressed();

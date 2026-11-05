@@ -5,6 +5,7 @@
 # Findings 2 and 7 have no code to test yet and print SKIP with the reason.
 #
 # Usage: security_regressions.sh <matrixos_v9.c> <swrap.c> [CC]
+#   ASSETS_DIR=<matrixos/assets copy on a writable disk>  also runs F1/F1b against the asset store API
 set -uo pipefail
 SRC="$1"; WRAP="$2"; CC="${3:-gcc}"
 WORK="$(mktemp -d)"; cd "$WORK" || exit 1
@@ -15,6 +16,43 @@ t(){ local name="$1" want="$2" got="$3"; if [[ "$got" == *"$want"* ]]; then echo
 skip(){ echo "SKIP $1: $2"; }
 SAN="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
 export ASAN_OPTIONS=detect_leaks=0:halt_on_error=1
+
+# ---- F1/F1b against the asset store (module API) when ASSETS_DIR is set --------
+# The asset store owns findings 1 and 1b. It has no mx_vfs-shaped API, so the
+# same two findings are driven through asset_store_open_beneath().
+if [[ -n "${ASSETS_DIR:-}" ]]; then
+  mkdir -p store; echo "OUTSIDE SECRET" > outside.txt; ln -sf ../outside.txt store/link.txt
+  echo "inside" > store/inner.txt; ln -sf inner.txt store/innerlink.txt; mkdir -p store/sub; ln -sf .. store/sub/up
+  cat > f1a.c <<'C'
+#include "asset_store.h"
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <unistd.h>
+static void try(asset_store *s, const char *name, const char *rel){ errno=0; int fd=asset_store_open_beneath(s,rel); printf("%s fd=%d errno=%d\n", name, fd<0?-1:0, fd<0?errno:0); if(fd>=0) close(fd); }
+int main(void){ asset_store *s=NULL; asset_store_config cfg; memset(&cfg,0,sizeof cfg);
+  if(asset_store_open("./store",&cfg,&s)!=0){ printf("open rc!=0\n"); return 1; }
+  try(s,"symlink_out","link.txt"); try(s,"dotdot","../outside.txt"); try(s,"absolute","/etc/passwd");
+  try(s,"symlink_in","innerlink.txt"); try(s,"dir_symlink_up","sub/up/outside.txt"); try(s,"plain","inner.txt");
+  char *g=malloc(601); memset(g,'a',600); g[600]=0; try(s,"len600",g); g[550]=0; try(s,"len550",g); g[129]=0; try(s,"len129",g); free(g);
+  asset_store_close(s); return 0; }
+C
+  $CC -O1 -w -D_GNU_SOURCE -I"$ASSETS_DIR" -o f1a f1a.c "$ASSETS_DIR/asset_store.c" -pthread && O="$(./f1a)"
+  echo "     $(tr '\n' ' ' <<<"$O")"
+  t "F1 asset store refuses symlink pointing out of the root"   "symlink_out fd=-1" "$O"
+  t "F1 asset store refuses ../ out of the root"                "dotdot fd=-1" "$O"
+  t "F1 asset store refuses absolute paths"                     "absolute fd=-1" "$O"
+  t "F1 asset store refuses a directory symlink climbing out"   "dir_symlink_up fd=-1" "$O"
+  t "F1 asset store still opens a plain file beneath the root"  "plain fd=0" "$O"
+  t "F1 outside file untouched"                                 "OUTSIDE SECRET" "$(cat outside.txt)"
+  t "F1b asset store refuses a 600-byte relpath"                "len600 fd=-1" "$O"
+  t "F1b asset store refuses a 550-byte relpath"                "len550 fd=-1" "$O"
+  t "F1b asset store refuses a 129-byte relpath (its own limit is 128)" "len129 fd=-1" "$O"
+  # Sanitizer run uses gcc: this container has no clang ASan runtime (libclang_rt.asan missing), a toolchain gap, not a module defect.
+  cd "$ASSETS_DIR" 2>/dev/null && ASSET_SAN="$(make -s clean >/dev/null 2>&1; CC=gcc make -s asan 2>&1 | tail -1; make -s clean >/dev/null 2>&1)"; cd "$WORK"
+  t "F1 asset store own tests pass under ASan/UBSan (gcc)"      "0 failed" "$ASSET_SAN"
+fi
 
 # ---- F1: symlink inside the sandbox must not be followed out of it ----------
 mkdir -p sandbox; echo "OUTSIDE SECRET" > outside.txt; ln -sf ../outside.txt sandbox/link.txt

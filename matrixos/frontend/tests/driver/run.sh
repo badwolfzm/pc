@@ -102,8 +102,8 @@ done
 mkdir -p fakebin; printf '#!/bin/sh\necho PLANTED; exit 0\n' > fakebin/clang; chmod +x fakebin/clang
 out="$(PATH="$PWD/fakebin:$PATH" "$MXCC" -S t.c -o t.s 2>&1)"; [[ "$out" != *PLANTED* && -s t.s ]] && ok "planted clang in PATH is not run" || bad "PATH hijack" "$out"
 out="$(PATH="$PWD/fakebin" "$MXCC" --cc=/usr/bin/clang -S t.c -o t2.s 2>&1)"; [ -s t2.s ] && ok "absolute --cc works with hostile PATH" || bad "absolute cc" "$out"
-rc "a world-writable compiler path is refused" 2 --cc="$PWD/fakebin/clang" -S t.c -o t3.s  # fakebin/clang not under allowed dirs and relative-ish? it is absolute: check mode
-chmod o+w fakebin/clang 2>/dev/null
+chmod 0777 fakebin/clang
+rc "a world-writable compiler binary is refused even by absolute path" 2 --cc="$PWD/fakebin/clang" -S t.c -o t3.s
 
 # --- real compiles (need clang and gcc installed)
 for cc in clang gcc; do

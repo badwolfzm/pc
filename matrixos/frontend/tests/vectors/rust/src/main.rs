@@ -1,6 +1,7 @@
 //! Check tests/vectors/cells.vec against the kernel's Rust cell model.
 //!
-//! The kernel file is included verbatim at build time from the path in the
+//! The kernel file is included at build time (build.rs strips only its `//!`
+//! doc comments, which include! cannot take) from the path in the
 //! WARDEN_CELLS_RS environment variable (default: the Phase 0 tarball layout),
 //! so this binary tests the real kernel code, not a copy.
 //!
@@ -10,7 +11,7 @@ extern crate alloc;
 
 #[allow(dead_code)]
 mod cells {
-    include!(env!("WARDEN_CELLS_RS"));
+    include!(env!("WARDEN_CELLS_INCLUDED"));
 }
 use cells::{widen, Cell, CTRL_END, INPUT_MAX};
 

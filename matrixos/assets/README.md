@@ -38,12 +38,14 @@ Addresses finding 1 (symlink escape) and the over-long path finding from `matrix
 - The opened object must be a regular file (`fstat` + `S_ISREG`), so a directory or device under a chunk name is refused.
 - Paths longer than 128 bytes are refused with `ENAMETOOLONG` before the syscall. Nothing is truncated.
 - Every chunk is read in full and its SHA-256 compared with the manifest's before it becomes resident; a file longer than the manifest says is a mismatch too. The manifest's own bytes are hashed and must equal its file name.
+- A hard link inside the store to a file outside it is not something `openat2` can refuse: a hard link is the same inode, not a path crossing. It is covered by the content check instead: the linked file's bytes do not match the chunk hash in the manifest, so the read fails with `ASSET_ERR_HASH` and nothing becomes resident. An attacker who can create hard links in the store can therefore cause a load failure, never a read of foreign bytes into a guest. (Noted by the tests thread; no test, since it needs the same filesystem and the outcome is the ordinary hash failure path already tested.)
 - Residency is bounded by `hot_set_bytes`. A mip that can never fit is refused at `asset_want`; one that does not fit now evicts only mips with a worse priority, and fails with `ASSET_ERR_BUDGET` otherwise, so a greedy caller cannot push out a more important one.
 
 ## Verified (run here, on this container: Linux 6.18, 4 cores, ext4 on a virtual disk)
 
 - `make test`: 47 passed, 0 failed, under `gcc -O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion`.
-- `make asan`: same 47 pass under AddressSanitizer + UndefinedBehaviorSanitizer, no reports.
+- `make asan`: same 47 pass under AddressSanitizer + UndefinedBehaviorSanitizer with gcc, no reports. (clang ASan cannot link in this container; the tests thread confirmed the plain build under clang 18.)
+- The tests thread's independent harness, `matrixos/tests/security_regressions.sh` with `ASSETS_DIR=<writable copy of this folder>`, passes 9 of 9 against this module (symlink out of root, `../`, absolute path, climbing directory symlink, 129/550/600-byte paths).
 - Jail checks that pass: symlink file → `../` (ELOOP), path through a symlinked directory (ELOOP), absolute symlink (ELOOP), `../` escape, absolute path (EINVAL), directory as chunk, symlinked manifest through `asset_open` (`ASSET_ERR_ESCAPE`), 6000-byte path (ENAMETOOLONG) also when a file with the truncated name exists.
 - Corruption check: one byte flipped in a chunk of the blob → `ASSET_EV_FAILED` with `ASSET_ERR_HASH`, nothing resident, `asset_map` answers `ASSET_NOT_READY`.
 - `make bench` (32 × 4 MiB assets + 128 × 64 KiB chunks, page cache warm because the harness just wrote them; this is NOT the user's drive):

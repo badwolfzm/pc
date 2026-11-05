@@ -65,31 +65,40 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     // Physical frames for page tables and user memory: 32 MiB up to the end
     // of the high memory QEMU reported.
     let mem_end = 0x10_0000 + (hi as u64) * 1024;
-    let frames = mm::FrameAlloc::new(32 << 20, mem_end.min(1 << 30));
+    let mut frames = mm::FrameAlloc::new(32 << 20, mem_end.min(1 << 30));
     let (us, ue) = (core::ptr::addr_of!(__user_start) as u64, core::ptr::addr_of!(__user_end) as u64);
     kprintln!("kernel ends at {kend:#x}; user partition code {us:#x}..{ue:#x} in page {:#x}..{:#x}", tests::USER_BASE, tests::USER_END);
     assert!(us >= tests::USER_BASE && ue <= tests::USER_BASE + (1 << 20), "user code must sit in the user page");
 
     arch::init();
 
+    // Review finding: a refused mapping must not consume a frame.
+    let frames_before = frames.used;
+    let mm_ok = mm::self_test(&mut frames);
+    kprintln!("{} mm self-test: refused mappings allocate nothing ({} frames for the probe space)", if mm_ok { "PASS" } else { "FAIL" }, frames.used - frames_before);
     let user_code = unsafe { core::slice::from_raw_parts(us as *const u8, (ue - us) as usize) };
     let mut k = Kernel {
         caps: warden_caps::CapTable::new(), frames, endpoints: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
         cap_nodes_baseline: 0, expected_mints: 2, heap_baseline: 0, host_object: None, // tests 4 and 13 each mint once
     };
+    k.checks += 1;
+    if !mm_ok {
+        k.failures += 1;
+    }
     // One address space per thread: a private copy of the user code, one
     // private data page, and a 64 KiB stack, all at the same virtual
     // addresses in every thread.
     for c in tests::CASES {
         let mut a = mm::AddressSpace::new(&mut k.frames).expect("page tables");
-        a.load(&mut k.frames, mm::USER_BASE, user_code, true).expect("user code");
-        a.map_user(&mut k.frames, tests::DATA_PAGE, true).expect("data page");
+        // W^X: code is read-only and executable, data and stack never execute.
+        a.load(&mut k.frames, mm::USER_BASE, user_code, mm::Perm::Rx).expect("user code");
+        a.map_user(&mut k.frames, tests::DATA_PAGE, mm::Perm::Rw).expect("data page");
         for i in 0..16 {
-            a.map_user(&mut k.frames, tests::STACK_TOP - (i + 1) * mm::PAGE, true).expect("stack");
+            a.map_user(&mut k.frames, tests::STACK_TOP - (i + 1) * mm::PAGE, mm::Perm::Rw).expect("stack");
         }
         let t = k.spawn(c.name, c.entry as usize as u64, tests::STACK_TOP, c.budget, c.expect, a);
-        thread::root_cap(&mut k, t, 0, ObjectKind::Endpoint, Rights::WRITE, 0);
+        thread::root_endpoint(&mut k, t, 0, Rights::WRITE, 1);
         thread::root_cap(&mut k, t, 1, ObjectKind::Dir, Rights::READ.union(Rights::GRANT), 0);
         thread::root_cap(&mut k, t, 3, ObjectKind::Untyped, Rights::ALL, 1 << 20);
         // Slot 4, the host capability, is minted for nobody.
@@ -99,9 +108,17 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let server = k.threads.iter().position(|t| t.name == "ipc server").unwrap();
     let client = k.threads.iter().position(|t| t.name == "ipc client").unwrap();
     let eaves = k.threads.iter().position(|t| t.name == "ipc eavesdropper").unwrap();
-    thread::root_cap(&mut k, server, 6, ObjectKind::Endpoint, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 0);
+    thread::root_endpoint(&mut k, server, 6, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 4);
     thread::mint_to(&mut k, server, 6, client, 6, Rights::WRITE, 42);
     thread::mint_to(&mut k, server, 6, eaves, 6, Rights::WRITE, 7);
+    // Flood target: an endpoint nobody ever receives on, with room for two
+    // waiting senders. Three threads send; the third must be refused, not
+    // queued in freshly allocated kernel memory.
+    let flood: alloc::vec::Vec<usize> = ["flood sender 1", "flood sender 2", "flood sender 3"]
+        .iter().map(|n| k.threads.iter().position(|t| t.name == *n).unwrap()).collect();
+    thread::root_endpoint(&mut k, flood[0], 8, Rights::WRITE.union(Rights::GRANT), 2);
+    thread::mint_to(&mut k, flood[0], 8, flood[1], 8, Rights::WRITE, 0);
+    thread::mint_to(&mut k, flood[0], 8, flood[2], 8, Rights::WRITE, 0);
     k.cap_nodes_baseline = k.caps.len();
     k.heap_baseline = heap::used();
     kprintln!("{} ring-3 threads in {} address spaces, {} frames ({} KiB) allocated, {} bytes of kernel heap; starting the partition timer",

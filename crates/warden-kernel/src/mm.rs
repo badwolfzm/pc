@@ -16,6 +16,16 @@ const P: u64 = 1; // present
 const W: u64 = 1 << 1; // writable
 const U: u64 = 1 << 2; // user
 const HUGE: u64 = 1 << 7;
+const NX: u64 = 1 << 63;
+
+/// What a user mapping may do. There is no writable-and-executable option.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Perm {
+    /// Read and execute: code.
+    Rx,
+    /// Read and write, never execute: data and stacks.
+    Rw,
+}
 
 extern "C" {
     static boot_pd0: [u64; 512];
@@ -71,29 +81,43 @@ impl AddressSpace {
         Some(AddressSpace { cr3: pml4, pt_user })
     }
 
-    /// Map a fresh zeroed frame at `va` inside the user window.
-    pub fn map_user(&mut self, fa: &mut FrameAlloc, va: u64, writable: bool) -> Option<u64> {
+    /// Map a fresh zeroed frame at `va` inside the user window. Every check
+    /// runs before the frame is allocated, so a refused mapping costs nothing.
+    pub fn map_user(&mut self, fa: &mut FrameAlloc, va: u64, perm: Perm) -> Option<u64> {
         if !(USER_BASE..USER_END).contains(&va) || !va.is_multiple_of(PAGE) {
             return None;
         }
-        let frame = fa.alloc()?;
         let idx = ((va - USER_BASE) / PAGE) as usize;
-        unsafe {
-            let e = (self.pt_user as *mut u64).add(idx);
-            if *e & P != 0 {
-                return None;
-            }
-            *e = frame | P | U | if writable { W } else { 0 };
+        let e = unsafe { (self.pt_user as *mut u64).add(idx) };
+        if unsafe { *e } & P != 0 {
+            return None;
         }
+        let frame = fa.alloc()?;
+        let bits = match perm {
+            Perm::Rx => P | U,
+            Perm::Rw => P | U | W | NX,
+        };
+        unsafe { *e = frame | bits };
         Some(frame)
     }
 
+    /// Is `va` mapped in this space's user window?
+    pub fn is_mapped(&self, va: u64) -> bool {
+        if !(USER_BASE..USER_END).contains(&va) {
+            return false;
+        }
+        let idx = ((va - USER_BASE) / PAGE) as usize;
+        unsafe { *(self.pt_user as *const u64).add(idx) & P != 0 }
+    }
+
     /// Copy `bytes` into the user window at `va`, mapping pages as needed.
-    pub fn load(&mut self, fa: &mut FrameAlloc, va: u64, bytes: &[u8], writable: bool) -> Option<()> {
+    /// Code pages are written here through the kernel's identity map and are
+    /// then read-only for the user.
+    pub fn load(&mut self, fa: &mut FrameAlloc, va: u64, bytes: &[u8], perm: Perm) -> Option<()> {
         let mut off = 0usize;
         while off < bytes.len() {
             let page_va = (va + off as u64) & !(PAGE - 1);
-            let frame = self.map_user(fa, page_va, writable)?;
+            let frame = self.map_user(fa, page_va, perm)?;
             let in_page = ((va + off as u64) - page_va) as usize;
             let n = core::cmp::min(PAGE as usize - in_page, bytes.len() - off);
             unsafe { ptr::copy_nonoverlapping(bytes.as_ptr().add(off), (frame as usize + in_page) as *mut u8, n) };
@@ -106,3 +130,20 @@ impl AddressSpace {
 /// Keep the HUGE flag name used; silences dead-code when not referenced.
 #[allow(dead_code)]
 const _: u64 = HUGE;
+
+/// Boot-time self-test of the allocation rule: a refused mapping (duplicate,
+/// misaligned, outside the window) must not consume a frame.
+pub fn self_test(fa: &mut FrameAlloc) -> bool {
+    let Some(mut a) = AddressSpace::new(fa) else { return false };
+    if a.map_user(fa, USER_BASE, Perm::Rw).is_none() {
+        return false;
+    }
+    let before = fa.used;
+    let refused = a.map_user(fa, USER_BASE, Perm::Rw).is_none()
+        && a.map_user(fa, USER_BASE + 1, Perm::Rw).is_none()
+        && a.map_user(fa, USER_END, Perm::Rw).is_none()
+        && a.map_user(fa, 0x10_0000, Perm::Rx).is_none()
+        && a.is_mapped(USER_BASE)
+        && !a.is_mapped(USER_BASE + PAGE);
+    refused && fa.used == before
+}

@@ -56,6 +56,8 @@ const E_REVOKED: u64 = -(4i64) as u64;
 const E_BUDGET: u64 = -(5i64) as u64;
 const E_KIND: u64 = -(6i64) as u64;
 const E_OCCUPIED: u64 = -(2i64) as u64;
+const E_QUEUE_FULL: u64 = -(7i64) as u64;
+const SLOT_FLOOD: u64 = 8; // Endpoint with queue capacity 2 and no receiver, held by the three flood senders
 
 /// (id, name, expected observed value)
 pub const EXPECT: &[(u64, &str, u64)] = &[
@@ -83,6 +85,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (26, "isolation: writer reads back its own page", 0x5EC),
     (27, "isolation: reader sees nothing of the writer", 0),
     (28, "isolation: reader's own page is still writable", 0x7),
+    (29, "IPC: third sender on a full endpoint queue refused", E_QUEUE_FULL),
 ];
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {
@@ -230,6 +233,60 @@ pub extern "C" fn hostile_stack_outside() -> ! {
     unsafe { asm!("mov rsp, {0}; push rax", in(reg) 0x20_0000u64, options(nomem)) };
     loop {}
 }
+/// W^X: user code is mapped read-only. Writing one byte into our own text
+/// must fault, not patch the program.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn hostile_write_code() -> ! {
+    unsafe { asm!("mov byte ptr [{0}], 0x90", in(reg) USER_BASE, options(nostack)) };
+    loop {}
+}
+/// W^X: data pages are NX. Write `ud2` into the data page and call it. With
+/// NX honoured this is a #PF (instruction fetch); without it the ud2 would
+/// run and report #UD, so the test tells the two apart.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn hostile_exec_data() -> ! {
+    unsafe {
+        asm!("mov word ptr [{0}], 0x0B0F; call {0}", in(reg) DATA_PAGE, options(nostack));
+    }
+    loop {}
+}
+/// NX also covers the stack: push `ud2` and jump to it.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn hostile_exec_stack() -> ! {
+    unsafe {
+        asm!("sub rsp, 16; mov word ptr [rsp], 0x0B0F; jmp rsp", options(nostack));
+    }
+    loop {}
+}
+/// Flood senders: nobody ever receives on SLOT_FLOOD. The first two block in
+/// the endpoint's fixed queue and are reported as deadlocked; the third,
+/// which yields first so that the other two have queued, is refused.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn flood_sender() -> ! {
+    unsafe {
+        send!(SLOT_FLOOD, 1u64, 1u64, 1u64, 1u64);
+    }
+    loop {}
+}
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn flood_sender_last() -> ! {
+    unsafe {
+        let mut i = 0u64;
+        while i < 4 {
+            sys!(5, 0, 0, 0);
+            i += 1;
+        }
+        let r = send!(SLOT_FLOOD, 1u64, 1u64, 1u64, 1u64);
+        sys!(0, SLOT_CONSOLE, 29, r);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
 #[link_section = ".user"]
 #[inline(never)]
 pub extern "C" fn good_citizen() -> ! {
@@ -334,6 +391,12 @@ pub const CASES: &[Case] = &[
     Case { name: "rdmsr", entry: hostile_rdmsr, expect: Death::Fault(13), budget: 50 },
     Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::Fault(6), budget: 50 },
     Case { name: "stack outside partition", entry: hostile_stack_outside, expect: Death::Fault(14), budget: 50 },
+    Case { name: "write own code (W^X)", entry: hostile_write_code, expect: Death::Fault(14), budget: 50 },
+    Case { name: "execute data page (NX)", entry: hostile_exec_data, expect: Death::Fault(14), budget: 50 },
+    Case { name: "execute stack (NX)", entry: hostile_exec_stack, expect: Death::Fault(14), budget: 50 },
+    Case { name: "flood sender 1", entry: flood_sender, expect: Death::Budget, budget: 50 },
+    Case { name: "flood sender 2", entry: flood_sender, expect: Death::Budget, budget: 50 },
+    Case { name: "flood sender 3", entry: flood_sender_last, expect: Death::Exited(0), budget: 50 },
     Case { name: "good citizen", entry: good_citizen, expect: Death::Exited(7), budget: 50 },
     Case { name: "ipc server", entry: ipc_server, expect: Death::Exited(0), budget: 50 },
     Case { name: "ipc client", entry: ipc_client, expect: Death::Exited(0), budget: 50 },

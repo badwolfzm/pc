@@ -398,6 +398,14 @@ static long do_listen(struct client *c, long fd) {
     struct stream *s = &streams[f->idx];
     if (s->bound_port == 0 || s->connected)
         return -EINVAL;
+    /* A prior bind is only a reservation on this socket, not a listener.
+     * Enforce (namespace, port) exclusivity again at listen time so that
+     * bind(A), bind(B), listen(A), listen(B) cannot publish two listeners.
+     * Distinct namespaces may continue to reuse the same port. */
+    for (int i = 0; i < MAX_LISTEN; i++)
+        if (listeners[i].used && listeners[i].port == s->bound_port &&
+            netns_same(c->netns, clients[listeners[i].owner].netns))
+            return -EADDRINUSE;
     int used_ns = 0;
     for (int i = 0; i < MAX_LISTEN; i++)
         if (listeners[i].used && netns_same(c->netns, clients[listeners[i].owner].netns))

@@ -6,7 +6,7 @@
 //! continuation, so there is nothing to preempt inside the kernel.
 
 use crate::arch;
-use crate::mm::{AddressSpace, FrameAlloc};
+use crate::mm::{AddressSpace, FrameAlloc, Perm};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
@@ -104,20 +104,34 @@ pub struct Thread {
     pub logs: u32,
 }
 
+/// Kernel-side state of a Frame object a thread created from untyped memory.
+pub struct FrameRec {
+    pub phys: u64,
+    /// Where it is mapped: (thread index, user virtual address).
+    pub mapped: Option<(usize, u64)>,
+}
+
 pub struct Kernel {
     pub caps: CapTable,
     pub frames: FrameAlloc,
     pub endpoints: BTreeMap<u32, Endpoint>,
+    /// Backing frames of user-created Frame objects, by object id.
+    pub user_frames: BTreeMap<u32, FrameRec>,
     pub threads: Vec<Thread>,
     pub current: usize,
     pub ticks: u64,
     pub failures: u32,
     pub checks: u32,
-    /// Capability nodes after setup; tests may add exactly `expected_mints`.
+    /// Node arena size after setup; the run may add at most a few entries
+    /// (freed entries are reused).
     pub cap_nodes_baseline: usize,
-    pub expected_mints: usize,
-    /// Kernel heap in use after setup. The run may add only a little.
+    /// Kernel heap in use after setup (net). After every thread has died
+    /// and been torn down the heap must be back here.
     pub heap_baseline: usize,
+    pub heap_carved_baseline: usize,
+    /// Frames handed out after setup; user frames must all have come back.
+    pub frames_baseline: u64,
+    pub frames_high_water_baseline: u64,
     /// The one machine-control object, if any was ever created. Phase 2a
     /// creates none, so no capability can stop the machine.
     pub host_object: Option<warden_caps::ObjectId>,
@@ -173,8 +187,51 @@ impl Kernel {
         }
     }
 
+    /// Release the backing state of every object the capability table has
+    /// freed since the last call: frames are unmapped and returned, endpoint
+    /// queues are dropped and anyone blocked on them is woken with an error.
+    pub fn reclaim(&mut self) {
+        while let Some((id, kind)) = self.caps.take_freed() {
+            match kind {
+                ObjectKind::Frame => {
+                    if let Some(rec) = self.user_frames.remove(&id.0) {
+                        if let Some((t, va)) = rec.mapped {
+                            self.threads[t].aspace.unmap(va);
+                        }
+                        self.frames.free(rec.phys);
+                    }
+                }
+                ObjectKind::Endpoint => {
+                    if let Some(ep) = self.endpoints.remove(&id.0) {
+                        for t in ep.senders.into_iter().chain(ep.receivers) {
+                            if self.threads[t].death.is_none() {
+                                self.threads[t].frame.rax = err(CapError::Revoked);
+                                self.threads[t].state = State::Runnable;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // An emptied BTreeMap keeps its root node; drop it so the heap
+        // really is back where it started once nothing is left.
+        if self.endpoints.is_empty() {
+            self.endpoints = BTreeMap::new();
+        }
+        if self.user_frames.is_empty() {
+            self.user_frames = BTreeMap::new();
+        }
+    }
+
     fn kill(&mut self, idx: usize, how: Death) {
         self.unqueue(idx);
+        // A dead thread's capabilities go with it, and with them every
+        // object nobody else holds: its untyped memory, frames, endpoints.
+        for slot in 0..self.threads[idx].cspace.len() {
+            let _ = self.caps.delete(&mut self.threads[idx].cspace, slot);
+        }
+        self.reclaim();
         let t = &mut self.threads[idx];
         t.death = Some(how);
         let ok = how == t.expect;
@@ -214,14 +271,19 @@ pub const SYS_LOG: u64 = 0; // (console_slot, test_id, observed)
 pub const SYS_INVOKE: u64 = 1; // (slot, rights) -> 0
 pub const SYS_MINT: u64 = 2; // (src_slot, dst_slot, mask) -> rights obtained
 pub const SYS_REVOKE: u64 = 3; // (slot) -> count revoked
-pub const SYS_RETYPE: u64 = 4; // (slot, bytes) -> remaining budget
+pub const SYS_RETYPE: u64 = 4; // (untyped_slot, kind, dst_slot, size[r10]) -> remaining budget
 pub const SYS_YIELD: u64 = 5;
 pub const SYS_EXIT: u64 = 6; // (code)
 pub const SYS_HOST_EXIT: u64 = 7; // (host_slot, code): stop the machine
 pub const SYS_SEND: u64 = 8; // (slot, w0, w1, w2) blocks until received -> 0
+/// Wait-queue capacity of an endpoint a thread creates by retype.
+pub const USER_ENDPOINT_CAPACITY: usize = 4;
 /// Returned by SEND/RECV when the endpoint's fixed queue is full.
 pub const E_QUEUE_FULL: u64 = -(7i64) as u64;
 pub const SYS_RECV: u64 = 9; // (slot) blocks until sent -> rax=0, rdi=badge, rsi/rdx/r10/r8=words
+pub const SYS_DELETE: u64 = 10; // (slot) -> nodes freed; frees the object if this was its last cap
+pub const SYS_MAP: u64 = 11; // (frame_slot, va, writable) -> 0; needs MAP
+pub const SYS_BUDGET: u64 = 12; // (untyped_slot) -> remaining bytes
 
 fn err(e: CapError) -> u64 {
     -(match e {
@@ -269,8 +331,19 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
                 Err(e) => Err(err(e)),
             }
         }
-        SYS_REVOKE => k.caps.revoke(&k.threads[cur].cspace, a as usize).map(|n| n as u64).map_err(err),
-        SYS_RETYPE => k.caps.retype(&k.threads[cur].cspace, a as usize, b).map_err(err),
+        SYS_REVOKE => {
+            let r = k.caps.revoke(&k.threads[cur].cspace, a as usize).map(|n| n as u64).map_err(err);
+            k.reclaim();
+            r
+        }
+        SYS_DELETE => {
+            let r = k.caps.delete(&mut k.threads[cur].cspace, a as usize).map(|n| n as u64).map_err(err);
+            k.reclaim();
+            r
+        }
+        SYS_RETYPE => retype(k, a as usize, b, c as usize, f.r10),
+        SYS_BUDGET => k.caps.budget(&k.threads[cur].cspace, a as usize).map_err(err),
+        SYS_MAP => map(k, a as usize, b, c != 0),
         SYS_YIELD => {
             k.threads[cur].budget = k.threads[cur].budget_period;
             return Ok(After::Yield);
@@ -296,6 +369,57 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
         Ok(v) => v,
         Err(e) => e,
     }))
+}
+
+/// Create a kernel object from untyped memory. The capability table does the
+/// accounting and every check; the kernel only has to back a Frame with a
+/// physical page. If no physical frame is left the object is deleted again
+/// so the budget is refunded: a refused request consumes nothing.
+fn retype(k: &mut Kernel, untyped_slot: usize, kind_code: u64, dst_slot: usize, size: u64) -> Result<u64, u64> {
+    let cur = k.current;
+    let kind = ObjectKind::from_retype_code(kind_code).ok_or(err(CapError::WrongKind))?;
+    let cs = &mut k.threads[cur].cspace;
+    let (obj, remaining) = k.caps.retype(cs, untyped_slot, kind, size, dst_slot).map_err(err)?;
+    if kind == ObjectKind::Endpoint {
+        // The 256-byte object price covers the fixed wait queues.
+        k.endpoints.insert(obj.0, Endpoint::with_capacity(USER_ENDPOINT_CAPACITY));
+    }
+    if kind == ObjectKind::Frame {
+        match k.frames.alloc() {
+            Some(phys) => {
+                k.user_frames.insert(obj.0, FrameRec { phys, mapped: None });
+            }
+            None => {
+                let _ = k.caps.delete(cs, dst_slot);
+                k.reclaim();
+                return Err(err(CapError::OutOfBudget));
+            }
+        }
+    }
+    Ok(remaining)
+}
+
+/// Map a Frame the caller holds with MAP into the caller's own address
+/// space. One mapping per frame for now; a second map, or an occupied
+/// address, is refused with SlotOccupied.
+fn map(k: &mut Kernel, frame_slot: usize, va: u64, writable: bool) -> Result<u64, u64> {
+    let cur = k.current;
+    let r = k.caps.invoke(&k.threads[cur].cspace, frame_slot, Rights::MAP).map_err(err)?;
+    if r.kind != ObjectKind::Frame {
+        return Err(err(CapError::WrongKind));
+    }
+    if writable && !r.rights.contains(Rights::WRITE) {
+        return Err(err(CapError::InsufficientRights));
+    }
+    let rec = k.user_frames.get_mut(&r.object.0).ok_or(err(CapError::Revoked))?;
+    if rec.mapped.is_some() {
+        return Err(err(CapError::SlotOccupied));
+    }
+    // W^X: user-created frames are data; they are never executable.
+    let _ = writable;
+    k.threads[cur].aspace.map_frame(rec.phys, va, Perm::Rw).ok_or(err(CapError::SlotOccupied))?;
+    rec.mapped = Some((cur, va));
+    Ok(0)
 }
 
 /// Synchronous rendezvous IPC. SEND needs WRITE on the endpoint capability,

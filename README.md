@@ -44,18 +44,32 @@ code was mapped writable (now **W^X**: code RX, data and stack NX; writing
 one's own code, executing the data page and executing the stack all fault),
 and endpoint wait queues grew on demand (now each endpoint's queues have a
 **fixed capacity allocated at creation**; the IPC path never allocates and a
-third sender on a full queue is refused with -7). The user's status
-assessment then pointed out that `revoke()` allocated a temporary vector per
-call on a heap that never frees; it is now allocation-free (a node whose
-parent is dead is dead, so no scratch bitmap is needed), proven by a
-counting-allocator test of 10,000 revocations in `warden-caps` and by 10,000
-in-guest revocations inside the 4 KiB heap bound. An adversarial suite then
-uses every capability wrongly (the untyped cap as an endpoint, the dir cap as
-memory, ALL rights on the wrong object for host-exit, a derived untyped copy
-to spend the parent's budget, a revoked endpoint copy mid-flight) and floods
-the kernel with 5,000 refused retypes, revokes, sends, recvs, invokes, mints
-and host-exits, then overruns the stack and the data page. 83 of 83 checks
-hold; the heap grows 32 bytes during the run.
+third sender on a full queue is refused with -7). 53 of 53 checks hold.
+
+Phase 3 (first slice) adds **untyped memory**: every kernel object a thread
+creates is paid for from the untyped capability it holds, and so is every
+capability node that names such an object (64 bytes each). `retype(untyped,
+kind, slot, size)` creates a Frame (4 KiB), an Endpoint (256 bytes, fixed
+wait queues included), a Notification or a smaller Untyped; `map(frame, va)`
+maps a frame into the caller's window (data only, NX); `delete(slot)` frees
+the capability and, when it was the last one, the object; `budget(untyped)`
+reads what is left. A refused request consumes nothing, and what is freed is
+refunded and reused: the capability table keeps node and object arenas with
+free lists and generation counters (a stale slot resolves to `Revoked`, never
+to the new occupant), deleting an untyped takes every object it paid for, a
+dead thread's capabilities are torn down with it, the kernel heap is now a
+real size-class allocator that frees, and physical frames go back on a free
+list. The in-guest suite exhausts a 3-frame budget, floods 10,000 refused
+retypes, deletes and re-creates, maps a frame and reads it back, churns 1,000
+endpoints, loses the mapping when the frame is deleted (#PF), and checks at
+the end that 0 capabilities and 0 objects survive their holders, all user
+frames came back, and the heap high-water mark grew by 0 bytes during the
+run. In `warden-caps`, a counting allocator shows 10,000 rounds of every
+operation (and every refused variant) make 0 heap allocations, and the
+10,000-revocation test from PR #9 still passes (free lists are threaded
+through the unused entries, so freeing never allocates). 108 of 108
+checks hold. Not yet: threads and address spaces as retypable objects, frame
+sharing between threads, unmap without delete.
 
 Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
 See the kernel plan.
@@ -80,7 +94,7 @@ against real programs before kernel code depends on them.
 
 | Crate | What it is | Moves into the kernel? |
 |---|---|---|
-| `warden-caps` | Capability model: rights, CSpaces, mint (attenuate only), revoke (whole subtree), untyped memory budgets, input cells. `no_std`, no `unsafe`. | Yes, as is |
+| `warden-caps` | Capability model: rights, CSpaces, mint (attenuate only), revoke (whole subtree), untyped memory with every object and capability node paid for and refunded on free, input cells. `no_std`, no `unsafe`. | Yes, as is |
 | `warden-abi` | Every x86-64 Linux syscall (373) classified as pass, mediated, denied or unimplemented; exports the versioned ABI contract `abi/warden-abi.json`. | Yes, drives the personality server |
 | `warden-libgrant` | Library requests, checkbox screen, approval records bound to SHA-256. | Yes, in the policy service |
 | `warden-sentry` | `warden` CLI and the seccomp user-notification supervisor (host only). | No, replaced by the kernel |
@@ -148,8 +162,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 26 unit tests across the crates
-tests/kernel/run.sh             # 83 in-guest checks against the kernel
+cargo test                      # 31 unit tests across the crates
+tests/kernel/run.sh             # 108 in-guest checks against the kernel
 tests/escape/run.sh             # 67 attack checks: hostile program (58) plus the harness's
                                 #   inspection of a directory outside every grant (9)
 tests/compat/run.sh             # 14 checks with ls, sh, grep, sort, tar, sha256sum, python3

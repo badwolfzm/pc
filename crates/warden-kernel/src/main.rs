@@ -15,7 +15,7 @@ use thread::Kernel;
 use warden_caps::{ObjectKind, Rights};
 
 #[global_allocator]
-static ALLOC: heap::Bump = heap::Bump;
+static ALLOC: heap::Heap = heap::Heap;
 
 #[repr(C, packed)]
 struct MultibootInfo {
@@ -41,7 +41,7 @@ extern "C" {
 pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     serial::init();
     kprintln!();
-    kprintln!("warden kernel phase 1 (x86-64, no device interrupts, one partition timer)");
+    kprintln!("warden kernel phase 3 (x86-64, no device interrupts, one partition timer, untyped memory)");
     if magic != 0x2BADB002 {
         kprintln!("not booted by a multiboot loader (magic {magic:#x})");
         arch::qemu_exit(2);
@@ -78,9 +78,11 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     kprintln!("{} mm self-test: refused mappings allocate nothing ({} frames for the probe space)", if mm_ok { "PASS" } else { "FAIL" }, frames.used - frames_before);
     let user_code = unsafe { core::slice::from_raw_parts(us as *const u8, (ue - us) as usize) };
     let mut k = Kernel {
-        caps: warden_caps::CapTable::new(), frames, endpoints: alloc::collections::BTreeMap::new(),
+        caps: warden_caps::CapTable::with_capacity(256, 128), frames, endpoints: alloc::collections::BTreeMap::new(),
+        user_frames: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
-        cap_nodes_baseline: 0, expected_mints: 3, heap_baseline: 0, host_object: None, // tests 4, 13 and 44 each mint once
+        cap_nodes_baseline: 0, heap_baseline: 0, heap_carved_baseline: 0, frames_baseline: 0,
+        frames_high_water_baseline: 0, host_object: None,
     };
     k.checks += 1;
     if !mm_ok {
@@ -100,7 +102,8 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
         let t = k.spawn(c.name, c.entry as usize as u64, tests::STACK_TOP, c.budget, c.expect, a);
         thread::root_endpoint(&mut k, t, 0, Rights::WRITE, 1);
         thread::root_cap(&mut k, t, 1, ObjectKind::Dir, Rights::READ.union(Rights::GRANT), 0);
-        thread::root_cap(&mut k, t, 3, ObjectKind::Untyped, Rights::ALL, 1 << 20);
+        // Each thread's untyped memory: everything it creates is paid from it.
+        thread::root_cap(&mut k, t, 3, ObjectKind::Untyped, Rights::ALL, c.untyped);
         // Slot 4, the host capability, is minted for nobody.
     }
     // One shared endpoint: the server holds the root, the client a WRITE
@@ -127,8 +130,11 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     thread::mint_to(&mut k, revoker, 9, victim, 9, Rights::READ.union(Rights::WRITE), 9);
     k.cap_nodes_baseline = k.caps.len();
     k.heap_baseline = heap::used();
-    kprintln!("{} ring-3 threads in {} address spaces, {} frames ({} KiB) allocated, {} bytes of kernel heap; starting the partition timer",
-        k.threads.len(), k.threads.len(), k.frames.used, k.frames.used * 4, heap::used());
+    k.heap_carved_baseline = heap::carved();
+    k.frames_baseline = k.frames.used;
+    k.frames_high_water_baseline = k.frames.high_water();
+    kprintln!("{} ring-3 threads in {} address spaces, {} frames ({} KiB) allocated, {} bytes of kernel heap in use ({} carved); starting the partition timer",
+        k.threads.len(), k.threads.len(), k.frames.used, k.frames.used * 4, heap::used(), heap::carved());
     unsafe { *core::ptr::addr_of_mut!(thread::KERNEL) = Some(k) };
     // Interrupts stay off in the kernel; each user frame carries IF set.
     thread::start()
@@ -144,28 +150,65 @@ pub fn finish(k: &mut Kernel) -> ! {
     } else {
         kprintln!("PASS threads reported all {expected_logs} expected results");
     }
+    // Every thread has died and been torn down: nothing it created may
+    // survive it. Capabilities, objects, user frames and the heap all go
+    // back to where they were (the heap may keep a few freed-list blocks
+    // and the frame free list's own vector).
     k.checks += 1;
-    let nodes = k.caps.len();
-    if nodes == k.cap_nodes_baseline + k.expected_mints {
-        kprintln!("PASS capability table grew only by the {} legitimate mints ({} nodes)", k.expected_mints, nodes);
+    let (nodes, objects) = (k.caps.live_nodes(), k.caps.live_objects());
+    if nodes == 0 && objects == 0 && k.user_frames.is_empty() && k.endpoints.is_empty() {
+        kprintln!("PASS every capability and object was reclaimed with its holders (0 live nodes, 0 live objects)");
     } else {
         k.failures += 1;
-        kprintln!("FAIL capability table has {} nodes, expected {} + {}", nodes, k.cap_nodes_baseline, k.expected_mints);
+        kprintln!("FAIL {} live nodes, {} live objects, {} user frames, {} endpoint queues survive their holders", nodes, objects, k.user_frames.len(), k.endpoints.len());
     }
-    // The kernel heap has no free(): every byte the run allocates is a byte
-    // a hostile thread could make it allocate. Bound: the endpoint queues
-    // (one BTreeMap node) plus two Vec pushes. 4 KiB is generous.
-    const HEAP_LIMIT: usize = 4096;
-    let grew = heap::used() - k.heap_baseline;
     k.checks += 1;
-    if grew <= HEAP_LIMIT {
-        kprintln!("PASS kernel heap grew {grew} bytes during the run (limit {HEAP_LIMIT})");
+    const ARENA_LIMIT: usize = 8;
+    let arena_grew = k.caps.len() - k.cap_nodes_baseline;
+    if arena_grew <= ARENA_LIMIT {
+        kprintln!("PASS capability node arena grew by {arena_grew} entries during the run (limit {ARENA_LIMIT}; freed entries were reused)");
     } else {
         k.failures += 1;
-        kprintln!("FAIL kernel heap grew {grew} bytes during the run (limit {HEAP_LIMIT})");
+        kprintln!("FAIL capability node arena grew by {arena_grew} entries (limit {ARENA_LIMIT})");
+    }
+    k.checks += 1;
+    if k.frames.used == k.frames_baseline {
+        kprintln!("PASS all user frames returned: {} frames in use, as after setup", k.frames.used);
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL {} frames in use, {} after setup", k.frames.used, k.frames_baseline);
+    }
+    k.checks += 1;
+    const FRAME_PEAK: u64 = 8;
+    let fresh = k.frames.high_water() - k.frames_high_water_baseline;
+    if fresh <= FRAME_PEAK {
+        kprintln!("PASS {fresh} fresh frames taken during the run (limit {FRAME_PEAK}; freed frames were reused)");
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL {fresh} fresh frames taken during the run (limit {FRAME_PEAK})");
+    }
+    // Net heap: thousands of create/delete cycles ran; what remains is the
+    // allocator's own bookkeeping (the frame free-list vector).
+    const HEAP_LIMIT: usize = 1024;
+    const CARVE_LIMIT: usize = 4096;
+    let grew = heap::used() as isize - k.heap_baseline as isize;
+    let carved = heap::carved() - k.heap_carved_baseline;
+    k.checks += 1;
+    if grew <= HEAP_LIMIT as isize {
+        kprintln!("PASS kernel heap in use grew {grew} bytes net during the run (limit {HEAP_LIMIT})");
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL kernel heap in use grew {grew} bytes net during the run (limit {HEAP_LIMIT})");
+    }
+    k.checks += 1;
+    if carved <= CARVE_LIMIT {
+        kprintln!("PASS kernel heap high-water mark grew {carved} bytes during the run (limit {CARVE_LIMIT})");
+    } else {
+        k.failures += 1;
+        kprintln!("FAIL kernel heap high-water mark grew {carved} bytes during the run (limit {CARVE_LIMIT})");
     }
     kprintln!();
-    kprintln!("{}: {} checks, {} failed, {} timer ticks, {} frames, heap {} bytes", if k.failures == 0 { "ALL HELD" } else { "KERNEL TEST FAILED" }, k.checks, k.failures, k.ticks, k.frames.used, heap::used());
+    kprintln!("{}: {} checks, {} failed, {} timer ticks, {} frames, heap {} bytes in use ({} carved)", if k.failures == 0 { "ALL HELD" } else { "KERNEL TEST FAILED" }, k.checks, k.failures, k.ticks, k.frames.used, heap::used(), heap::carved());
     arch::qemu_exit(if k.failures == 0 { 0 } else { 1 })
 }
 

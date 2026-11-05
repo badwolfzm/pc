@@ -177,6 +177,20 @@ pub fn set_fs_base(v: u64) {
     unsafe { wrmsr(0xC000_0100, v) }
 }
 
+/// CR0.TS: with it set, the first SSE/x87 instruction raises #NM (vector 7).
+/// Native threads run with TS set, so they cannot touch the FPU at all and
+/// no FPU state has to be saved or restored around them.
+pub fn set_ts() {
+    unsafe {
+        let cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov cr0, {}", in(reg) cr0 | 8, options(nomem, nostack, preserves_flags));
+    }
+}
+pub fn clear_ts() {
+    unsafe { core::arch::asm!("clts", options(nomem, nostack, preserves_flags)) }
+}
+
 pub fn timer_eoi() {
     unsafe { outb(0x20, 0x20) }
 }

@@ -98,6 +98,7 @@ impl fmt::Display for Death {
         match self {
             Death::Exited(c) => write!(f, "exited({c})"),
             Death::Fault(6) => write!(f, "#UD invalid opcode"),
+            Death::Fault(7) => write!(f, "#NM device not available (SSE from a native thread)"),
             Death::Fault(13) => write!(f, "#GP general protection"),
             Death::Fault(14) => write!(f, "#PF page fault"),
             Death::Fault(v) => write!(f, "exception {v}"),
@@ -163,6 +164,14 @@ pub struct Kernel {
     /// freed again, but the ones taken fresh count against the high-water
     /// mark, so the end-of-run check allows for them.
     pub linux_run_frames: u64,
+    /// The Linux thread whose SSE/x87 state is live in the FPU, if any.
+    /// Native threads never own the FPU: they run with CR0.TS set and the
+    /// first SSE instruction kills them (#NM), so switching between native
+    /// threads saves and restores nothing.
+    pub fx_owner: Option<usize>,
+    pub ts_set: bool,
+    /// FS base currently in the MSR; written only when a thread differs.
+    pub fs_loaded: u64,
 }
 
 pub static mut KERNEL: Option<Kernel> = None;
@@ -291,11 +300,39 @@ impl Kernel {
         crate::kprintln!("{} thread {:<22} stopped: {} (expected {})", if ok { "PASS" } else { "FAIL" }, t.name, how, t.expect);
     }
 
-    /// Enter thread `i` with its FS base and SSE state.
+    /// Enter thread `i`. The FPU and the FS base are touched only when the
+    /// thread differs from what the CPU holds, so a native thread resuming
+    /// after its own syscall, or following another native thread, pays
+    /// nothing for the Linux personality: no fxsave, no fxrstor, no wrmsr.
     fn run(&mut self, i: usize) -> ! {
         self.current = i;
-        arch::set_fs_base(self.threads[i].fs_base);
-        arch::fxrstor(&self.threads[i].fx);
+        if self.threads[i].personality == Personality::Linux {
+            if self.ts_set {
+                arch::clear_ts();
+                self.ts_set = false;
+            }
+            if self.fx_owner != Some(i) {
+                if let Some(o) = self.fx_owner {
+                    arch::fxsave(&mut self.threads[o].fx);
+                }
+                arch::fxrstor(&self.threads[i].fx);
+                self.fx_owner = Some(i);
+            }
+        } else {
+            if let Some(o) = self.fx_owner.take() {
+                // Leaving a Linux thread: bank its state. Its registers stay
+                // in the FPU but TS keeps every native thread away from them.
+                arch::fxsave(&mut self.threads[o].fx);
+            }
+            if !self.ts_set {
+                arch::set_ts();
+                self.ts_set = true;
+            }
+        }
+        if self.threads[i].fs_base != self.fs_loaded {
+            arch::set_fs_base(self.threads[i].fs_base);
+            self.fs_loaded = self.threads[i].fs_base;
+        }
         unsafe { enter_user(&self.threads[i].frame, self.threads[i].aspace.cr3) }
     }
 
@@ -619,7 +656,6 @@ pub extern "C" fn trap(frame: *mut TrapFrame) -> ! {
     }
     let cur = k.current;
     k.threads[cur].frame = f;
-    arch::fxsave(&mut k.threads[cur].fx);
     match f.vector {
         arch::VEC_TIMER => {
             k.ticks += 1;

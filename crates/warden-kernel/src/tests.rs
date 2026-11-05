@@ -357,8 +357,17 @@ pub extern "C" fn hostile_rdmsr() -> ! {
 #[link_section = ".user"]
 #[inline(never)]
 pub extern "C" fn hostile_syscall_insn() -> ! {
-    // EFER.SCE is off: the `syscall` instruction is an invalid opcode.
+    // `syscall` is the Linux personality's entry; a native thread is killed.
     unsafe { asm!("syscall", out("rcx") _, out("r11") _, options(nomem, nostack)) };
+    loop {}
+}
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn hostile_sse() -> ! {
+    // Native threads run with CR0.TS set: `xorps xmm0, xmm0` is #NM. The FPU
+    // belongs to the Linux personality; nothing of a Linux thread's
+    // registers can be read from here, and nothing has to be saved for us.
+    unsafe { asm!(".byte 0x0f, 0x57, 0xc0", options(nomem, nostack)) };
     loop {}
 }
 #[link_section = ".user"]
@@ -878,6 +887,7 @@ pub const CASES: &[Case] = &[
     Case { name: "rdmsr", entry: hostile_rdmsr, expect: Death::Fault(13), budget: 50, untyped: 1 << 20 },
     // `syscall` is the Linux entry; a native thread using it is killed.
     Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::WrongAbi, budget: 50, untyped: 1 << 20 },
+    Case { name: "sse from native thread", entry: hostile_sse, expect: Death::Fault(7), budget: 50, untyped: 1 << 20 },
     Case { name: "stack outside partition", entry: hostile_stack_outside, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
     Case { name: "write own code (W^X)", entry: hostile_write_code, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },
     Case { name: "execute data page (NX)", entry: hostile_exec_data, expect: Death::Fault(14), budget: 50, untyped: 1 << 20 },

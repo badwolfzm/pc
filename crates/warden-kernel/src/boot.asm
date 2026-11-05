@@ -209,7 +209,14 @@ trap_common:
 ; heap, mapped in every space) is used as the stack to pop from.
 global enter_user
 enter_user:
-    mov cr3, rsi                    ; always: also flushes the TLB after unmap/protect
+    ; Reload CR3 only on a real switch: a reload flushes the TLB (and, under
+    ; TCG, QEMU's whole software TLB), which made every syscall pay for it.
+    ; Unmap and protect flush their own entry with invlpg.
+    mov rax, cr3
+    cmp rax, rsi
+    je .same
+    mov cr3, rsi
+.same:
     mov rsp, rdi
     pop r15
     pop r14

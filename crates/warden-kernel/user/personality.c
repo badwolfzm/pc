@@ -96,8 +96,13 @@ static const struct {
     {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN, NETNS_LINUX},
     {"lfetch", PERM_NET_CONNECT, NETNS_LINUX},
     {"lrogue", 0, NETNS_LINUX},
+    /* BusyBox applets, forwarded the same way (src/linux.rs). */
+    {"bb-echo", 0, NETNS_LINUX},
+    {"bb-cat", PERM_FS_READ, NETNS_LINUX},
+    {"bb-sh", 0, NETNS_LINUX},
+    {"bb-denied", 0, NETNS_LINUX},
 };
-#define N_EXPECTED_CLIENTS 6
+#define N_EXPECTED_CLIENTS 10
 
 static struct ofile ofiles[MAX_OPEN];
 static struct listener listeners[MAX_LISTEN];

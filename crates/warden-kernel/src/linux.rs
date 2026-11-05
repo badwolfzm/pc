@@ -72,7 +72,7 @@ const PATH_MAX: usize = 256;
 const PROGRAM_UNTYPED: u64 = 1 << 20;
 /// The first badge after the native applications (1..3).
 pub const FIRST_BADGE: u64 = 4;
-pub const N_APPS: usize = 3;
+pub const N_APPS: usize = 7;
 
 const EPERM: i64 = 1;
 const EBADF: i64 = 9;
@@ -94,18 +94,34 @@ fn e(n: i64) -> u64 {
 const LINUX_HTTPD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_httpd.elf"));
 const LINUX_CLIENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_client.elf"));
 const LINUX_HOSTILE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_hostile.elf"));
+/// An unmodified static musl BusyBox 1.36.1 (`linux/busybox/`, built by its
+/// build.sh from the upstream tarball; the config and hashes are there).
+const BUSYBOX: &[u8] = include_bytes!("../linux/busybox/busybox");
 
 struct App {
     name: &'static str,
     image: &'static [u8],
+    /// argv[0] picks the BusyBox applet; envp is empty.
+    argv: &'static [&'static str],
     expect: Death,
+    /// Exact bytes the program must write to fd 1 and 2 (in order), judged
+    /// as test `check` when it dies. None: the program reports CHECK lines.
+    stdout: Option<&'static str>,
+    check: u64,
 }
 
-/// Badges 4, 5, 6; the server's manifest names them lhttpd, lfetch, lrogue.
+/// Badges 4..=10; the server's manifest names them in the same order.
 const APPS: &[App] = &[
-    App { name: "linux httpd", image: LINUX_HTTPD, expect: Death::Exited(0) },
-    App { name: "linux client", image: LINUX_CLIENT, expect: Death::Exited(0) },
-    App { name: "linux hostile", image: LINUX_HOSTILE, expect: Death::WrongAbi },
+    App { name: "linux httpd", image: LINUX_HTTPD, argv: &["httpd"], expect: Death::Exited(0), stdout: None, check: 0 },
+    App { name: "linux client", image: LINUX_CLIENT, argv: &["client"], expect: Death::Exited(0), stdout: None, check: 0 },
+    App { name: "linux hostile", image: LINUX_HOSTILE, argv: &["hostile"], expect: Death::WrongAbi, stdout: None, check: 0 },
+    // BusyBox, the real thing: musl's start code (auxv, TLS via arch_prctl,
+    // brk/mmap malloc), then an applet each.
+    App { name: "busybox echo", image: BUSYBOX, argv: &["echo", "hello from busybox"], expect: Death::Exited(0), stdout: Some("hello from busybox\n"), check: 170 },
+    App { name: "busybox cat", image: BUSYBOX, argv: &["cat", "/site/style.css"], expect: Death::Exited(0), stdout: Some("body { font: 16px sans-serif; margin: 2em; color: #222; }\nh1 { color: #0a5; }\n"), check: 171 },
+    App { name: "busybox sh", image: BUSYBOX, argv: &["sh", "-c", "echo $((6*7)); printf '%s\\n' done; x=warden; echo ${x#war}"], expect: Death::Exited(0), stdout: Some("42\ndone\nden\n"), check: 172 },
+    // No fs.read: the server refuses the open, cat reports it and exits 1.
+    App { name: "busybox denied", image: BUSYBOX, argv: &["cat", "/site/style.css"], expect: Death::Exited(1), stdout: Some("cat: can't open '/site/style.css': Permission denied\n"), check: 173 },
 ];
 
 /// What to do with the server's answer to the call in flight.
@@ -137,6 +153,11 @@ pub struct Proc {
     pub exited: bool,
     /// Refusals logged so far; a flood of bad syscalls is reported once.
     noise: u32,
+    /// Expected output (fd 1 and 2) and how much of it has matched so far.
+    expect_out: Option<&'static str>,
+    out_pos: usize,
+    out_ok: bool,
+    check: u64,
 }
 
 impl Proc {
@@ -144,6 +165,7 @@ impl Proc {
         Proc {
             badge: 0, buf: 0, brk_start: 0, brk: 0, mmap_next: MMAP_TOP, pending: Pending::None, sleep_until: None,
             rng: 0x9E37_79B9_7F4A_7C15, exited: false, noise: 0,
+            expect_out: None, out_pos: 0, out_ok: true, check: 0,
         }
     }
 }
@@ -174,10 +196,10 @@ pub fn setup(k: &mut Kernel, boot: &mut CSpace, srv: usize) {
         for p in 0..BUF_SIZE / PAGE {
             k.threads[srv].aspace.map_frame(buf + p * PAGE, SRV_BUF_BASE + ci as u64 * BUF_SIZE + p * PAGE, Perm::Rw).expect("server view of buffer");
         }
-        let sp = init_stack(&a, app.name.as_bytes(), &placed, k.ticks).expect("initial stack");
+        let sp = init_stack(&a, app.argv, &placed, k.ticks).expect("initial stack");
         let t = k.spawn(app.name, placed.entry, sp, 50, app.expect, a);
         k.threads[t].personality = Personality::Linux;
-        k.threads[t].linux = Proc { badge, buf, brk_start: placed.end, brk: placed.end, ..Proc::new() };
+        k.threads[t].linux = Proc { badge, buf, brk_start: placed.end, brk: placed.end, expect_out: app.stdout, check: app.check, ..Proc::new() };
         // Reply endpoint: root in the boot CSpace, READ to the program, WRITE to the server.
         let rep = k.caps.create_root(boot, 1 + ci, ObjectKind::Endpoint, Rights::ALL, 0).expect("root");
         k.endpoints.insert(rep.0, thread::Endpoint::with_capacity(2));
@@ -193,23 +215,28 @@ pub fn setup(k: &mut Kernel, boot: &mut CSpace, srv: usize) {
     }
 }
 
-/// Build the Linux initial stack: argc, argv, envp, auxv, AT_RANDOM bytes.
-fn init_stack(a: &crate::mm::AddressSpace, argv0: &[u8], placed: &loader::Placed, ticks: u64) -> Option<u64> {
+/// Build the Linux initial stack: argc, argv, envp (empty), auxv, AT_RANDOM
+/// bytes. At most 8 arguments.
+fn init_stack(a: &crate::mm::AddressSpace, argv: &[&str], placed: &loader::Placed, ticks: u64) -> Option<u64> {
     let mut sp = STACK_TOP;
     sp -= 16;
     let random_at = sp;
     let mut rnd = [0u8; 16];
     for (i, b) in rnd.iter_mut().enumerate() {
-        *b = (ticks as u8).wrapping_mul(31).wrapping_add(i as u8 * 7).wrapping_add(argv0.len() as u8);
+        *b = (ticks as u8).wrapping_mul(31).wrapping_add(i as u8 * 7).wrapping_add(argv.len() as u8);
     }
     if !a.copy_to_user(random_at, &rnd) {
         return None;
     }
-    sp -= (argv0.len() + 1 + 15) as u64 & !15;
-    let argv0_at = sp;
-    if !a.copy_to_user(argv0_at, argv0) || !a.copy_to_user(argv0_at + argv0.len() as u64, &[0]) {
-        return None;
+    let mut argv_at = [0u64; 8];
+    for (i, s) in argv.iter().enumerate().take(8) {
+        sp -= (s.len() + 1 + 15) as u64 & !15;
+        argv_at[i] = sp;
+        if !a.copy_to_user(sp, s.as_bytes()) || !a.copy_to_user(sp + s.len() as u64, &[0]) {
+            return None;
+        }
     }
+    let argc = argv.len().min(8);
     let aux: [(u64, u64); 10] = [
         (3, placed.phdr),  // AT_PHDR
         (4, 56),           // AT_PHENT
@@ -222,7 +249,8 @@ fn init_stack(a: &crate::mm::AddressSpace, argv0: &[u8], placed: &loader::Placed
         (25, random_at),   // AT_RANDOM
         (0, 0),            // AT_NULL
     ];
-    let words = 1 + 1 + 1 + 1 + aux.len() * 2;
+    // argc, argv[..], NULL, envp NULL, auxv.
+    let words = 1 + argc + 1 + 1 + aux.len() * 2;
     sp -= (words * 8) as u64;
     sp &= !15;
     let mut off = sp;
@@ -231,7 +259,15 @@ fn init_stack(a: &crate::mm::AddressSpace, argv0: &[u8], placed: &loader::Placed
         off += 8;
         ok
     };
-    if !(put(1) && put(argv0_at) && put(0) && put(0)) {
+    if !put(argc as u64) {
+        return None;
+    }
+    for &at in &argv_at[..argc] {
+        if !put(at) {
+            return None;
+        }
+    }
+    if !(put(0) && put(0)) {
         return None;
     }
     for (kx, v) in aux {
@@ -338,6 +374,8 @@ fn pass(k: &mut Kernel, cur: usize, nr: u32, name: &str, a: &[u64; 6]) -> Result
         "clock_gettime" | "gettimeofday" => ret(clock_gettime(k, cur, a[1], name == "gettimeofday")),
         "nanosleep" | "clock_nanosleep" => nanosleep(k, cur, if name == "nanosleep" { a[0] } else { a[2] }),
         "ioctl" => ret(Err(ENOTTY)),
+        // F_GETFL on the standard streams; nothing else to get or set yet.
+        "fcntl" => ret(if a[1] == 3 { Ok(if a[0] == 0 { 0 } else { 1 }) } else { Ok(0) }),
         "getcwd" => ret(getcwd(k, cur, a[0], a[1])),
         _ => not_built(k, cur, "pass", name),
     }
@@ -355,6 +393,9 @@ fn mediated(k: &mut Kernel, cur: usize, nr: u32, name: &str, a: &[u64; 6]) -> Re
                 None => return ret(Err(if k.threads[cur].aspace.is_mapped(path) { ENAMETOOLONG } else { EFAULT })),
             };
             // The server's open: a1 = flags, a2 = length, path in the data.
+            // O_LARGEFILE and O_CLOEXEC (every libc sets them) say nothing
+            // about access; the server judges the access mode.
+            let flags = flags & !(0x8000 | 0x8_0000);
             forward(k, cur, 2, [0, flags, n as u64, 0, 0, 0], &p[..n + 1], Pending::Plain)
         }
         "socket" => forward(k, cur, nr, [a[0], a[1], a[2], 0, 0, 0], &[], Pending::Plain),
@@ -489,6 +530,17 @@ fn write_bytes(k: &mut Kernel, cur: usize, fd: u64, bytes: &[u8]) -> Result<Afte
             out[kept..kept + line.len()].copy_from_slice(line);
             kept += line.len();
         }
+        // A program with an expected transcript: match what it prints.
+        let p = &mut k.threads[cur].linux;
+        if let Some(want) = p.expect_out {
+            let want = want.as_bytes();
+            let seg = &out[..kept];
+            if p.out_pos + seg.len() <= want.len() && &want[p.out_pos..p.out_pos + seg.len()] == seg {
+                p.out_pos += seg.len();
+            } else {
+                p.out_ok = false;
+            }
+        }
         if kept == 0 {
             return ret(Ok(bytes.len() as u64));
         }
@@ -525,6 +577,14 @@ fn parse_i64(s: &[u8]) -> Option<i64> {
 /// descriptors, unless the thread said so itself.
 pub fn on_death(k: &mut Kernel, t: usize, how: Death) {
     let p = k.threads[t].linux;
+    if let Some(want) = p.expect_out {
+        let ok = p.out_ok && p.out_pos == want.len();
+        if !ok {
+            crate::kprintln!("  {} printed {} of {} expected bytes{}", k.threads[t].name, p.out_pos, want.len(), if p.out_ok { "" } else { ", then something else" });
+        }
+        k.threads[t].logs += 1;
+        crate::tests::judge(k, p.check, ok as u64);
+    }
     let mut freed = 0u64;
     let mut va = p.brk_start;
     while va < p.brk {

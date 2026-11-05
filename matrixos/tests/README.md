@@ -22,24 +22,47 @@ Plan: https://claude.ai/artifact/VU7zP9p25aqDQzpSpfYFRp (MatrixOS compiler and G
   fails 14 checks (F1b covers the 512-byte path truncation), which reproduces the review. A module is accepted into the
   wave-2 build only when this passes with zero failures.
 
-## Skeleton (filled in once the contracts land)
+## Layout and how to run (everything with `bash`; the mount is noexec)
 
     tests/
-      integrate.sh             builds integrated.c = baseline + accepted modules (lfsr wired)
-      golden_check.sh          baseline pins (done)
-      security_regressions.sh  the seven review findings (done; F2, F7 skip)
-      unit/
-        wrapper/               fake-cc argv capture, flag tables per profile
-        lifter/                naive-vs-lifted sweeps, detector corpus (labelled loops)
-        mxsb/                  header byte tables, hash rule, caps bits, malformed inputs
-        rcs/                   opcode x batch-kind matrix, rights gating, limits at N/N+1
-        canvas/                pixel reference, dirty-bit brute-force diff, clipping
-        superops/              SIMD kernel vs scalar reference, all three tiers
-      bench/
-        run_bench.sh           builds under gcc and clang, pins to one core, 3 repeats
-        rules.py               applies the evidence rules to a CSV, marks failing rows
-        compare.py             ratio table between two CSVs, rule failures beside each row
-      ref/                     scalar reference implementations, no code shared with fast paths
+      golden_check.sh          baseline pins: 23 asserts, trace hash, PPM/MXSB SHA-256, reference probes
+      security_regressions.sh  one regression test per review finding (F1, F1b, F2, F3, F4, F5, F6; F7 skips)
+      integrate.sh             builds integrated.c = frozen baseline + accepted modules swapped in
+      fuzz/mx_fuzz_compat.h    replacement fuzzer (finding 5), harness-owned
+      unit/rcs/rcs_conformance.c  independent RCS conformance test written from gpu-commands.md (92 checks)
+
+    # scratch copies, since module Makefiles write build products and the mount is noexec
+    cp -r /mnt/project-files/matrixos/{frontend,assets,superops} /tmp/w/
+    bash integrate.sh <uploaded matrixos_v9.c> /tmp/w/integ
+    bash golden_check.sh /tmp/w/integ/integrated.c <uploaded swrap.c> "gcc -D_GNU_SOURCE -I/tmp/w/integ"
+    FRONTEND_DIR=/tmp/w/frontend ASSETS_DIR=/tmp/w/assets \
+      bash security_regressions.sh /tmp/w/integ/integrated.c /tmp/w/frontend/src/mxcc.c "gcc -D_GNU_SOURCE -I/tmp/w/integ"
+    cc -std=c11 -O1 -g -fsanitize=address,undefined -I<contracts/gpu-commands-ref> \
+      unit/rcs/rcs_conformance.c <contracts/gpu-commands-ref>/rcs.c -o rcs_conf && ./rcs_conf
+
+What integrate.sh swaps (baseline line ranges, each wrapped in an #ifndef so the baseline file is never edited):
+  251-320 super-op dispatcher -> superops/mx_superops_compat.h + mx_superops.c, via a harness adapter
+          mx_superop_dispatch_b that keeps the baseline's cap check and trace event, then calls the
+          bounded mx_superop_dispatch2 with real capacities (the two test call sites are rewritten)
+  322-408 VFS                 -> assets/mx_vfs_compat.h (openat2 RESOLVE_BENEATH|NO_SYMLINKS)
+  435-449 LFSR lifter         -> lfsr/mx_lift_compat.h
+  480-482 fuzzer              -> tests/fuzz/mx_fuzz_compat.h
+
+## Status (2026-11-05)
+
+| Target | golden_check | security_regressions | Notes |
+|---|---|---|---|
+| Frozen baseline | 25/26 | 14 failures | expected: the one golden failure is the wrapper --version bug; the 14 are the review findings |
+| Integrated build, gcc | 25/26 with GOLDEN_TRACE=0x3b3805a77980eee1 | 0 failures (F7 skip, F2 Rust side skip) | trace hash differs by design: the replacement fuzzer uses its own oracle, so the baseline fuzzer's trace events are gone; isolated by building with only the fuzz swap |
+| Integrated build, clang | 25/26 (same GOLDEN_TRACE) | 0 failures | sanitizer checks fall back to gcc (no clang ASan runtime in this container) |
+| lfsr own tests | | | 394,115 passed (gcc, clang, gcc ASan/UBSan) |
+| assets own tests | | | 47 passed (gcc, clang, gcc ASan/UBSan) |
+| frontend own tests | | | typed_input 48, cells.vec 57 (C), driver tests; Rust vectors skip |
+| superops own tests | | | 202 passed (gcc) |
+| RCS reference | | | 57,669 passed; harness conformance 92/92 |
+
+Not run: anything on the user's machine; cold-cache storage numbers; clang sanitizer builds; the Rust
+side of the typed-input vectors; F7 (no MXSB loader exists yet).
 
 ## Evidence rules (short form; full text in the plan)
 

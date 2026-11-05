@@ -94,7 +94,7 @@ void rcs_client_init(rcs_client *c, uint32_t rights) {
 }
 
 void rcs_client_free(rcs_client *c) {
-    for (uint32_t i = 0; i < RCS_MAX_SURFACES; ++i) { free(c->surfaces[i].px); c->surfaces[i].px = NULL; c->surfaces[i].live = false; }
+    for (uint32_t i = 0; i < RCS_MAX_SURFACES; ++i) { free(c->surfaces[i].px); c->surfaces[i].px = NULL; free(c->surfaces[i].tiles); c->surfaces[i].tiles = NULL; c->surfaces[i].live = false; }
 }
 
 uint64_t rcs_surface_hash(const rcs_client *c, uint32_t slot) {
@@ -355,8 +355,30 @@ static inline uint32_t blend_px(uint32_t d, uint32_t sp, uint32_t mode) {
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
+/* Damage: mark the tiles a validated, clipped rect touches. */
+static void damage_rect(rcs_surface *t, const rcs_rect *d) {
+    assert(rect_inside(d, t->w, t->h));
+    uint32_t tx0 = (uint32_t)d->x / RCS_TILE, ty0 = (uint32_t)d->y / RCS_TILE;
+    uint32_t tx1 = ((uint32_t)d->x + (uint32_t)d->w - 1) / RCS_TILE, ty1 = ((uint32_t)d->y + (uint32_t)d->h - 1) / RCS_TILE;
+    for (uint32_t ty = ty0; ty <= ty1; ++ty)
+        for (uint32_t tx = tx0; tx <= tx1; ++tx) {
+            size_t bit = (size_t)ty * t->tw + tx;
+            uint8_t m = (uint8_t)(1u << (bit & 7));
+            if (!(t->tiles[bit >> 3] & m)) { t->tiles[bit >> 3] |= m; t->dirty++; }
+        }
+}
+static void damage_px(rcs_surface *t, int64_t x, int64_t y) {
+    rcs_rect r = {(int32_t)x, (int32_t)y, 1, 1};
+    damage_rect(t, &r);
+}
+static void damage_clear(rcs_surface *t) {
+    memset(t->tiles, 0, ((size_t)t->tw * t->th + 7) / 8);
+    t->dirty = 0;
+}
+
 static void fill(rcs_surface *t, const rcs_rect *d, uint32_t color) {
     assert(rect_inside(d, t->w, t->h));
+    damage_rect(t, d);
     for (int32_t j = 0; j < d->h; ++j) {
         uint32_t *row = t->px + (size_t)(d->y + j) * t->w + (size_t)d->x;
         for (int32_t i = 0; i < d->w; ++i) row[i] = color;
@@ -371,6 +393,10 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         assert(!s->live);
         s->px = (uint32_t *)calloc((size_t)a.w * a.h, sizeof(uint32_t));
         if (!s->px) abort();  /* a real service charges the client's memory budget; here it is fatal */
+        s->tw = (a.w + RCS_TILE - 1) / RCS_TILE; s->th = (a.h + RCS_TILE - 1) / RCS_TILE;
+        s->tiles = (uint8_t *)calloc(((size_t)s->tw * s->th + 7) / 8, 1);
+        if (!s->tiles) abort();
+        s->dirty = 0;
         s->live = true; s->w = a.w; s->h = a.h; s->format = a.format;
         c->surface_pixels += (uint64_t)a.w * a.h;
         break;
@@ -380,7 +406,7 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         rcs_surface *s = &c->surfaces[a.slot];
         assert(s->live);
         c->surface_pixels -= (uint64_t)s->w * s->h;
-        free(s->px); s->px = NULL; s->live = false; s->w = s->h = 0;
+        free(s->px); s->px = NULL; free(s->tiles); s->tiles = NULL; s->live = false; s->w = s->h = 0;
         if (c->clip_set && c->clip_target == a.slot) c->clip_set = false;
         break;
     }
@@ -389,6 +415,7 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         rcs_surface *s = &c->surfaces[a.surface_slot];
         const rcs_asset *as = &c->assets[a.asset_slot];
         assert(s->live && as->kind == RCS_ASSET_IMAGE && s->w == as->w && s->h == as->h);
+        { rcs_rect all = {0, 0, (int32_t)s->w, (int32_t)s->h}; damage_rect(s, &all); }
         if (as->image) memcpy(s->px, as->image, (size_t)s->w * s->h * sizeof(uint32_t));
         else memset(s->px, 0, (size_t)s->w * s->h * sizeof(uint32_t));   /* asset not yet streamed in: stand-in */
         c->frame_bind += (uint32_t)((uint64_t)as->w * as->h * bpp_of(as->format));
@@ -399,6 +426,7 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         rcs_surface *s = &c->surfaces[a.slot];
         assert(s->live && rect_inside(&a.r, s->w, s->h));
         const uint8_t *p = body + sizeof a;
+        damage_rect(s, &a.r);
         uint32_t bpp = bpp_of(s->format);
         for (int32_t j = 0; j < a.r.h; ++j)
             for (int32_t i = 0; i < a.r.w; ++i) {
@@ -444,6 +472,7 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         if (c->clip_set && c->clip_target == a.target) reg = c->clip;
         if (!intersect(&dst, &reg, &d)) break;
         assert(rect_inside(&d, t->w, t->h));
+        damage_rect(t, &d);
         int32_t ox = d.x - a.dx, oy = d.y - a.dy;  /* offset into the source rect after clipping */
         for (int32_t j = 0; j < d.h; ++j) {
             const uint32_t *srow = s->px + (size_t)(a.sr.y + oy + j) * s->w + (size_t)(a.sr.x + ox);
@@ -465,8 +494,10 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         int64_t err = dx + dy;
         uint64_t steps = 0;
         for (;;) {
-            if (x0 >= reg.x && y0 >= reg.y && x0 < (int64_t)reg.x + reg.w && y0 < (int64_t)reg.y + reg.h)
+            if (x0 >= reg.x && y0 >= reg.y && x0 < (int64_t)reg.x + reg.w && y0 < (int64_t)reg.y + reg.h) {
                 t->px[(size_t)y0 * t->w + (size_t)x0] = a.color;
+                damage_px(t, x0, y0);
+            }
             steps++;
             if (x0 == x1 && y0 == y1) break;
             int64_t e2 = 2 * err;
@@ -496,7 +527,8 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
             if (maxx > (int64_t)reg.x + reg.w - 1) maxx = (int64_t)reg.x + reg.w - 1;
             if (maxy > (int64_t)reg.y + reg.h - 1) maxy = (int64_t)reg.y + reg.h - 1;
             int64_t area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
-            if (area == 0) continue;
+            if (area == 0 || maxx < minx || maxy < miny) continue;
+            { rcs_rect bb = {(int32_t)minx, (int32_t)miny, (int32_t)(maxx - minx + 1), (int32_t)(maxy - miny + 1)}; damage_rect(t, &bb); }
             for (int64_t py = miny; py <= maxy; ++py)
                 for (int64_t px = minx; px <= maxx; ++px) {
                     int64_t w0 = (x[1] - px) * (y[2] - py) - (x[2] - px) * (y[1] - py);
@@ -512,6 +544,8 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
     case RCS_OP_BEGIN_FRAME: {
         rcs_begin_frame a; memcpy(&a, body, sizeof a);
         assert(!c->in_frame);
+        if (c->have_presented && c->surfaces[c->last_present.slot].live && c->surfaces[c->last_present.slot].tiles == c->last_present.tiles)
+            damage_clear(&c->surfaces[c->last_present.slot]);   /* the compositor consumed it between PRESENT and this BEGIN_FRAME */
         c->in_frame = true; c->frame_no = a.frame_no;
         c->frame_pixel_ops = 0; c->frame_triangles = 0; c->frame_upload = 0; c->frame_bind = 0; c->clip_set = false;
         break;
@@ -520,6 +554,8 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         rcs_present a; memcpy(&a, body, sizeof a);
         assert(c->in_frame && a.frame_no == c->frame_no);
         /* Hand-off to the compositing container happens here (dirty-bit canvas thread). */
+        { rcs_surface *t = &c->surfaces[a.target];
+          c->last_present = (rcs_present_info){ a.target, a.frame_no, t->tw, t->th, t->dirty, t->tiles }; }
         c->in_frame = false; c->have_presented = true; c->last_presented = a.frame_no; c->clip_set = false; c->presents++;
         break;
     }

@@ -84,6 +84,12 @@ void gc_blit(gc_canvas *c, int x, int y, const uint32_t *src, int w, int h, int 
  * wrote `work` directly, e.g. a SIMD sprite kernel). */
 void gc_damage(gc_canvas *c, int x, int y, int w, int h);
 
+/* Import a service-side damage bitmap (rcs_present_info.tiles): tw*th bits,
+ * row-major, bit index ty*tw+tx, LSB first within each byte, 16x16 tiles.
+ * ORs it into the canvas's dirty bits. Returns the number of set bits
+ * imported, or -1 if tw/th do not match this canvas. */
+int  gc_damage_bits(gc_canvas *c, const uint8_t *tiles, uint32_t tw, uint32_t th);
+
 /* Composite: for each dirty tile, XOR-compare work vs ghost; if any pixel
  * differs copy the tile into ghost and call sink.  Clears all dirty bits.
  * Returns 0 or the first nonzero sink return. */

@@ -43,7 +43,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#define MXCC_VERSION "1.0.0"
+#define MXCC_VERSION "1.0.1"
 #define MXCC_MAX_ARGS 4096          /* hard ceiling on the composed argv */
 #define MXCC_MAX_PATH 4096
 
@@ -152,17 +152,40 @@ static bool is_denied_flag(const char *a) {
         "-fplugin", "-fpass-plugin", "-Xclang", "-load", "-specs", "-B", "-wrapper", "@",
         "-Wp,", "-Wa,", "-fsanitize-coverage=", "-fprofile-use", "-fprofile-instr-use",
         "-fdebug-compilation-dir", "-ftime-trace", "-save-temps", "-dumpdir", "-dumpbase",
-        "-fplugin-arg", "-print-prog-name", "-isysroot",
+        "-fplugin-arg", "-print-prog-name", "-isysroot", "-Xassembler", "-Xpreprocessor",
+        "-fuse-ld=", "--ld-path", "-fsanitize=", "-fprofile-generate", "-fprofile-instr-generate",
+        "-frecord-command-line", "-fdebug-prefix-map", "-flto", "-fuse-linker-plugin",
         NULL
     };
     for (int i = 0; prefixes[i]; i++) if (pfx(a, prefixes[i])) return true;
     /* linker: plugins and arbitrary linker scripts */
-    if (pfx(a, "-Wl,") || eq(a, "-Xlinker")) {
+    if (pfx(a, "-Wl,")) {
         if (strstr(a, "plugin") || strstr(a, "-T") || strstr(a, "--script") || strstr(a, "@")
-            || strstr(a, "-rpath") || strstr(a, "--dynamic-linker") || strstr(a, "-z,lazy")) return true;
+            || strstr(a, "-rpath") || strstr(a, "--dynamic-linker") || strstr(a, "lazy")) return true;
     }
     if (eq(a, "-T") || pfx(a, "-T")) return true;
     return false;
+}
+
+/* Options whose value is the next argv entry. The value is checked with
+ * is_denied_value before it is accepted. */
+static bool takes_value(const char *a) {
+    static const char *const opts[] = { "-I", "-D", "-U", "-include", "-isystem", "-imacros", "-L", "-l", "-x",
+        "-MF", "-MT", "-MQ", "-Xlinker", "-idirafter", "-iquote", "-Xassembler", "-Xpreprocessor", "-o", NULL };
+    for (int i = 0; opts[i]; i++) if (eq(a, opts[i])) return true;
+    return false;
+}
+
+/* A value handed to the linker, assembler or preprocessor through -X* or
+ * -Wl,/-Wa,/-Wp, is checked like the corresponding -Wl, flag. */
+static bool is_denied_value(const char *opt, const char *val) {
+    if (eq(opt, "-Xlinker")) {
+        return strstr(val, "plugin") || pfx(val, "-T") || strstr(val, "--script") || val[0] == '@'
+            || strstr(val, "-rpath") || strstr(val, "--dynamic-linker") || strstr(val, "lazy");
+    }
+    if (eq(opt, "-Xassembler") || eq(opt, "-Xpreprocessor")) return true;   /* -Wa,/-Wp, are denied as well */
+    if (eq(opt, "-include") || eq(opt, "-imacros")) return val[0] == '@' || val[0] == '-';
+    return val[0] == '@';
 }
 
 /* Resolve the compiler to an absolute path from a fixed list; never $PATH. */
@@ -172,14 +195,15 @@ static void resolve_compiler(opts_t *o) {
         strcpy(o->cc_abs, o->cc);
     } else {
         if (strchr(o->cc, '/')) die("--cc must be a bare name (clang, gcc) or an absolute path");
-        static const char *const dirs[] = { "/usr/bin", "/usr/local/bin", "/bin", "/usr/lib/llvm-18/bin", NULL };
+        static const char *const dirs[] = { "/usr/bin", "/usr/local/bin", "/bin", "/usr/lib/llvm-18/bin",
+            "/usr/lib/llvm-17/bin", "/usr/lib/llvm-19/bin", "/usr/lib/llvm-20/bin", "/opt/homebrew/opt/llvm/bin", NULL };
         bool found = false;
         for (int i = 0; dirs[i] && !found; i++) {
             int n = snprintf(o->cc_abs, sizeof(o->cc_abs), "%s/%s", dirs[i], o->cc);
             if (n < 0 || (size_t)n >= sizeof(o->cc_abs)) die("compiler path too long");
             found = access(o->cc_abs, X_OK) == 0;
         }
-        if (!found) die("compiler '%s' not found in /usr/bin, /usr/local/bin or /bin (give an absolute path)", o->cc);
+        if (!found) die("compiler '%s' not found in the fixed search directories (/usr/bin, /usr/local/bin, /bin, /usr/lib/llvm-*/bin); give an absolute path with --cc=/path/to/%s", o->cc, o->cc);
     }
     struct stat st;
     if (stat(o->cc_abs, &st) != 0 || !S_ISREG(st.st_mode) || (st.st_mode & S_IWOTH))
@@ -283,9 +307,22 @@ static void parse_args(int argc, char **argv, opts_t *o) {
         const char *a = argv[i];
         #define NEEDARG() do { if (i + 1 >= argc) die("missing argument after %s", a); } while (0)
         if (eq(a, "--")) {
+            /* passthrough is not a trust boundary bypass: every argument after
+             * "--" goes through the same deny policy as ordinary flags, and
+             * paired options have their value checked too (audit 2026-11-05, issue 1). */
             while (++i < argc) {
+                const char *x = argv[i];
+                const char *val = (i + 1 < argc) ? argv[i + 1] : NULL;
+                if (is_denied_flag(x) || (takes_value(x) && val && is_denied_value(x, val)))
+                    die("'%s' is refused after '--': it would make the compiler load or run code at build time (security review finding 3)", x);
+                if (pfx(x, "-march=native") || pfx(x, "-mtune=native") || pfx(x, "-mcpu=native"))
+                    if (!o->allow_native) die("'%s' is not reproducible; use --tier (or --allow-native)", x);
                 if (o->nextra >= MXCC_MAX_ARGS) die("too many arguments");
-                o->extra[o->nextra++] = argv[i];
+                o->extra[o->nextra++] = x;
+                if (takes_value(x) && val) {
+                    if (o->nextra >= MXCC_MAX_ARGS) die("too many arguments");
+                    o->extra[o->nextra++] = argv[++i];
+                }
             }
             break;
         } else if (eq(a, "--help") || eq(a, "-h")) {
@@ -348,10 +385,9 @@ static void parse_args(int argc, char **argv, opts_t *o) {
             if (o->nextra >= MXCC_MAX_ARGS) die("too many arguments");
             o->extra[o->nextra++] = a;
             /* options that take a separate argument: keep the pair together */
-            if ((eq(a, "-I") || eq(a, "-D") || eq(a, "-U") || eq(a, "-include") || eq(a, "-isystem") ||
-                 eq(a, "-imacros") || eq(a, "-L") || eq(a, "-l") || eq(a, "-x") || eq(a, "-MF") ||
-                 eq(a, "-MT") || eq(a, "-MQ") || eq(a, "-Xlinker") || eq(a, "-Xclang") || eq(a, "-idirafter") ||
-                 eq(a, "-iquote")) && i + 1 < argc) {
+            if (takes_value(a) && i + 1 < argc) {
+                if (is_denied_value(a, argv[i + 1]))
+                    die("'%s %s' is refused: it would make the compiler load or run code at build time (security review finding 3)", a, argv[i + 1]);
                 if (o->nextra >= MXCC_MAX_ARGS) die("too many arguments");
                 o->extra[o->nextra++] = argv[++i];
             }

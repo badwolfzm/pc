@@ -17,7 +17,7 @@ printf 'int g(void){return 2;}\n' > "$WORK/u.c"
 cd "$WORK"
 
 # --- version / usage: whole string, with newline (baseline bug 1)
-v="$("$MXCC" --version)"; [[ "$v" == "mxcc 1.0.0 (MatrixOS compiler driver)" ]] && ok "version prints whole line" || bad "version" "[$v]"
+v="$("$MXCC" --version)"; [[ "$v" == "mxcc 1.0.1 (MatrixOS compiler driver)" ]] && ok "version prints whole line" || bad "version" "[$v]"
 rc "no input files exits 2" 2 -S
 rc "unknown profile exits 2" 2 --profile=bogus -S t.c -o t.s
 rc "unknown tier exits 2" 2 --tier=sse9 -S t.c -o t.s
@@ -105,22 +105,37 @@ out="$(PATH="$PWD/fakebin" "$MXCC" --cc=/usr/bin/clang -S t.c -o t2.s 2>&1)"; [ 
 chmod 0777 fakebin/clang
 rc "a world-writable compiler binary is refused even by absolute path" 2 --cc="$PWD/fakebin/clang" -S t.c -o t3.s
 
-# --- real compiles (need clang and gcc installed)
-for cc in clang gcc; do
-  command -v $cc >/dev/null || { echo "SKIP real compile with $cc"; continue; }
+# --- "--" passthrough goes through the same policy (audit 2026-11-05, issue 1)
+rc "refuses -fplugin after --" 2 -c t.c -o t.o -- -fplugin=/x.so
+rc "refuses -Xclang after --" 2 -c t.c -o t.o -- -Xclang -load
+rc "refuses -Xlinker -plugin (paired value)" 2 -c t.c -o t.o -Xlinker -plugin
+rc "refuses -Xlinker -plugin after --" 2 -c t.c -o t.o -- -Xlinker -plugin
+rc "refuses -include @resp" 2 -c t.c -o t.o -include @resp
+rc "refuses -march=native after --" 2 -c t.c -o t.o -- -march=native
+rc "refuses -fuse-ld=/x" 2 -c t.c -o t.o -fuse-ld=/x
+has "benign -- passthrough still works" "-DBENIGN" -c t.c -- -DBENIGN
+
+# --- real compiles: absolute compiler paths, so a compiler outside mxcc's fixed
+#     search directories is still exercised (audit: 13 false failures from bare names)
+for name in clang gcc; do
+  cc="$(command -v $name || true)"
+  [ -n "$cc" ] || { echo "SETUP: $name not installed, real compiles with it skipped"; continue; }
   for p in compile-fast matrixos balanced runtime-fast; do
-    if "$MXCC" --cc=$cc --profile=$p -S t.c -o "$p.$cc.s" 2>"$p.$cc.log" && [ -s "$p.$cc.s" ]; then ok "[$cc] $p emits assembly"; else bad "[$cc] $p -S" "$(head -3 "$p.$cc.log")"; fi
+    if "$MXCC" --cc="$cc" --profile=$p -S t.c -o "$p.$name.s" 2>"$p.$name.log" && [ -s "$p.$name.s" ]; then ok "[$name] $p emits assembly"; else bad "[$name] $p -S" "$(head -3 "$p.$name.log")"; fi
   done
   for tier in baseline avx2 avx512; do
-    if "$MXCC" --cc=$cc --tier=$tier -c t.c -o "t.$tier.$cc.o" 2>"tier.$cc.log"; then ok "[$cc] tier $tier compiles"; else bad "[$cc] tier $tier" "$(head -3 tier.$cc.log)"; fi
+    if "$MXCC" --cc="$cc" --tier=$tier -c t.c -o "t.$tier.$name.o" 2>"tier.$name.log"; then ok "[$name] tier $tier compiles"; else bad "[$name] tier $tier" "$(head -3 tier.$name.log)"; fi
   done
-  "$MXCC" --cc=$cc --profile=matrixos -c t.c -o a1.o && "$MXCC" --cc=$cc --profile=matrixos -c t.c -o a2.o && cmp -s a1.o a2.o && ok "[$cc] two builds are byte-identical" || bad "[$cc] determinism"
-  if "$MXCC" --cc=$cc --profile=matrixos t.c -o "hello.$cc" 2>link.log && "./hello.$cc"; then ok "[$cc] hardened link runs"; else bad "[$cc] link" "$(head -3 link.log)"; fi
-  "$MXCC" --cc=$cc --emit-build-info=bi.txt -c t.c -o bi.o && grep -q "^simd_tier=baseline$" bi.txt && grep -q "^profile=matrixos$" bi.txt \
-     && [ "$(grep -o 'source_sha256=.*' bi.txt | cut -d= -f2)" = "$(sha256sum t.c | cut -d' ' -f1)" ] && ok "[$cc] build-info sha256 matches sha256sum" || bad "[$cc] build-info" "$(cat bi.txt 2>/dev/null)"
+  "$MXCC" --cc="$cc" --profile=matrixos -c t.c -o a1.o && "$MXCC" --cc="$cc" --profile=matrixos -c t.c -o a2.o && cmp -s a1.o a2.o && ok "[$name] two builds are byte-identical" || bad "[$name] determinism"
+  if "$MXCC" --cc="$cc" --profile=matrixos t.c -o "hello.$name" 2>link.log && "./hello.$name"; then ok "[$name] hardened link runs"; else bad "[$name] link" "$(head -3 link.log)"; fi
+  "$MXCC" --cc="$cc" --emit-build-info=bi.txt -c t.c -o bi.o && grep -q "^simd_tier=baseline$" bi.txt && grep -q "^profile=matrixos$" bi.txt \
+     && [ "$(grep -o 'source_sha256=.*' bi.txt | cut -d= -f2)" = "$(sha256sum t.c | cut -d' ' -f1)" ] && ok "[$name] build-info sha256 matches sha256sum" || bad "[$name] build-info" "$(cat bi.txt 2>/dev/null)"
   printf 'int f(int n){int a[n]; a[0]=n; return a[0];}\n' > vla.c
-  "$MXCC" --cc=$cc --strict -c vla.c -o vla.o >/dev/null 2>&1 && bad "[$cc] --strict rejects VLA" || ok "[$cc] --strict rejects VLA"
-  "$MXCC" --cc=$cc -c vla.c -o vla.o >/dev/null 2>&1 && ok "[$cc] default only warns on VLA (baseline source has them)" || bad "[$cc] default VLA"
+  "$MXCC" --cc="$cc" --strict -c vla.c -o vla.o >/dev/null 2>&1 && bad "[$name] --strict rejects VLA" || ok "[$name] --strict rejects VLA"
+  "$MXCC" --cc="$cc" -c vla.c -o vla.o >/dev/null 2>&1 && ok "[$name] default only warns on VLA (baseline source has them)" || bad "[$name] default VLA"
 done
+# --- plugin probe: a real shared object must never be loaded through any path
+bash "$ROOT/tests/driver/plugin_regression.sh" "$MXCC"; prc=$?
+[ $prc -eq 0 ] && ok "plugin regression suite" || bad "plugin regression suite" "rc=$prc"
 echo "driver: $total checks, $fails failures"
 exit $fails

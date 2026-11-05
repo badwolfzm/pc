@@ -1,4 +1,4 @@
-/* Reproducer for issue #40. Intentionally fails against PR #24 until fixed.
+/* Regression for issue #40. Fails against original PR #24, passes with listen-time exclusion.
  * cc -std=c11 -O0 -fno-builtin -ffunction-sections -fdata-sections \
  *    -Wl,--gc-sections -Wno-unused-function \
  *    tests/compat/net_namespace_double_bind.c -o /tmp/warden-double-bind
@@ -46,6 +46,12 @@ int main(void) {
     } else {
         assert(b_bind == -EADDRINUSE);
     }
+    /* The opposite ordering must also reject another same-namespace bind. */
+    int later = (int)do_socket(c, AF_INET, SOCK_STREAM);
+    assert(later >= 0);
+    set_port(8088);
+    assert(do_bind(c, later, sizeof(struct sockaddr_in)) == -EADDRINUSE);
+
     /* A separate Linux compartment still owns its own port namespace. */
     struct client *linux = &clients[4];
     linux->perms = manifest[4].perms;
@@ -60,6 +66,14 @@ int main(void) {
     assert(other >= 0);
     assert(do_bind(linux, other, sizeof(struct sockaddr_in)) == 0);
     assert(do_listen(linux, other) == 0);
-    puts("PASS: no duplicate same-namespace listeners; cross-namespace reuse holds");
+    /* Closing only the native listener releases that namespace's port.
+     * The Linux listener must remain operational and untouched. */
+    assert(do_close(c, a) == 0);
+    assert(do_bind(c, later, sizeof(struct sockaddr_in)) == 0);
+    assert(do_listen(c, later) == 0);
+    assert(do_close(c, b) == 0);
+    assert(do_close(c, later) == 0);
+    assert(do_close(linux, other) == 0);
+    puts("PASS: same-namespace exclusivity, reverse ordering, close/rebind, cross-namespace reuse");
     return 0;
 }

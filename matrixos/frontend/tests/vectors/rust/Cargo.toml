@@ -1,0 +1,7 @@
+[package]
+name = "cells-vectors"
+version = "0.1.0"
+edition = "2021"
+description = "Runs tests/vectors/cells.vec against the kernel's warden-caps cells.rs"
+
+[dependencies]

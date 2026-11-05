@@ -1,0 +1,11 @@
+H.264 encode cost per 720p frame, libx264 via ffmpeg 1 thread, pinned to one core, 300 frames, crf 28, tune zerolatency.
+Input yuv420p (color conversion not included; see rgba_to_yuv420 row and swscale line).
+preset    content                       ms/frame
+ultrafast moving (testsrc2)             2.94
+ultrafast mostly static (128x128 dirty) 2.01
+veryfast  moving (testsrc2)             6.28
+veryfast  mostly static                 3.41
+rawvideo read -> null overhead          0.38  (subtract from the above)
+swscale rgba->yuv420p, 1 thread         3.19  (ffmpeg's generic path; hand-written scalar C does it in 0.71)
+Method: date-stamped wall clock around ffmpeg; single run each; synthetic content, so real game frames
+with more texture will cost more. Not measured: AV1/VP9, hardware encoders (none present).

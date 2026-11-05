@@ -1,0 +1,85 @@
+# Shared test vectors for the input-cell model.
+# Checked by tests/unit/test_vectors.c (C, include/mx_input.h) and
+# tests/vectors/rust (Rust, kernel crates/warden-caps/src/cells.rs).
+# Both implementations must produce identical results on every line.
+#
+# Grammar (hex numbers, no 0x prefix; bytes as a contiguous hex string or "-" for empty):
+#   byte <b>                        -> cell <v>
+#   scalar <v>                      -> ok <v> | reject
+#   control <v>                     -> ok | reject
+#   widen <bytes> max=<n>           -> ok <cells...> | budget
+#   utf8 <bytes> max=<n>            -> ok <cells...> | encoding <consumed> | budget
+# Every "ok" cell list ends with the terminator 110000 (CTRL_END).
+
+# --- bytes always land in input space -----------------------------------
+byte 00 -> cell 0
+byte 0a -> cell a
+byte 7f -> cell 7f
+byte 80 -> cell 80
+byte ff -> cell ff
+
+# --- scalars: <= 10FFFF and not a surrogate ------------------------------
+scalar 0 -> ok 0
+scalar 41 -> ok 41
+scalar d7ff -> ok d7ff
+scalar d800 -> reject
+scalar dbff -> reject
+scalar dc00 -> reject
+scalar dfff -> reject
+scalar e000 -> ok e000
+scalar fffd -> ok fffd
+scalar 10ffff -> ok 10ffff
+scalar 110000 -> reject
+scalar 110001 -> reject
+scalar ffffffff -> reject
+
+# --- control values: strictly above 10FFFF --------------------------------
+control 0 -> reject
+control 10ffff -> reject
+control 110000 -> ok
+control 110001 -> ok
+control ffffffff -> ok
+
+# --- widen: one cell per byte then CTRL_END; receiver max is a hard ceiling
+widen - max=0 -> ok 110000
+widen 41 max=1 -> ok 41 110000
+widen 41 max=0 -> budget
+widen 00ff0a1a04 max=16 -> ok 0 ff a 1a 4 110000
+widen 00000000000000000000000000000000 max=16 -> ok 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 110000
+widen 0000000000000000000000000000000000 max=16 -> budget
+# bytes that spell the terminator's encoding in any width still widen to input cells
+widen 110000 max=8 -> ok 11 0 0 110000
+widen 000011 max=8 -> ok 0 0 11 110000
+widen f48fbfbf max=8 -> ok f4 8f bf bf 110000
+
+# --- utf8: one cell per scalar; malformed input is refused, never repaired
+utf8 - max=0 -> ok 110000
+utf8 41 max=8 -> ok 41 110000
+utf8 c3a9 max=8 -> ok e9 110000
+utf8 e282ac max=8 -> ok 20ac 110000
+utf8 f09f9880 max=8 -> ok 1f600 110000
+utf8 f48fbfbf max=8 -> ok 10ffff 110000
+utf8 48c3a9e282acf09f9880 max=16 -> ok 48 e9 20ac 1f600 110000
+# overlong encodings
+utf8 c080 max=8 -> encoding 0
+utf8 c1bf max=8 -> encoding 0
+utf8 e08080 max=8 -> encoding 0
+utf8 f0808080 max=8 -> encoding 0
+# surrogates encoded in UTF-8
+utf8 eda080 max=8 -> encoding 0
+utf8 edbfbf max=8 -> encoding 0
+# above 10FFFF
+utf8 f4908080 max=8 -> encoding 0
+utf8 f5808080 max=8 -> encoding 0
+utf8 f8 max=8 -> encoding 0
+utf8 ff max=8 -> encoding 0
+# stray continuation and truncated sequences; consumed = bytes before the bad sequence
+utf8 80 max=8 -> encoding 0
+utf8 41bf max=8 -> encoding 1
+utf8 c3 max=8 -> encoding 0
+utf8 41c3 max=8 -> encoding 1
+utf8 e282 max=8 -> encoding 0
+utf8 f09f98 max=8 -> encoding 0
+utf8 4142e282 max=8 -> encoding 2
+# budget applies to input bytes
+utf8 4142 max=1 -> budget

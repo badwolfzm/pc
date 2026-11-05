@@ -48,7 +48,7 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-reco
 /tmp/warden-rofs-test
 ```
 
-- CI status: pending verification on PR head.
+- CI verified on PR head: [GitHub Actions run 42010285491](https://github.com/badwolfzm/pc/actions/runs/42010285491): **733 assertions passed under GCC + UBSan and 733 under Clang**. This validates only the standalone C service, not its integration into Warden.
 - Still required: independent review, integration with the existing
   personality server by its owner, kernel/QEMU syscall-to-rofs tests,
   evaluation on the target Windows/WSL2 host.

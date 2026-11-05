@@ -63,3 +63,38 @@ capability-checked SYS_PRESENT and SYS_KEY calls. A future guest adaptor can
 scale/copy this 160x100 frame into a 320x240 private source buffer and invoke
 those syscalls, but that work requires kernel/guest ownership coordination.
 Do not write to device memory directly or bypass capability checks.
+
+## Warden native guest adapter (2026-11-05)
+
+`warden_bridge.c/.h` maps Warden's PS/2 set-1 make/break scan codes
+(W/A/S/D, E0 arrow keys) to the bounded game queue, expands the 160×100
+raster to a **320×240 guest-owned** buffer, and invokes the Pong feature's
+`SYS_DISPLAY_INFO` (60) and `SYS_PRESENT` (61) through a callback. No
+guest code receives direct framebuffer mapping or device I/O capability.
+Host-side regression `test_warden_bridge.c` mocks the syscalls and validates
+pixels, output rectangle, press/release handling and refusal propagation.
+
+`warden_guest.c` is a native ring-3 candidate with the existing entrypoint
+symbol `pong_main`; it polls `SYS_KEY` (62), displays 60 frames through
+the capability-mediated adapter, uses `SYS_TICKS` (63) and `SYS_YIELD`
+to target up to 10 FPS, and emits frame/hash telemetry through `SYS_REPORT`
+(64). Compile without changing the kernel:
+
+```sh
+bash tools/game-probe/build-warden-guest.sh /tmp/g0-guest-build
+```
+
+This produces `game_text.bin`, `game_data.bin` and `game.elf` linked
+with Warden's existing `guest/pong/start.S` and `guest.ld`. Warden currently
+loads `pong_text.bin` and `pong_data.bin` from its own build step, so
+these alternative binaries are **not automatically installed or executed**.
+The kernel/Pong owner must coordinate a reviewed, opt-in guest selection
+mechanism, with capability-scoped input/display acceptance and exact QEMU
+runtime checks. Do not overwrite the default Pong app or falsely report
+these compile-only binaries as having run inside Warden.
+
+GitHub Actions [run 42034464438](https://github.com/badwolfzm/pc/actions/runs/42034464438)
+passed optimized host regressions, ASan/UBSan regressions, and native
+freestanding guest build on the exact implementation SHA
+`604497e04b73362c1ecb26eea526e57af3b29004`.
+No QEMU boot, FPS, memory-pressure or game-security review was done here.

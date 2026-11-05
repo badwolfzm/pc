@@ -1,0 +1,19 @@
+# Container manifest fixture for the reference loader tests (section 9 subset).
+[app]
+name = "ref-demo-container"
+abi  = "native"
+
+[grants]
+fs.read   = ["/app", "/etc/ssl/certs"]
+fs.write  = ["/data"]
+exec      = ["/usr/bin"]
+net.listen  = ["0.0.0.0:443"]
+net.connect = ["db.internal:5432", "*:443"]
+memory = { min = "64M", max = "512M" }
+cpu    = { share = 2, max_cores = 2 }
+process.spawn = { max = 32 }
+clock  = "coarse"
+render = true
+superops = ["blit", "clear", "fill_rect"]
+
+allow_unsigned = true    # tests use the approvals path; production containers leave this out

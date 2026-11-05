@@ -31,6 +31,7 @@ the control thread is now the sole pusher, driven by this board.
 | Phase 2 review fixes | host-exit auth, alloc-before-validate, heap growth bound | Done, PR #5 merged (main 00677c0) |
 | Phase 2b | Static ELF loader, first Linux syscalls via personality server, two isolated apps on one workload | In progress (started by kernel thread) |
 | Phase 3 | Rust port of MXSB loader, untyped-memory accounting, heap reclamation; Docker/K8s later | Not started |
+| Wave 2 (MatrixOS integration) | First integrated build across all six modules | **Complete** (08:06): all six accepted, security_regressions 32 pass / 0 fail, golden 25/26 |
 
 Design doc: https://claude.ai/artifact/RgybmAwmXP3ypxfVxGmRju
 Kernel plan: https://claude.ai/artifact/Npeq8VSVoMrT32Mo69VLLZ
@@ -72,6 +73,27 @@ the two-apps / ELF-loader Phase 2b work.
 | Canvas | matrixos/canvas/ | Delivered (candidate 4); pending acceptance |
 | Assets | matrixos/assets/ | Accepted (F1, F1b); owes PATH trace event in mx_vfs_compat.h |
 
+## MatrixOS sync-ready manifest (convention, 07:57)
+
+Convention with the MatrixOS lead: a folder is mirror-ready only when the lead
+says **"accepted, ready to sync"** with its path. The kernel lead (sole pusher)
+mirrors exactly those rows; nothing else.
+
+**Every matrixos/ folder is now accepted and ready to sync** (MatrixOS lead, 08:06):
+- matrixos/lfsr/
+- matrixos/assets/ (including mx_vfs_compat.h)
+- matrixos/superops/
+- matrixos/canvas/
+- matrixos/contracts/ (gpu-commands.md v1, mxsb-manifest.md 2.0.1 + schema, gpu-commands-ref/)
+- matrixos/bench/ (cloud and pc)
+- matrixos/reviews/
+- matrixos/tests/
+- matrixos/codegen/ — ready to sync (accepted)
+- matrixos/frontend/ — 1.0.2 ready to sync (tests verified 1.0.1; 1.0.2 only adds the tier drift test, which passes)
+
+Most are on main through PR #8; codegen and frontend 1.0.2 are the outstanding
+sync for the kernel lead to mirror.
+
 ## Prototype handoff queue (rapid prototyping — user, 07:49)
 
 Mode: each thread hands off a *working prototype* as soon as it runs; the
@@ -92,6 +114,7 @@ Workers report here (via bookkeeping); control pulls, PRs and pushes. "Staged"
 | Run Rust and QEMU tests on WSL2 | Delivered (this is the tests row above) | kernel/adversarial-tests/ | awaiting control merge |
 | Harden the Phase 0 supervisor | Working | — | awaiting handoff |
 | Connect game runtime and rendering | Working | — | awaiting handoff |
+| Frontend 1.0.2 (tier-flag sourcing + drift test) | Delivered, pending tests re-accept | matrixos/frontend/ | sync after re-acceptance |
 
 **Tests thread results (cloud VM, QEMU 8.2.2 TCG, no KVM, not verified on WSL2/PC):**
 cargo test 23/23, kernel 45/45, escape 44/44, compat 13/13. harden-user-mapping.patch
@@ -137,20 +160,29 @@ Prior round's leads are closed: "Control the whole effort" (done) and
 |---|---|---|---|
 | LFSR lifter | yes | yes | golden 25/26 = baseline, no new regression |
 | Assets | yes | yes | F1/F1b fixed; mx_vfs_compat.h shim provided |
-| Frontend | yes | yes | mxcc driver F3; mx_input.h shared typed-input header (F2) |
+| Frontend | 1.0.2 | yes | mxcc driver F3; mx_input.h (F2); `--` bypass fixed; 1.0.2 sources tier flags from codegen's mx_tiers.h with a passing drift test |
 | Super-ops | yes | yes | F6 fixed; gpu_vadd truncation refused via compat shim |
 | Canvas | yes | yes | 638 checks, ASan clean; consumed_hash + INT overflow fixed |
-| Codegen | yes | pending | MXSB emitter+validator V1..V25, tiers, lifter hook; 40k checks |
+| Codegen | yes | yes | MXSB emitter+validator; tiers; lifter hook; mxsb_test 40113, tiers 25, lifter 21; harness MXSB contract 43/43 (interim F7 stand-in) |
 
-All six wave-1 modules delivered. Five accepted (lfsr, assets, frontend 1.0.1,
-superops, canvas); only codegen's acceptance is pending.
+**All six wave-1 modules are accepted into the first integrated build** (08:05,
+integration owner). Frontend 1.0.2 (tier-flag sourcing) is a version bump still
+pending re-acceptance; 1.0.1 is the accepted baseline.
 
-## Integrated build (latest reported)
+## Integrated build (integration owner, 08:05)
 
-- golden_check.sh: 25/26 (baseline pin held; trace-hash difference recorded as a documented integrated golden from the fuzzer swap).
-- security_regressions.sh: 0 failures under gcc (F7 interim via codegen validator; Rust-side F2 skip).
-- RCS conformance suite: 92/92 (matrixos/tests/unit/rcs/).
-- Accepted modules in integrated build: lfsr (+ compat header), assets (+ VFS shim), frontend, superops (+ compat shim).
+First integrated build assembled; all six modules in. Acceptance rule met per
+module (no new failure vs the frozen baseline; every owned finding fixed).
+
+- security_regressions.sh: baseline 15 failures → **integrated 0** (32 PASS, 0 FAIL, gcc and clang).
+- golden_check.sh: 25/26 on baseline and integrated (documented GOLDEN_TRACE=0x3b3805a77980eee1; the one failure is the frozen baseline wrapper bug).
+- Unit suites: rcs 92/92, canvas 40/40 (incl. INT_MAX/INT_MIN block), mxsb contract 43/43 (interim F7 stand-in).
+- gpu-commands-ref independent conformance: 92/92.
+- Per-module own tests: lfsr 394,115; assets 47 (+ harness F1/F1b 10); frontend 1.0.1 typed-input 48 + cells 57 (Rust skipped, no cargo) + F2 3/F3 7; superops 203; canvas 759+22 (golden ghost hash f7da60a90fb9597f); codegen mxsb_test 40113 + tiers 25 + lifter 21.
+- fuzz/mx_fuzz_compat.h fixes finding 5.
+- Contracts: mxsb-manifest.md 2.0.1 + schema; gpu-commands.md v1 with PC-measured budget.
+- Everything up to PR #8 is on main; anything accepted after #8 is a handoff for the kernel lead to sync.
+- F7 remains interim (codegen's mxsb_contract.c) until contracts/mxsb-ref/ is built by the MXSB thread.
 
 ## Open gaps (reported to control)
 
@@ -162,7 +194,7 @@ superops, canvas); only codegen's acceptance is pending.
 6. **Superops triangle rasteriser PC bench pending**; the 20,000-triangle cap stays until measured on DESKTOP-9NPQNID.
 7. **Kernel heap reclamation open** (bump allocator never frees; per-run growth bound is the guard until Phase 3).
 8. **avx512 tier build-only / not verified** on the target PC (AVX2 only, no AVX-512).
-9. **Frontend** to take tier flags from codegen's MX_TIER_MARCH[] in mx_tiers.h rather than retyping them.
+9. ~~Frontend to take tier flags from codegen's MX_TIER_MARCH[] in mx_tiers.h.~~ **Resolved** in frontend 1.0.2 (sourced from mx_tiers.h with a drift test; pending tests-thread re-acceptance, then a kernel-lead sync handoff).
 
 ## Handover and standing integrity checks
 

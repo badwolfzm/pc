@@ -45,6 +45,8 @@ Baseline defects fixed (each has a regression test):
 | Harness: missing compiler counted as a passing rejection | fixed: setup probe through mxcc (exit 3 on failure), fail cases need a real compiler diagnostic |
 | Driver tests: 13 false failures from bare `clang` outside the fixed directories | fixed: real-compile blocks use absolute paths; search list widened (still no `$PATH`) |
 | Canvas integer overflow (issue 2) | not this module; belongs to the canvas thread |
+| Lead follow-up: tier flags shared with codegen | done (1.0.2): `mxcc` reads names, `-march` strings and `-DMX_TIER` from `codegen/tiers/mx_tiers.h`; `tests/unit/test_tiers.c` fails if the composed command line ever differs from the contract |
+| avx512 tier | build-only; the user's PC has no AVX-512, so **not verified** at run time |
 
 No commit or PR: the control plan's decision 4 keeps all code in the project files until the user names a GitHub repository.
 

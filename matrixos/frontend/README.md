@@ -173,3 +173,15 @@ is the check the security review asked for on super-op lengths (finding 6).
   fixed search directories is still exercised; the fixed list gained
   `/usr/lib/llvm-{17,19,20}/bin` and `/opt/homebrew/opt/llvm/bin`. `$PATH` is
   still never used by mxcc itself.
+
+### 1.0.2 (2026-11-05): tier flags come from the codegen contract
+- `src/mxcc.c` includes `../../codegen/tiers/mx_tiers.h` and takes tier names,
+  `-march=` strings, `-mtune=generic` and the `-DMX_TIER=<n>` define from it, so the
+  driver and the SIMD kernels cannot drift. `-DMX_SIMD_TIER=<n>` is still emitted
+  for 1.0.0 callers. `tests/unit/test_tiers.c` (`make test-tiers`) runs a dry run
+  per tier and requires exactly the contract's strings, one `-march=` flag, and no
+  `-march=native`. Building `src/mxcc.c` on its own still works from the project
+  layout (the include is relative); outside it, pass `-I<dir of mx_tiers.h>`.
+- **avx512 is build-only.** The user's PC has AVX2 and no AVX-512, so the avx512
+  tier compiles (checked by the driver tests with both compilers) but has never
+  run: **not verified**. avx2 and baseline builds have run here.

@@ -104,6 +104,14 @@ mxs_err mxs_clear(mxs_surface *dst, uint32_t color);
 mxs_err mxs_blit(mxs_surface *dst, int32_t dx, int32_t dy, const mxs_csurface *src, const mxs_rect *sr, mxs_blend mode);
 /* Bresenham line, clipped to dst. Scalar only (not a SIMD shape); bounded like the rest. */
 mxs_err mxs_line(mxs_surface *dst, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color);
+/* Triangle rasteriser path choice. Rows shorter than this many pixels run the scalar
+ * incremental kernel even on a SIMD tier, because the per-row vector setup costs more
+ * than it saves on short spans (measured: see README "Triangle span threshold"). 0 forces
+ * SIMD on every row, UINT32_MAX forces scalar; returns the value in effect. */
+uint32_t mxs_set_tri_simd_min_span(uint32_t px);
+uint32_t mxs_get_tri_simd_min_span(void);
+#define MXS_TRI_SIMD_MIN_SPAN_DEFAULT 96u
+
 /* Flat-color triangle, integer pixel vertices, clipped to `clip` (inside dst). Same inside
  * test and fill convention as rcs.c DRAW_TRIANGLES. Rows are rasterised with SIMD. */
 mxs_err mxs_triangle(mxs_surface *dst, const mxs_rect *clip, const int64_t x[3], const int64_t y[3], uint32_t color);

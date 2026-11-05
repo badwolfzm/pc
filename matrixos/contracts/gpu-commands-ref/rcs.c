@@ -18,20 +18,6 @@
 #include <stdlib.h>
 #include <assert.h>
 
-/* Optional SIMD backend: build with -DRCS_USE_SUPEROPS and link matrixos/superops
- * to run FILL_RECT, CLEAR, BLIT and DRAW_TRIANGLES on the mxs_* kernels (scalar,
- * 128-bit SSE2/NEON or AVX2 tier). Validation, damage and accounting are unchanged;
- * the kernels are bit-identical to the scalar loops below (rcs_test passes either way).
- * A kernel error here is a validator/executor gap and aborts. */
-#ifdef RCS_USE_SUPEROPS
-#include "../../superops/mx_superops.h"
-static mxs_surface mxs_view(rcs_surface *t) {
-    mxs_surface v = { mxs_span_of(t->px, (uint64_t)t->w * t->h), t->w, t->h, t->w };
-    return v;
-}
-static void mxs_must(mxs_err e) { if (e != MXS_OK) abort(); }
-#endif
-
 /* ---- helpers ------------------------------------------------------------ */
 
 static uint32_t bpp_of(uint32_t fmt) { return fmt == RCS_FMT_A8 ? 1u : 4u; }
@@ -393,9 +379,6 @@ static void damage_clear(rcs_surface *t) {
 static void fill(rcs_surface *t, const rcs_rect *d, uint32_t color) {
     assert(rect_inside(d, t->w, t->h));
     damage_rect(t, d);
-#ifdef RCS_USE_SUPEROPS
-    { mxs_surface v = mxs_view(t); mxs_rect r = {d->x, d->y, d->w, d->h}; mxs_must(mxs_fill_rect(&v, &r, color)); return; }
-#endif
     for (int32_t j = 0; j < d->h; ++j) {
         uint32_t *row = t->px + (size_t)(d->y + j) * t->w + (size_t)d->x;
         for (int32_t i = 0; i < d->w; ++i) row[i] = color;
@@ -491,16 +474,6 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
         assert(rect_inside(&d, t->w, t->h));
         damage_rect(t, &d);
         int32_t ox = d.x - a.dx, oy = d.y - a.dy;  /* offset into the source rect after clipping */
-#ifdef RCS_USE_SUPEROPS
-        {
-            mxs_surface dv = mxs_view(t);
-            mxs_csurface sv = { mxs_cspan_of(s->px, (uint64_t)s->w * s->h), s->w, s->h, s->w };
-            mxs_rect sr = { a.sr.x + ox, a.sr.y + oy, d.w, d.h };
-            mxs_must(mxs_blit(&dv, d.x, d.y, &sv, &sr, (mxs_blend)a.blend));
-            c->frame_pixel_ops += (uint64_t)d.w * d.h * (a.blend != RCS_BLEND_COPY ? 2u : 1u);
-            break;
-        }
-#endif
         for (int32_t j = 0; j < d.h; ++j) {
             const uint32_t *srow = s->px + (size_t)(a.sr.y + oy + j) * s->w + (size_t)(a.sr.x + ox);
             uint32_t *drow = t->px + (size_t)(d.y + j) * t->w + (size_t)d.x;
@@ -556,9 +529,6 @@ static void exec_cmd(rcs_client *c, uint16_t op, const uint8_t *body) {
             int64_t area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
             if (area == 0 || maxx < minx || maxy < miny) continue;
             { rcs_rect bb = {(int32_t)minx, (int32_t)miny, (int32_t)(maxx - minx + 1), (int32_t)(maxy - miny + 1)}; damage_rect(t, &bb); }
-#ifdef RCS_USE_SUPEROPS
-            { mxs_surface tv = mxs_view(t); mxs_rect cr = {reg.x, reg.y, reg.w, reg.h}; mxs_must(mxs_triangle(&tv, &cr, x, y, color)); continue; }
-#endif
             for (int64_t py = miny; py <= maxy; ++py)
                 for (int64_t px = minx; px <= maxx; ++px) {
                     int64_t w0 = (x[1] - px) * (y[2] - py) - (x[2] - px) * (y[1] - py);

@@ -219,7 +219,7 @@ Bytes moved per cost unit:
 | BLIT copy | 8 B per px (4 read + 4 write) | 1 px-op |
 | BLIT alpha / add | 12 B per px (read src, read dst, write) | 2 px-ops, so 6 B per op |
 | LINE | 4 B write per step, worst one cache line (64 B) per step | scattered; a DRAM miss is 155 ns on the PC |
-| DRAW_TRIANGLES | compute-bound: edge setup + ~20–50 px fill per low-poly triangle | ~0.5 µs/tri, measured by the superops thread on 20 px flat triangles (cloud container, ±40% between runs) |
+| DRAW_TRIANGLES | compute-bound: edge setup + ~20–50 px fill per low-poly triangle | 0.37 µs/tri scalar on the PC for 20 px flat triangles (0.5 µs on the cloud container); SIMD tiers are slower on short spans |
 | UPLOAD | 3× payload (ring copy-out 2×, surface write 1×) | |
 | BIND_ASSET | 2× asset bytes (read store buffer, write surface) | the storage read is the assets thread's cost, off this core |
 | CREATE_SURFACE | 4 B write per px, once | zero-fill; not per frame |
@@ -231,16 +231,16 @@ Per-frame ceilings as enforced, and what they cost if a game hits them:
 |---|---|---|---|---|---|
 | Commands | 4096/batch, ≤256 KiB/batch | ~0.25 MB per batch; a typical frame ~500 cmds ≈ 20 KiB | < 0.03 ms | < 0.02 ms | — |
 | 2D pixel-ops | 6 M | 48 MB (all copy) / 36 MB (all alpha) | 4.8 ms | 2.4 ms all copy at 19.7 GB/s; 0.8 ms all alpha at 3.9 Gpx/s | composite 0.5 ms + sprites 2–4 ms |
-| Triangles | 20 000 | ~1 M px written ≈ 8 MB; compute-bound | 8–12 ms (assumed) | ~10 ms: superops kernel measured ~0.5 µs per 20 px flat triangle on the cloud container (Xeon 2.8 GHz, AVX2), not the PC; runs varied up to ~40% | low-poly 3D 8–12 ms |
+| Triangles | 20 000 | ~1 M px written ≈ 8 MB; compute-bound | 8–12 ms (assumed) | 7.4 ms on the PC with the scalar tier (10.3 ms v128, 11.4–14.5 ms v256; median of 21 runs, bench/pc/pc_superops_bench.csv); cloud container ~10 ms | low-poly 3D 8–12 ms |
 | UPLOAD | 2 MiB | 6 MiB | 0.6 ms | 0.3 ms | part of streaming headroom 4 ms |
 | BIND_ASSET | 8 MiB | 16 MiB | 1.6 ms | 0.85 ms (copy) | part of streaming headroom 4 ms |
-| **Render side at every cap** | | ~80 MB | **15–19 ms** | **~3.6 ms + ~10 ms triangles** | composite + sprites + 3D + streaming = 15–20.5 ms |
+| **Render side at every cap** | | ~80 MB | **15–19 ms** | **~3.6 ms + 7.4 ms triangles (scalar)** | composite + sprites + 3D + streaming = 15–20.5 ms |
 
 Remaining frame for the other rows (design doc): game logic 4–8 ms, encode
 6–10 ms (measured on the PC: x264 ultrafast 2.2 ms, veryfast 4.9 ms, RGBA to
 YUV 0.49 ms). On the assumed numbers a game at every render cap plus the top
 of the logic and encode rows overruns 33 ms by ~4 ms; on the PC numbers the
-render side at every cap is about 14 ms, with triangles ~10 ms of it. The caps are per-resource ceilings, not a promise that
+render side at every cap is about 11 ms, with triangles 7.4 ms of it. The caps are per-resource ceilings, not a promise that
 all can be hit at once; the compositor's frame deadline remains the backstop
 (canvas thread). The PC measurements say the 2D caps are conservative by 2 to
 6×; I am keeping them until the triangle cost is measured, because raising
@@ -302,9 +302,13 @@ compositor's deadline, asset streaming latency, the ring transport itself.
 1. **Numbers.** The 2D, upload and bind caps are 2 to 6× conservative on the
    PC measurements. They stay until the triangle cost is measured; raising
    them is a one-constant change in `rcs.h`.
-2. **Triangle cost.** The superops rasterizer measures ~0.5 µs per 20 px flat
-   triangle on the cloud container (±40% between runs, not yet the PC), so 20 000 triangles is ~10 ms, the design's row. The cap stays;
-   textured and baked shading will cost more, not less.
+2. **Triangle cost.** On the PC, 20 000 flat 20 px triangles take 7.4 ms with
+   the scalar tier (22% of the frame), inside the design's 8–12 ms row; the
+   v128 and v256 tiers are slower (10.3 and 11.4–14.5 ms) because per-span
+   vector setup outweighs spans of a few pixels. The cap stays at 20 000; the
+   superops thread should add a scalar fast path for short spans before the
+   cap is tuned against the SIMD numbers. Textured and baked shading will
+   cost more, not less.
 3. **Depth.** v1 has no depth buffer command; DRAW_TRIANGLES draws in order.
    A `DEPTH` surface format and a `depth` field would be an additive v2.
 4. **Textured triangles.** `texture` and `BAKED` shading are validated but the

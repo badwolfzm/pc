@@ -27,6 +27,16 @@ $(B)/test_superops: test_superops.c $(SRC) mx_superops.h mx_superops_compat.h mx
 $(B)/bench_superops: bench_superops.c $(SRC) mx_superops.h mx_superops_kernels.inc | $(B)
 	$(CC) $(CFLAGS) bench_superops.c $(SRC) -o $@
 
+$(B)/bench_tri_sweep: bench_tri_sweep.c $(SRC) mx_superops.h mx_superops_kernels.inc | $(B)
+	$(CC) $(CFLAGS) bench_tri_sweep.c $(SRC) -o $@
+
+# bench-backed check: the triangle path chosen by default is never slower than scalar beyond noise
+perfcheck: $(B)/bench_tri_sweep
+	$(B)/bench_tri_sweep --check
+
+tri-sweep: $(B)/bench_tri_sweep
+	$(B)/bench_tri_sweep > tri_sweep.csv && cat tri_sweep.csv
+
 test: $(B)/test_superops
 	$(B)/test_superops
 
@@ -36,4 +46,4 @@ bench: $(B)/bench_superops
 clean:
 	rm -rf $(B)
 
-.PHONY: all test bench clean
+.PHONY: all test bench perfcheck tri-sweep clean

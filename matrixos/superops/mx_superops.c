@@ -127,6 +127,9 @@ static const mxs_kernels K_v256 = { k_fill32_v256, k_fill8_v256, k_copy_v256, k_
 #endif
 
 static mxs_tier g_tier = MXS_TIER_AUTO;
+static uint32_t g_tri_min_span = MXS_TRI_SIMD_MIN_SPAN_DEFAULT;
+uint32_t mxs_set_tri_simd_min_span(uint32_t px) { g_tri_min_span = px; return px; }
+uint32_t mxs_get_tri_simd_min_span(void) { return g_tri_min_span; }
 static const mxs_kernels *g_K = &K_v128;
 
 mxs_tier mxs_detect_tier(void) {
@@ -275,10 +278,12 @@ mxs_err mxs_triangle(mxs_surface *dst, const mxs_rect *clip, const int64_t x[3],
     int64_t ex = (vmaxx > maxx ? vmaxx : maxx) - (vminx < minx ? vminx : minx);
     int64_t ey = (vmaxy > maxy ? vmaxy : maxy) - (vminy < miny ? vminy : miny);
     bool small = ex < (1 << 14) && ey < (1 << 14);
+    bool use_simd = (uint64_t)(maxx - minx + 1) >= (uint64_t)g_tri_min_span;   /* short rows: scalar wins (see README) */
+    const mxs_kernels *k = use_simd ? K() : &K_scalar;
     for (int64_t py = miny; py <= maxy; ++py) {
         uint32_t *row = px + (size_t)py * dst->pitch;
-        if (small) K()->tri_row32(row, minx, maxx, py, x, y, area, color);
-        else       K()->tri_row(row, minx, maxx, py, x, y, area, color);
+        if (small) k->tri_row32(row, minx, maxx, py, x, y, area, color);
+        else       k->tri_row(row, minx, maxx, py, x, y, area, color);
     }
     return MXS_OK;
 }

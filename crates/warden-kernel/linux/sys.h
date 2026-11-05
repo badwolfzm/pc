@@ -29,6 +29,8 @@ enum {
     SYS_bind = 49, SYS_listen = 50, SYS_setsockopt = 54, SYS_exit = 60, SYS_uname = 63, SYS_ptrace = 101,
     SYS_readlink = 89, SYS_arch_prctl = 158, SYS_nanosleep = 35, SYS_exit_group = 231, SYS_epoll_wait = 232,
     SYS_epoll_ctl = 233, SYS_openat = 257, SYS_epoll_create1 = 291, SYS_accept4 = 288, SYS_bpf = 321,
+    SYS_gettimeofday = 96, SYS_getrlimit = 97, SYS_sched_getaffinity = 204, SYS_clock_getres = 229,
+    SYS_prlimit64 = 302, SYS_getrandom = 318,
 };
 
 struct sockaddr_in { u16 family; u16 port; u32 addr; u8 zero[8]; };

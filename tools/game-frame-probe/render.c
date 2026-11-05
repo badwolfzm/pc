@@ -15,7 +15,9 @@ static unsigned char shade(unsigned int tile, unsigned int side, unsigned int y)
 }
 void probe_render(unsigned int frame, unsigned int pixels[PROBE_WIDTH * PROBE_HEIGHT]) {
     /* All geometry and camera positions use signed 16.16 fixed point. */
-    const long long ox = 3LL * FP + FP / 2;
+    // Move the camera in X as well as Y. Y-only sub-tile motion could
+    // leave every visible wall column pixel-identical for the entire test.
+    const long long ox = 3LL * FP + FP / 2 + ((long long)(frame % 80U) - 40LL) * 256LL;
     const long long oy = (3LL * FP + FP / 2) + ((long long)(frame % 80U) - 40LL) * 256LL;
     for (unsigned int x = 0; x < PROBE_WIDTH; ++x) {
         const long long dy = ((long long)x - (long long)(PROBE_WIDTH / 2U)) * 256LL;

@@ -19,7 +19,7 @@ class Probe(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(second.returncode, 0, second.stderr)
             for key in ("digest", "bytes", "frames", "width", "height"):
-                pat = rf"\\b{key}=([^ ]+)"
+                pat = rf"\b{key}=([^ ]+)"
                 self.assertEqual(re.search(pat, first.stdout).group(1), re.search(pat, second.stdout).group(1))
             self.assertIn("single_thread=1", first.stdout)
             self.assertIn("host_only=1", first.stdout)

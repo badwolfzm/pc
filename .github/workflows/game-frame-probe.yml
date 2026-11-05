@@ -17,6 +17,8 @@ jobs:
         run: make -C tools/game-frame-probe test
       - name: Run single-thread 300-frame checksum
         run: tools/game-frame-probe/game-frame-probe 300
+      - name: Compile native Warden ring-3 adapter (not executed)
+        run: bash tools/game-frame-probe/guest/build.sh /tmp/warden-game-frame-guest
       - name: Undefined behavior sanitizer regression
         run: |
           cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all -o /tmp/probe-ubsan tools/game-frame-probe/main.c tools/game-frame-probe/render.c

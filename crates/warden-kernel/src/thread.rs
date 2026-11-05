@@ -10,7 +10,7 @@ use crate::mm::{AddressSpace, FrameAlloc};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
-use warden_caps::{CSpace, CapError, CapTable, ObjectKind, Rights};
+use warden_caps::{CSpace, CapError, CapTable, ObjectId, ObjectKind, Rights};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
@@ -41,10 +41,29 @@ pub enum State {
     RecvBlocked(u32),
 }
 
-#[derive(Default)]
+/// An endpoint's wait queues. Both queues are allocated once, at creation,
+/// with a fixed capacity that is the creator's cost for the object. They
+/// never grow afterwards, so a flood of senders cannot make the kernel
+/// allocate: the sender past the capacity is refused with E_QUEUE_FULL.
 pub struct Endpoint {
     senders: Vec<usize>,
     receivers: Vec<usize>,
+    capacity: usize,
+}
+
+impl Endpoint {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Endpoint { senders: Vec::with_capacity(capacity), receivers: Vec::with_capacity(capacity), capacity }
+    }
+    /// Append without ever reallocating.
+    fn enqueue(q: &mut Vec<usize>, capacity: usize, t: usize) -> bool {
+        if q.len() >= capacity {
+            return false;
+        }
+        debug_assert!(q.capacity() >= capacity);
+        q.push(t);
+        true
+    }
 }
 
 /// Why a thread stopped. Compared against each test thread's expectation.
@@ -119,7 +138,7 @@ impl Kernel {
             rip: entry, cs: USER_CS, rflags: 0x202, rsp: stack_top, ss: USER_SS, ..TrapFrame::default()
         };
         self.threads.push(Thread {
-            name, frame, cspace: CSpace::new(8), aspace, state: State::Runnable, pending: Msg::default(),
+            name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(),
             budget, budget_period: budget, death: None, expect, logs: 0,
         });
         self.threads.len() - 1
@@ -200,6 +219,8 @@ pub const SYS_YIELD: u64 = 5;
 pub const SYS_EXIT: u64 = 6; // (code)
 pub const SYS_HOST_EXIT: u64 = 7; // (host_slot, code): stop the machine
 pub const SYS_SEND: u64 = 8; // (slot, w0, w1, w2) blocks until received -> 0
+/// Returned by SEND/RECV when the endpoint's fixed queue is full.
+pub const E_QUEUE_FULL: u64 = -(7i64) as u64;
 pub const SYS_RECV: u64 = 9; // (slot) blocks until sent -> rax=0, rdi=badge, rsi/rdx/r10/r8=words
 
 fn err(e: CapError) -> u64 {
@@ -293,7 +314,12 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
         return Ok(After::Resume(err(CapError::WrongKind)));
     }
     let ep_id = r.object.0;
-    let ep = k.endpoints.entry(ep_id).or_default();
+    // The queue was allocated when the endpoint was created; nothing is
+    // allocated on the IPC path. An endpoint object with no queue is a
+    // kernel bug, not something user code can cause, so refuse it.
+    let Some(ep) = k.endpoints.get_mut(&ep_id) else {
+        return Ok(After::Resume(err(CapError::WrongKind)));
+    };
     if sending {
         let msg = Msg { badge: r.badge, w: [f.rsi, f.rdx, f.r10, f.r8] };
         if !ep.receivers.is_empty() {
@@ -301,7 +327,9 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             k.deliver(to, msg);
             return Ok(After::Resume(0));
         }
-        ep.senders.push(cur);
+        if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
+            return Ok(After::Resume(E_QUEUE_FULL));
+        }
         k.threads[cur].pending = msg;
         k.threads[cur].state = State::SendBlocked(ep_id);
         // The sender resumes with rax = 0 once a receiver takes the message.
@@ -316,7 +344,9 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             // deliver() wrote the message into cur's frame; resume it.
             return Ok(After::Resume(0));
         }
-        ep.receivers.push(cur);
+        if !Endpoint::enqueue(&mut ep.receivers, ep.capacity, cur) {
+            return Ok(After::Resume(E_QUEUE_FULL));
+        }
         k.threads[cur].state = State::RecvBlocked(ep_id);
         Ok(After::Block)
     }
@@ -386,9 +416,17 @@ pub fn start() -> ! {
 }
 
 
-pub fn root_cap(k: &mut Kernel, thread: usize, slot: usize, kind: ObjectKind, rights: Rights, budget: u64) {
+pub fn root_cap(k: &mut Kernel, thread: usize, slot: usize, kind: ObjectKind, rights: Rights, budget: u64) -> ObjectId {
     let t = &mut k.threads[thread];
-    k.caps.create_root(&mut t.cspace, slot, kind, rights, budget).expect("root cap");
+    k.caps.create_root(&mut t.cspace, slot, kind, rights, budget).expect("root cap")
+}
+
+/// Create an endpoint whose wait queues hold at most `capacity` threads each.
+/// The queues are the creator's one-time cost; the IPC path never allocates.
+pub fn root_endpoint(k: &mut Kernel, thread: usize, slot: usize, rights: Rights, capacity: usize) -> ObjectId {
+    let id = root_cap(k, thread, slot, ObjectKind::Endpoint, rights, 0);
+    k.endpoints.insert(id.0, Endpoint::with_capacity(capacity));
+    id
 }
 
 pub fn mint_to(k: &mut Kernel, from: usize, from_slot: usize, to: usize, to_slot: usize, mask: Rights, badge: u64) {

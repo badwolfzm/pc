@@ -1,0 +1,34 @@
+name: Warden native Doom-like G0 render probe
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/**'
+      - 'tools/game-frame-probe/**'
+      - 'tests/kernel/game_probe.sh'
+      - '.github/workflows/warden-game-g0.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ring3-render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and cross-build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential qemu-system-x86 nasm binutils
+      - name: Install Rust bare-metal target
+        run: rustup target add x86_64-unknown-none
+      - name: Run native G0 guest twice on one vCPU
+        run: |
+          LOG=target/game-probe-serial-a.log bash tests/kernel/game_probe.sh
+          LOG=target/game-probe-serial-b.log bash tests/kernel/game_probe.sh
+      - name: Save raw QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: warden-native-g0-evidence
+          path: target/game-probe-serial-*.log
+          if-no-files-found: ignore

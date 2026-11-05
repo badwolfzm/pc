@@ -7,15 +7,58 @@
  * If it validates, the validator agrees with the contract on the layout; each
  * mutation then expects the error code the 9a table names.
  *
- * Build against any validator exposing mxsb_validate(buf, len, diag) and the
- * mxsb_err codes of the schema (here codegen/mxsb):
- *   cc -std=c11 -O1 -g -fsanitize=address,undefined -I<codegen/mxsb> mxsb_contract.c <codegen/mxsb>/mxsb.c
+ * Two backends, same mutations, must agree:
+ *   codegen:  cc -std=c11 -O1 -g -fsanitize=address,undefined -I<codegen/mxsb> mxsb_contract.c <codegen/mxsb>/mxsb.c
+ *   mxsb-ref: cc ... -DMXSB_CONTRACT_REF -I<contracts/mxsb-ref> mxsb_contract.c <contracts/mxsb-ref>/mxsb_load.c
  */
-#include "mxsb.h"
-#include "mx_sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef MXSB_CONTRACT_REF
+/* backend 2: the contract owner's reference loader, contracts/mxsb-ref/mxsb_load.c.
+ * Error numbers are the schema's in both backends, so the MXSB_E_* names map 1:1. */
+#include "mxsb_load.h"
+typedef mxsb_ld_err mxsb_err;
+#define MXSB_OK MXSB_LD_OK
+#define MXSB_E_MAGIC MXSB_LD_E_MAGIC
+#define MXSB_E_VERSION MXSB_LD_E_VERSION
+#define MXSB_E_HEADER MXSB_LD_E_HEADER
+#define MXSB_E_TABLE MXSB_LD_E_TABLE
+#define MXSB_E_BOUNDS MXSB_LD_E_BOUNDS
+#define MXSB_E_OVERLAP MXSB_LD_E_OVERLAP
+#define MXSB_E_MISSING_SECTION MXSB_LD_E_MISSING_SECTION
+#define MXSB_E_DUP_SECTION MXSB_LD_E_DUP_SECTION
+#define MXSB_E_ENTRY MXSB_LD_E_ENTRY
+#define MXSB_E_MANIFEST_SYNTAX MXSB_LD_E_MANIFEST_SYNTAX
+#define MXSB_E_MANIFEST_VERSION MXSB_LD_E_MANIFEST_VERSION
+#define MXSB_E_BUILD_ID MXSB_LD_E_BUILD_ID
+#define MXSB_E_CAPS_SUMMARY MXSB_LD_E_CAPS_SUMMARY
+#define MXSB_E_PADDING MXSB_LD_E_PADDING
+#define MXSB_E_LAYOUT MXSB_LD_E_LAYOUT
+#define MXSB_S_MANIFEST MXSB_LD_S_MANIFEST
+#define MXSB_S_TEXT MXSB_LD_S_TEXT
+#define MXSB_S_DATA MXSB_LD_S_DATA
+#define MXSB_S_SIGNATURE MXSB_LD_S_SIGNATURE
+#define MXSB_S_BUILD_INFO MXSB_LD_S_BUILD_INFO
+#define MXSB_SF_R MXSB_LD_SF_R
+#define MXSB_SF_W MXSB_LD_SF_W
+#define MXSB_SF_X MXSB_LD_SF_X
+#define mxsb_err_name mxsb_ld_err_name
+typedef struct { const char *rule; char detail[200]; } mxsb_diag;
+static void mx_sha256_oneshot(const uint8_t *p, size_t n, uint8_t out[32]) { mxsb_ld_sha256(p, n, out); }
+static void mx_sha256_hex(const uint8_t h[32], char out[65]) { for (int i = 0; i < 32; ++i) snprintf(out + 2 * i, 3, "%02x", h[i]); }
+static mxsb_err mxsb_validate(const uint8_t *b, size_t len, mxsb_diag *d) {
+    mxsb_ld_policy pol; memset(&pol, 0, sizeof pol); pol.skip_signature = true; /* structural rules only, V20/V26 are the host's */
+    static mxsb_ld_image im; mxsb_ld_diag ld; memset(&ld, 0, sizeof ld);
+    mxsb_err rc = mxsb_ld_check(b, len, &pol, &im, &ld);
+    d->rule = ld.rule; memcpy(d->detail, ld.detail, sizeof d->detail); return rc;
+}
+#define BACKEND "mxsb-ref"
+#else
+#include "mxsb.h"
+#include "mx_sha256.h"
+#define BACKEND "codegen/mxsb"
+#endif
 
 static int g_pass = 0, g_fail = 0;
 static void wr16(uint8_t *p, uint16_t v) { for (int i = 0; i < 2; ++i) p[i] = (uint8_t)(v >> (8 * i)); }
@@ -110,5 +153,5 @@ int main(void) {
       memcpy(c + o_man, base + off_man, (size_t)man_sz); memcpy(c + o_text, base + off_text, TEXT_SZ); memset(c + o_data, 0x11, 16);
       expect("V28 DATA present but TEXT.size not a page multiple", c, L2, MXSB_E_LAYOUT, "V28"); free(c); }
     (void)rd64;
-    printf("mxsb_contract: %d passed, %d failed\n", g_pass, g_fail); free(b); free(base); return g_fail ? 1 : 0;
+    printf("mxsb_contract[%s]: %d passed, %d failed\n", BACKEND, g_pass, g_fail); free(b); free(base); return g_fail ? 1 : 0;
 }

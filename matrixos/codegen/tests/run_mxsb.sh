@@ -36,8 +36,12 @@ openssl genpkey -algorithm ed25519 -out key.pem 2>/dev/null; openssl pkey -in ke
 t "$E" build --elf guest_pie --manifest manifest.txt --superop blit --tier multi --sign key.pem -o pie.mxsb
 t "$E" build --elf guest_exec --manifest manifest.txt --unsigned -o exec.mxsb
 t "$E" verify pie.mxsb --pubkey pub.pem
-t bash -c "! $E verify pie.mxsb --pubkey otherpub.pem 2>/dev/null"
-t bash -c "! $E verify exec.mxsb --approve 00 2>/dev/null"
+t bash -c "$E verify pie.mxsb --pubkey otherpub.pem 2>&1 | grep -q MXSB_E_UNTRUSTED_KEY"
+t bash -c "$E verify exec.mxsb --approve 00 2>&1 | grep -q MXSB_E_UNTRUSTED_KEY"
+t bash -c "$E verify exec.mxsb 2>&1 | grep -q 'V20 NOT checked'"
+t bash -c "$E verify exec.mxsb --allow-unsigned 2>&1 | grep -q MXSB_E_UNTRUSTED_KEY"
+t bash -c "$E verify pie.mxsb --allow-unsigned 2>&1 | grep -q MXSB_E_UNTRUSTED_KEY"
+t "$E" verify pie.mxsb --structural-only
 t "$E" verify exec.mxsb --approve "$("$E" digest exec.mxsb)"
 t "$E" dump pie.mxsb
 # tamper: one TEXT byte flips -> build_id refusal; one BUILD_INFO byte -> signature refusal
@@ -51,6 +55,22 @@ u=bytearray(b); u[bi[2]+3]^=1; open('tamper_bi.mxsb','wb').write(u)
 P
 t bash -c "$E verify tamper_text.mxsb --pubkey pub.pem 2>&1 | grep -q MXSB_E_BUILD_ID"
 t bash -c "$E verify tamper_bi.mxsb --pubkey pub.pem 2>&1 | grep -q MXSB_E_SIGNATURE"
+# frozen golden set (matrixos/contracts/goldens, contract 2.0.4): rebuild from the frozen
+# raw images + test key, require byte identity, matching SHA-256 and dump text, and an intact
+# MANIFEST.sha256 over the whole goldens directory. Skipped with a notice if the set is absent.
+GOLD="${GOLD:-$HERE/../../contracts/goldens}"
+if [ -f "$GOLD/codegen/guest.mxsb" ]; then
+  G="$GOLD/codegen"
+  t "$E" build --text "$G/guest_text.bin" --data "$G/guest_data.bin" --entry 0x1000 --manifest "$G/manifest.txt" --superop blit --tier multi --build-info golden=codegen-1 --sign "$G/key.pem" -o golden_rebuilt.mxsb
+  t cmp -s golden_rebuilt.mxsb "$G/guest.mxsb"
+  t bash -c "[ \"\$(sha256sum '$G/guest.mxsb' | cut -d' ' -f1)\" = \"\$(cat '$G/guest.mxsb.sha256')\" ]"
+  t bash -c "$E dump '$G/guest.mxsb' | diff -q - '$G/guest.dump.txt' >/dev/null"
+  t "$E" verify "$G/guest.mxsb" --pubkey "$G/pub.pem"
+  t bash -c "cd '$GOLD' && sha256sum --quiet -c MANIFEST.sha256"
+  t bash -c "cd '$GOLD' && diff <(find . -type f ! -name MANIFEST.sha256 ! -name README.md | sort) <(cut -c67- MANIFEST.sha256 | sort)"   # no unlisted files
+else
+  echo "NOTE: golden set not found at $GOLD, golden assertions skipped"
+fi
 # refusals at the ELF boundary
 t bash -c "! $E build --elf /bin/ls --manifest manifest.txt --unsigned -o x.mxsb 2>/dev/null"            # dynamically linked
 t bash -c "! $E build --text guest.c --entry 0 --manifest <(printf 'mxsb-manifest 1\nname a\nabi native\nrequire superop=blit\n') --superop clear --unsigned -o x.mxsb 2>/dev/null"  # superop not required
@@ -64,7 +84,7 @@ P
 t bash -c "$E dump v1.mxsb | grep -q 'v1: tools decode, loader refuses'"
 t bash -c "$E verify v1.mxsb 2>&1 | grep -q MXSB_E_VERSION"
 t "$E" upgrade v1.mxsb --manifest manifest.txt --unsigned -o v1up.mxsb
-t "$E" verify v1up.mxsb
+t "$E" verify v1up.mxsb --approve "$("$E" digest v1up.mxsb)"
 # independent cross-check in Python: digest, build_id, ELF image rule
 python3 -I - "$WORK" <<'P'
 import struct, hashlib, sys, subprocess

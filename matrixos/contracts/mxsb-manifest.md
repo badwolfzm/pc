@@ -1,6 +1,6 @@
 # MXSB v2: super-binary header and manifest contract
 
-Status: draft 2.0.3, 2026-11-05. Owner: thread "Upgrade MXSB manifest format".
+Status: draft 2.0.4, 2026-11-05. Owner: thread "Upgrade MXSB manifest format".
 Machine-readable companion: `mxsb-manifest.schema.json` (same folder). The
 schema is authoritative for constants and names; this file explains them.
 
@@ -85,7 +85,11 @@ u64 overflow; each unique type appears at most once; required types appear.
 | SUPEROPS | 5 | no | yes | array of u32 super-op ids the binary calls |
 | SIGNATURE | 6 | yes | yes | 32-byte key id + 64-byte Ed25519 signature |
 | BUILD_INFO | 7 | no | yes | UTF-8 `key=value` lines: `profile`, `simd_tier`, `source_sha256`, `toolchain` |
+| reserved | 8 .. 0x7FFF | no | no | for later minor versions; a 2.0 reader skips them (flags must be 0), still covered by the digest |
 | vendor | >= 0x8000 | no | no | skipped by the reader, still covered by the digest |
+
+Type 0 is not a section type and is refused (V10). A skipped section still
+obeys V10 (flags 0, reserved 0), V11 and V13.
 
 ### 3.4 Load layout (no vaddr fields)
 
@@ -313,6 +317,9 @@ schema file. A decoder returns exactly one of these or success.
 
 ## 11. Changelog
 
+- 2026-11-05: `goldens/codegen/guest.mxsb` added by the codegen thread (17136 bytes, SHA-256 d7bfb047...515258c9, Ed25519-signed with a frozen test key, rebuilt byte-identically from the frozen page images beside it). Admitted by the reference loader under `pub.pem`.
+- Golden set frozen 2026-11-05 at 2.0.4 (`goldens/`, pinned by `MANIFEST.sha256`). From here the version policy in section 7 applies strictly: a change to any golden byte is a reviewed change with its own entry below.
+- 2.0.4 (2026-11-05): clarification from the reference loader: section types 8..0x7FFF are reserved for later minors and skipped; type 0 is refused under V10. Reference loader and corpus added under mxsb-ref/.
 - 2.0.3 (2026-11-05): codegen thread review. v1 header size corrected to 40 bytes. Section 3.4 fixes the load layout (TEXT at base, DATA at base + TEXT.size, BSS after; no vaddr fields). Digest now covers the whole file except SIGNATURE and padding must be zero (V27); V28 requires page-multiple TEXT when DATA or BSS exists. Pre-freeze note: no golden files are frozen yet, so these meaning changes stay under major 2; from the first frozen golden file on, the policy in section 7 applies strictly.
 - 2.0.2 (2026-11-05): `random` defaults to false in `warden.toml` (kernel thread amendment); new names recorded as warden-abi 0.2.
 - 2.0.1 (2026-11-05): section 9a, exact validation rules V1..V26 and size limits, from security review finding 7.

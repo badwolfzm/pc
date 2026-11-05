@@ -92,6 +92,7 @@ typedef struct {
     bool (*verify)(void *ctx, const uint8_t key_id[32], const uint8_t digest[32], const uint8_t sig[64]);
     void *verify_ctx;
     bool skip_signature;                     /* tools only: report digest, do not run V20 */
+    bool digest_only;                        /* tools only: stop after V19 with the digest filled in */
 } mxsb_ld_policy;
 
 /* ---- result ------------------------------------------------------------ */

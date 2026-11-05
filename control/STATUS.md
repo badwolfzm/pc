@@ -25,12 +25,12 @@ the control thread is now the sole pusher, driven by this board.
 
 | Phase | Scope | State |
 |---|---|---|
-| Phase 0 | Host supervisor baseline (tarball) | Done, on main (823a666) |
+| Phase 0 | Host supervisor baseline (tarball) | Done; hardening merged (PR #13: path races, exec verify, per-process library grants) |
 | Phase 1 | x86-64 microkernel boots under QEMU, ring-3 under capability model | Done, PR #1 merged |
 | Phase 2a | Per-thread address spaces, synchronous IPC endpoints | Done, PR #4 merged |
 | Phase 2 review fixes | host-exit auth, alloc-before-validate, heap growth bound | Done, PR #5 merged (main 00677c0) |
-| Phase 2b | Static ELF loader, first Linux syscalls via personality server, two isolated apps on one workload | In progress (started by kernel thread) |
-| Phase 3 | Rust port of MXSB loader, untyped-memory accounting, heap reclamation; Docker/K8s later | Not started |
+| Phase 2b | Static ELF loader, first Linux syscalls via personality server, two isolated apps on one workload | **Merged (PR #16)** — two isolated apps over a user-space Linux personality server; static HTTP server serves a client in a second isolated process. Cloud-VM verified, not on PC |
+| Phase 3 | Rust port of MXSB loader, untyped-memory accounting, heap reclamation; Docker/K8s later | Started: untyped memory + heap reclamation merged (PR #14). MXSB Rust port and Docker/K8s still ahead |
 | Wave 2 (MatrixOS integration) | First integrated build across all six modules | **Complete** (08:06): all six accepted, security_regressions 32 pass / 0 fail, golden 25/26 |
 
 Design doc: https://claude.ai/artifact/RgybmAwmXP3ypxfVxGmRju
@@ -45,13 +45,20 @@ Kernel plan: https://claude.ai/artifact/Npeq8VSVoMrT32Mo69VLLZ
 | #3 | project-files-sync | Re-sync: assets, security regressions, GPU ref | Merged |
 | #4 | phase2a-aspace-ipc | Phase 2a address spaces + IPC | Merged |
 | #5 | review-fixes-bd1e914 | Fix bd1e914 review findings | Merged |
-| #6 | review3-mm-wx-ipc | kernel: check-before-alloc in map_user, W^X user mappings, fixed-capacity IPC queues | Merged (afebdaf → 0db603c) |
-| #7 | harden-user-mapping | Harden user memory mapping (refuse remaps before alloc, W^X) | Closed, NOT merged — superseded by #6 |
-| #8 | project-files-sync-2 | Sync frontend 1.0.1, canvas, superops, codegen, assets shim, tests, contracts | Merged (d25163a → 6d9f979) |
+| #6 | review3-mm-wx-ipc | kernel: check-before-alloc, W^X mappings, fixed-capacity IPC queues | Merged |
+| #7 | harden-user-mapping | Harden user memory mapping | Closed, NOT merged — superseded by #6 |
+| #8 | project-files-sync-2 | Sync frontend 1.0.1, canvas, superops, codegen, assets shim, tests | Merged |
+| #9 | kernel-revoke-fix | caps: revoke() allocates nothing; counting-allocator + in-guest flood | Merged |
+| #10 | gpusim | gpusim: simulated memory-based GPU in CPU RAM (prototype) | Merged |
+| #11 | adversarial-tests-v2 | Kernel tests: wrong-cap, mid-flight revocation, exhaustion floods | Merged |
+| #12 | project-files-sync-3 | Sync canvas fixes, test oracles, codegen notes, control plan, board | Merged |
+| #13 | phase0-hardening | Phase 0 supervisor: close path races, verify exec, per-process library grants | Merged |
+| #14 | phase3-untyped | Phase 3: untyped memory pays for every kernel object; heap frees and reclaims | Merged |
+| #15 | project-files-sync-4 | Sync MatrixOS wave 2 (codegen, frontend 1.0.2), control plan, board | Merged |
+| #16 | phase2b-isolated-apps | Phase 2b: two isolated applications over a user-space Linux personality server | Merged |
 
-Main is at **6d9f979**. No open PRs. Next expected: the kernel's `revoke()`
-no-alloc patch (staged, see below) folded into a hardening PR by control, plus
-the two-apps / ELF-loader Phase 2b work.
+Main is at **cc904bc**. No open PRs. Staged and not yet pushed: the Pong guest
+(needs the 60..64 syscall ruling) and the tests thread's dev-profile fix (below).
 
 ## Threads
 
@@ -88,11 +95,13 @@ mirrors exactly those rows; nothing else.
 - matrixos/bench/ (cloud and pc)
 - matrixos/reviews/
 - matrixos/tests/
-- matrixos/codegen/ — ready to sync (accepted)
-- matrixos/frontend/ — 1.0.2 ready to sync (tests verified 1.0.1; 1.0.2 only adds the tier drift test, which passes)
+- matrixos/codegen/ — synced via PR #15 (updated: 43 mutations give identical verdicts to mxsb-ref)
+- matrixos/frontend/ — 1.0.2 synced via PR #15
+- matrixos/contracts/mxsb-ref/ — NEW, accepted, ready to sync (F7 primary oracle)
+- matrixos/tests/ — updated (F7 wired to mxsb-ref primary + codegen second oracle; integrated 34 PASS/0 FAIL), ready to sync
 
-Most are on main through PR #8; codegen and frontend 1.0.2 are the outstanding
-sync for the kernel lead to mirror.
+Codegen and frontend 1.0.2 are on main (PR #15). Outstanding sync for the kernel
+lead: matrixos/contracts/mxsb-ref/ and the matrixos/tests/ F7 wiring update.
 
 ## Prototype handoff queue (rapid prototyping — user, 07:49)
 
@@ -103,18 +112,21 @@ Workers report here (via bookkeeping); control pulls, PRs and pushes. "Staged"
 
 | Thread / work | Prototype state | Where | Control action |
 |---|---|---|---|
-| Kernel: map_user W^X, check-before-alloc, fixed IPC queues | Merged | PR #6 (main 0db603c) | done |
-| Kernel: revoke() allocates nothing | Staged; cross-verified by tests thread (see below) | /mnt/project-files/handoff/phase2b-from-kernel/0001-revoke-allocates-nothing.patch | fold into a hardening PR |
+| Kernel: map_user W^X, check-before-alloc, fixed IPC queues | Merged | PR #6 | done |
+| Kernel: revoke() allocates nothing | Merged (cross-verified by tests thread) | PR #9 | done |
 | Harden user memory mapping | Superseded by #6 | PR #7 closed unmerged | none |
-| Tests: 4 suites + adversarial suite | Staged, verified on cloud VM (TCG, no KVM) | kernel/adversarial-tests/ (REPORT.md, patches 0001, 0002) | land after rebasing onto #6 — see skew note |
-| Build two isolated apps running together | Working (no deliveries recorded yet) | — | awaiting handoff |
-| Run the Linux personality and ELF loader | Working | — | awaiting handoff |
-| Add untyped memory and heap budget | Working (owns heap budgets; revoke patch can ride its series) | — | awaiting handoff |
-| Budget IPC endpoint queues | Working (fixed-capacity queues already in #6 — confirm scope) | — | awaiting handoff |
-| Run Rust and QEMU tests on WSL2 | Delivered (this is the tests row above) | kernel/adversarial-tests/ | awaiting control merge |
-| Harden the Phase 0 supervisor | Working | — | awaiting handoff |
-| Connect game runtime and rendering | Working | — | awaiting handoff |
-| Frontend 1.0.2 (tier-flag sourcing + drift test) | Delivered, pending tests re-accept | matrixos/frontend/ | sync after re-acceptance |
+| Tests: adversarial suite (wrong-cap, mid-flight revoke, floods) | Merged | PR #11 | done |
+| Add untyped memory and heap budget | Merged — untyped memory pays for every object; heap frees/reclaims | PR #14 | done |
+| Harden the Phase 0 supervisor | Merged — path races, exec verify, per-process library grants | PR #13 | done |
+| gpusim (GPU prototype) | Merged — simulated memory-based GPU in CPU RAM | PR #10 | done |
+| Game runtime host lib (Run Pong inside Warden) | Delivered, cloud-only: test_runtime 229 pass, ASan/UBSan clean; 720p 0.6–2.8 ms/frame, paced demo 30.8 fps | matrixos/runtime/ (NEW folder) | sync after lead accepts |
+| Pong as a native Warden guest | Delivered, cloud TCG only (not independently verified): pong.sh 15/15 ALL HELD, 30 fps 0 missed slots, 2.7 ms median input latency, heap +0, hostile writer/forger/spinner refused/killed; escape suite 54/54 | handoff/pong-in-warden/ (series/0001 on main 5a817c2, HANDOFF.md, pong-screen.png, pong-serial.log) | needs syscall 60..64 ABI ruling + rebase on aa06bf0 before push |
+| MatrixOS sync (canvas fixes, oracles, codegen notes, board) | Merged | PR #12 | done |
+| Run the Linux personality and ELF loader (Phase 2b) | Merged (PR #16) | on main | done |
+| Build two isolated apps running together | Merged (PR #16) — HTTP server + client, two isolated processes, loopback | on main | done |
+| Budget IPC endpoint queues | Fixed-capacity queues landed in #6 — confirm any remaining scope | — | — |
+| MatrixOS codegen + frontend 1.0.2 sync | Merged (PR #15) | on main | done |
+| Tests: dev-profile kernel suite fix | Staged, cloud-VM verified: release 131/131, dev 131/131 | kernel/dev-profile-fix/0001-*.patch (git am on cc904bc; NOTE.md + before/after logs) | push (clean on current main) |
 
 **Tests thread results (cloud VM, QEMU 8.2.2 TCG, no KVM, not verified on WSL2/PC):**
 cargo test 23/23, kernel 45/45, escape 44/44, compat 13/13. harden-user-mapping.patch
@@ -174,7 +186,7 @@ pending re-acceptance; 1.0.1 is the accepted baseline.
 First integrated build assembled; all six modules in. Acceptance rule met per
 module (no new failure vs the frozen baseline; every owned finding fixed).
 
-- security_regressions.sh: baseline 15 failures → **integrated 0** (32 PASS, 0 FAIL, gcc and clang).
+- security_regressions.sh: baseline 15 failures → **integrated 0** (now 34 PASS, 0 FAIL). F7 is now wired to a real oracle: matrixos/contracts/mxsb-ref/ primary + codegen as a second oracle (no longer interim).
 - golden_check.sh: 25/26 on baseline and integrated (documented GOLDEN_TRACE=0x3b3805a77980eee1; the one failure is the frozen baseline wrapper bug).
 - Unit suites: rcs 92/92, canvas 40/40 (incl. INT_MAX/INT_MIN block), mxsb contract 43/43 (interim F7 stand-in).
 - gpu-commands-ref independent conformance: 92/92.
@@ -186,13 +198,16 @@ module (no new failure vs the frozen baseline; every owned finding fixed).
 
 ## Open gaps (reported to control)
 
-1. **MXSB reference loader not built.** Ruling assigns matrixos/contracts/mxsb-ref/ (checks V1..V26, schema error codes, malformed corpus) to the MXSB thread; it is the F7 owner. Codegen's validator is the interim stand-in and both must agree.
+1. ~~MXSB reference loader not built.~~ **Resolved.** matrixos/contracts/mxsb-ref/ is built and accepted: run_tests.sh 348/0, 0 divergences from codegen (68-file corpus, goldens, 20k mutation fuzz under ASan/UBSan), contract test 43/43. It is now the F7 primary oracle, codegen the second oracle. Ready to sync.
 2. **Contract fixes owed by MXSB thread** (from codegen): missing load-address layout rule, unauthenticated inter-section padding, v1 header is 40 bytes not 32. Needs a minor contract bump + reference loader.
 3. **Canvas and codegen pending acceptance** by the tests thread (order: canvas then codegen).
 4. **Assets owes PATH trace event** in mx_vfs_compat.h read_all/write_all to restore the golden trace hash.
 5. **Next sync PR not yet opened** (fresh project-files-sync from main) with all accepted deliveries since #3.
-6. **Superops triangle rasteriser PC bench pending**; the 20,000-triangle cap stays until measured on DESKTOP-9NPQNID.
-7. **Kernel heap reclamation open** (bump allocator never frees; per-run growth bound is the guard until Phase 3).
+6. **Superops triangle rasteriser PC bench pending** (NOT an acceptance gate). The span-threshold fix (scalar below 96 px, SIMD above) is in matrixos/superops/; the perfcheck was reworked to compare only where the paths differ and now passes 3/3 in-container (~20 s each), unit suite 203/203 under ASan/UBSan. Still open: PC runs of `make tri-sweep` and `make perfcheck` (bench thread) to set the 20,000-triangle cap on DESKTOP-9NPQNID; DRAW_TRIANGLES texture sampling rule (next wave); NEON build untested.
+7. ~~Kernel heap reclamation open.~~ **Resolved** in PR #14 (Phase 3): untyped memory pays for every kernel object and the heap frees and reclaims.
+10. **Pong guest needs an ABI ruling:** syscall numbers 60..64 requested from the kernel lead (recorded in CONTROL.md). Blocks the Pong-in-Warden push until assigned. New files: matrixos/runtime/ (game runtime host lib) and control/contracts/runtime.md.
+11. **Dev-profile test false-fail (fixed, staged):** on main cc904bc, PROFILE=dev run.sh killed "capability attacks" and "exhaustion floods" as budget deaths (128 checks, 3 failed). Fix makes the flood loops yield every 512 iterations, no check changed; release 131/131 and dev 131/131 after. Patch at kernel/dev-profile-fix/, not yet pushed.
+12. **User-action blocker — PC/WSL2 verification.** Everything so far is verified on the cloud VM under QEMU TCG only. Nothing is verified on the user's PC (DESKTOP-9NPQNID) or WSL2, which is the stated acceptance target (CONTROL.md decision 5). The tests thread is waiting on the user to reply in its own thread so it can reach the device.
 8. **avx512 tier build-only / not verified** on the target PC (AVX2 only, no AVX-512).
 9. ~~Frontend to take tier flags from codegen's MX_TIER_MARCH[] in mx_tiers.h.~~ **Resolved** in frontend 1.0.2 (sourced from mx_tiers.h with a drift test; pending tests-thread re-acceptance, then a kernel-lead sync handoff).
 

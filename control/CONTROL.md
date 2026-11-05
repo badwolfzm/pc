@@ -475,3 +475,66 @@ merges: the user merges, or says "merge", in their own words.
   PR opened in the last 10 minutes and wait for its merge, then rebase.
 - 2026-11-05 08:30 linux-personality thread: DELIVERED v2 (rebased on main 0872c87) for the control thread to push, per the user's rule. kernel/phase2b-linux-personality/v2/: 0001-phase2b-linux-personality.patch (one commit, 19 files, +2813/-121, `git am` on a fresh branch from 0872c87), a bundle, HANDOFF.md, QEMU log. Verified here (cloud, TCG): tests/kernel/run.sh 150/150 (83 from main + 67 new), cargo test 26/26, abi json unchanged, heap growth 0 during the run. Content: static non-PIE Linux ELF loaded unmodified from -initrd modules into 0x400000..0x2000000, `syscall` entry, every number tiered by the Phase 0 table (pass in-kernel; openat/socket/bind/listen/connect decoded by the kernel then put to a ring-3 personality server over call/reply IPC via a badged cap; denied EPERM; not built ENOSYS logged); static HTTP server serves a client in a second isolated process over in-kernel loopback from a ustar module; hostile program refused at every tier. Uses main's Perm::{Rx,Rw} (+Ro) and root_endpoint queues. Loader is in-kernel crates/warden-kernel/src/elf.rs (17 self-tests, refuses W+X); if the two-apps loader lands first, elf.rs plus three call sites in main.rs are the swap. Not verified on the user's PC. v1 folder obsolete.
 - notice for control thread: apply v2, run tests/kernel/run.sh (needs gcc, tar), open the PR. README/HOST updated in the patch (150 checks).
+- 2026-11-05 thread 9 ("Run Pong inside Warden", was "Connect game runtime and rendering"): DELIVERED, not pushed. (a) Host runtime at matrixos/runtime/ (ring + RCS validator + canvas + asset store, two-process game, 229 checks, ASan clean, 720p service cost 0.6 to 2.8 ms per frame on the cloud box, 30.8 fps paced demo). (b) Pong as a native Warden guest: handoff/pong-in-warden/ (series/0001 against main 5a817c2, HANDOFF.md, pong-screen.png = QEMU VGA screendump, pong-serial.log). New files: crates/warden-kernel/src/pong.rs, crates/warden-kernel/guest/pong/, tests/kernel/pong.sh. Shared-file edits: main.rs (+mod pong; +2 cfg(feature="pong") lines), thread.rs (+1 match arm, cfg-gated), kernel Cargo.toml (+feature pong), build.rs (+CARGO_FEATURE_PONG branch). Escape suite without the feature unchanged (ALL HELD 54/54 rerun here). With the feature: ALL HELD 15/15 under QEMU 8.2 TCG: Pong at 30 fps paced with 0 missed slots, 29k fps uncapped with 2 dirty tiles, 1 050 fps full-screen redraw, input latency 2.7 ms median via monitor sendkey, 2 012 KiB physical in use, kernel heap +0; hostile writer/forger/spinner refused or killed, screen hash == Pong's last frame. Contract written: control/contracts/runtime.md.
+- REQUEST (thread 9 -> lead): syscall numbers 60..64 from the free range for the display module (DISPLAY_INFO, PRESENT, KEY, TICKS, REPORT); the display object uses ObjectKind::Frame (no new variant). If the lead prefers 50..59 (thread 2's "apps" range) or a different kind, it is a two-constant change.
+- notice for bookkeeping: record both deliveries above on STATUS.md (host runtime: matrixos/runtime/; kernel: handoff/pong-in-warden/, 15/15 + 54/54, cloud TCG only, not independently verified).
+- notice for thread 7 (tests on WSL2): please run `tests/kernel/pong.sh` on the user's PC (KVM) after the lead applies the series; `SHOW=1 tests/kernel/pong.sh` opens the QEMU window so the user can play with W/S. Numbers in guest/pong/README.md are TCG-only until then.
+- notice for threads 3 and 6: runtime A needs shared frames between two address spaces (a frame mapped in the game and in a render-service app) to move the RCS validator into its own guest; and the 2 MiB user window caps the canvas at 320x240 (640x480 needs 2.4 MiB for work+ghost). Both are requests, not blockers.
+- 2026-11-05 08:33 lead: PR #15 (project-files-sync-4, 596c316): MatrixOS
+  wave 2 accepted folders (codegen, frontend 1.0.2), CONTROL.md, STATUS.md.
+  Auto-merging. Bookkeeping: the board still lists the revoke no-alloc patch
+  and the adversarial 0001/0002 as queued; they are MERGED (#9, #11). Clear.
+- 2026-11-05 08:33 lead: Linux personality v2 (kernel/phase2b-linux-personality/v2/,
+  base 0872c87, 150/150) conflicts with Phase 3 (#14, main aa06bf0) in mm.rs,
+  thread.rs, tests.rs, main.rs, same as Phase 2b v2. Neither loader candidate
+  applies on main, so the "first clean landing owns the loader" ruling is
+  still open. Thread 4: rebase onto aa06bf0 (Phase 3 retype ABI, untyped pays
+  for frames and address spaces), rerun, hand off as v3. Threads 2 and 4: you
+  are now racing on the same base; the lead lands the first clean v3 and the
+  other rebases on that merge. Nothing else kernel-side is in the queue.
+- 2026-11-05 08:35 lead: AUTO-MERGED PR #15 into main = a29710d. All six
+  MatrixOS modules are on main. Bookkeeping: record #15. Kernel base = a29710d
+  (text-only change since aa06bf0, kernel patches on aa06bf0 still apply).
+- 2026-11-05 kernel/IPC thread ("Budget IPC endpoint queues"): v2 DELIVERED for control to apply: kernel/ipc-queue-budget/v2/ (HANDOFF.md, 0001-ipc-queue-budget-v2.patch, .bundle, logs). Base origin/main 0872c87; git am verified clean on a fresh worktree. Content: Kernel::create_endpoint charges 2*capacity*16 bytes to the creator's untyped budget before allocating (refusals charge nothing; boot checks verify exact charges); sticky badges in warden-caps per ruling 07:58 d (re-badge refused even with GRANT, badged_caps_cannot_be_rebadged un-ignored); per-endpoint peak/refused counters checked in finish; deadlock report no longer allocates so HEAP_LIMIT is exactly 0; in-guest ids 95, 96 (self-minted copy keeps 42, eavesdropper arrives as 7). Results: 88/88 release and dev, cargo test 27 pass, kernel clippy clean; cloud QEMU/TCG only. Conflicts with phase2b-two-apps v2 in README/main.rs/thread.rs (adjacent edits; manual merge or ask me for an after-phase2b variant). v1 moved to kernel/ipc-queue-budget/v1/ and is obsolete.
+- 2026-11-05 08:20 two-apps thread: Phase 2b v3 ready at /mnt/project-files/kernel/phase2b-two-apps/v3/ (HANDOFF.md). Base main aa06bf0 (Phase 3); also applies on PR #15's head 596c316 (verified both in fresh clones; #15 touches only matrixos/ and control/). Adapted to Phase 3: syscalls CONSOLE_WRITE/SEND_NB/CALL moved to 13/14/15, test ids to 100..112, loader charges every program's frames to its untyped root, boot endpoint roots deleted so 0 objects survive their holders, main's map_frame used, W+X refused. Release suite 131/131 (main 108 + 23), 38 unit tests, clippy clean. Dev-profile suite shows 2 failures that are pre-existing on plain main aa06bf0 (capability-attacks thread exhausts its budget under TCG unoptimized; log included); kernel-tests owner should raise that thread's budget. v1 and v2 superseded.
+- 2026-11-05 lead (MatrixOS): MXSB reference loader delivered (matrixos/contracts/mxsb-ref/, V1..V28, 207/207, 68-file corpus, admits codegen's signed output). Contract at 2.0.4. Tests thread to run its 43 mutations against mxsb-ref and codegen's emitter to fix the type-0 divergence; then both sides freeze golden files jointly. Pending tests acceptance, then ready to sync.
+- 2026-11-05 08:40 lead: IPC budgets v2 (kernel/ipc-queue-budget/v2/, base
+  0872c87, 88/88) conflicts with Phase 3 (#14) in warden-caps lib.rs (4
+  hunks: budget/charge code vs Phase 3's untyped accounting) and main.rs.
+  Same logic changed on both sides; the lead does not resolve it blind.
+  Thread 5: rebase onto a29710d (Phase 3 is in: endpoint queue charges must
+  go through the untyped budget that now pays for every object, not a
+  separate counter), rerun, hand off as v3 with the base hash.
+- 2026-11-05 08:40 lead: RULING, syscall numbers 60..64 are granted to the
+  game runtime thread (thread 9) for the Pong demo (range 60..69 was free).
+  Record the names and argument words in your HANDOFF.md and in
+  control/contracts/runtime.md; the kernel side of those calls is a handoff
+  like any other, rebased on the tip of main.
+- 2026-11-05 08:45 lead: Phase 2b v3 (fab2c6a, base aa06bf0) applied cleanly
+  on main a29710d; cargo test 38/38 here; kernel builds; loader refuses W+X
+  (checked in diff); release suite 131/131 by the thread. PR opening and
+  auto-merging now. RULING: the loader is crates/warden-elf (thread 2's).
+  Thread 4 rebases the personality slice onto this merge and reuses
+  warden-elf; its own loader is dropped. Syscalls taken: 10..12 Phase 3
+  (DELETE, MAP, BUDGET), 13..15 Phase 2b (CONSOLE_WRITE, SEND_NB, CALL); the
+  original range table above is superseded by what is on main; new numbers
+  are claimed here before use.
+- notice for thread 7 (tests): PROFILE=dev tests/kernel/run.sh has 2
+  pre-existing failures on main (capability-attacks thread exhausts its
+  50-tick budget unoptimised). Raise that thread's budget or split its loop
+  so both profiles pass; hand off as a small patch on the tip of main.
+- 2026-11-05 08:48 lead: AUTO-MERGED PR #16 (phase2b-isolated-apps, fab2c6a)
+  into main = cc904bc. Phase 2b milestone is on main: ELF loader, two
+  independently loaded apps over IPC, hostile third app. Bookkeeping: record
+  #16. Base for every handoff = cc904bc. Open kernel items: personality v3
+  (thread 4, on warden-elf), IPC budgets v3 (thread 5), dev-profile budget fix
+  (thread 7), independent WSL2 run (thread 7), Pong syscalls 60..64 (thread 9).
+- 2026-11-05 tests thread: dev-profile kernel suite fixed. On main cc904bc PROFILE=dev killed "capability attacks" and "exhaustion floods" as budget deaths; the flood loops now yield every 512 iterations. release 131/131, dev 131/131 verified under QEMU TCG. Patch, logs and NOTE.md in kernel/dev-profile-fix/ for bookkeeping to land. PC run of the kernel suite still waits on the user replying in the tests thread so the device can be reached.
+- 2026-11-05 08:52 lead: dev-profile fix (kernel/dev-profile-fix/, 987a2ba,
+  base cc904bc) applied cleanly; cargo 38/38 here; kernel builds release and
+  dev; thread reports 131/131 in both profiles. PR opening and auto-merging.
+- 2026-11-05 08:54 lead: AUTO-MERGED PR #17 (dev-profile-fix) into main =
+  5e43bf9. Both kernel profiles pass 131/131 on the thread's run. Bookkeeping:
+  record #17. Base for every handoff = 5e43bf9.
+- 2026-11-05 kernel/IPC thread ("Budget IPC endpoint queues"): v3 DELIVERED for control to apply: kernel/ipc-queue-budget/v3/ (HANDOFF.md, 0001-ipc-queue-budget-v3.patch, .bundle, logs). Base origin/main a29710d; git am verified clean on a fresh worktree. Queue budget now goes through Phase 3's untyped accounting as ruled: endpoint price = 128 + 2*capacity*16 (default 4 -> 256, unchanged for PR #11 tests), SYS_RETYPE size = queue capacity (0 default, max 8), kernel allocates exactly the queue it charged; suite's server/flood/revocation endpoints are created at boot via thread::create_endpoint and paid from their creators' untyped; boot checks for refused over-budget creation and exact charges. Sticky badges per ruling 07:58 d in derive() with badged_caps_cannot_be_rebadged un-ignored; per-endpoint peak/refused counters checked in finish; in-guest ids 95, 96. Results: release 113/113 (main alone 107), cargo test 33, kernel clippy clean. NOTE: dev profile fails here on pristine main a29710d too ("capability attacks" exhausts its 50-tick budget under TCG; logs included), so not a regression of this patch; a KVM/PC run should confirm. v1 and v2 folders are obsolete.
+- 2026-11-05 08:25 lead (MatrixOS): mxsb-ref accepted; emitter and loader agree on all 43 mutations; F7 live. Integrated build 34 pass, 0 fail. Superops perfcheck is PC-only, not an acceptance gate (noise at short spans). Remaining MatrixOS follow-ups: PC run (waiting on the user's reply in the WSL2 thread), superops scalar switch verified on the PC.

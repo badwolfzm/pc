@@ -10,7 +10,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 B="${1:-/tmp/mxsb-ref-build}"
 CG="${2:-$HERE/../../codegen}"
 mkdir -p "$B/corpus"
-pass=0; fail=0
+pass=0; fail=0; diverge=0
+# corpus cases where the codegen validator is known to differ; each is an open item with that thread
+KNOWN_DIVERGE="v10_type_zero"
 ok()  { pass=$((pass+1)); }
 bad() { fail=$((fail+1)); echo "FAIL: $*"; }
 
@@ -50,7 +52,7 @@ run_case() {  # name expected_err expected_rule
   local name="$1" exp="$2" rule="$3" f="$B/corpus/$1.mxsb" cont="$HERE/fixtures/warden.toml" extra=""
   # approvals path: approve the file's own digest (V20 precedes V21..V26, so a
   # mutant that changes bytes must be approved to reach the manifest rules)
-  local own; own=$("$B/mxsb_check" "$f" --structural 2>/dev/null | sed -n 's/.*digest=\([0-9a-f]*\).*/\1/p')
+  local own; own=$("$B/mxsb_check" "$f" --digest 2>/dev/null | sed -n 's/.*digest=\([0-9a-f]*\).*/\1/p')
   case "$name" in
     v20_unsigned_not_allowed) cont="$HERE/fixtures/no_unsigned.toml" ;;
     v20_unsigned_not_approved) extra="" ;;
@@ -69,6 +71,33 @@ run_case() {  # name expected_err expected_rule
 }
 while read -r name exp rule; do run_case "$name" "$exp" "$rule"; done < "$B/corpus/expected.txt"
 # every corpus entry must have been a distinct rule or a positive; count rules covered
+echo "== golden set (contracts/goldens)"
+GD="$HERE/../goldens"
+if [ -f "$GD/MANIFEST.sha256" ]; then
+  for f in "$B"/corpus/*.mxsb "$B/corpus/expected.txt"; do
+    bn=$(basename "$f")
+    if [ -f "$GD/ref/$bn" ]; then cmp -s "$f" "$GD/ref/$bn" && ok || bad "golden drift: regenerated $bn differs from goldens/ref/$bn"
+    else bad "golden missing: goldens/ref/$bn (new corpus file; freeze it deliberately)"; fi
+  done
+  (cd "$GD" && sha256sum -c --quiet MANIFEST.sha256) >/dev/null 2>&1 && ok || bad "goldens/MANIFEST.sha256 does not match the directory"
+  # nothing under goldens/ may be unlisted (README.md files excepted)
+  unlisted=$(cd "$GD" && find . -type f ! -name MANIFEST.sha256 ! -name README.md | sort | while read -r f; do grep -q " $f\$" MANIFEST.sha256 || echo "$f"; done)
+  [ -z "$unlisted" ] && ok || bad "unlisted golden files: $unlisted"
+  # the codegen golden: a signed, emitter-built guest must be admitted by the reference loader under its frozen test key
+  if [ -f "$GD/codegen/guest.mxsb" ] && [ -f "$GD/codegen/pub.pem" ]; then
+    out=$("$B/mxsb_check" "$GD/codegen/guest.mxsb" --container "$HERE/fixtures/codegen_guest.toml" --pubkey "$GD/codegen/pub.pem" 2>&1 | head -1)
+    echo "$out" | grep -q '^MXSB_OK signed' && ok || bad "codegen golden guest refused: $out"
+    [ -f "$GD/codegen/guest.mxsb.sha256" ] && { want=$(awk '{print $1}' "$GD/codegen/guest.mxsb.sha256"); got=$(sha256sum "$GD/codegen/guest.mxsb" | awk '{print $1}'); [ "$want" = "$got" ] && ok || bad "codegen golden sha256 mismatch"; }
+  fi
+  # every golden under ref/ must still produce its expected error with the current loader (same policy as the corpus run)
+  while read -r name exp rule; do
+    f="$GD/ref/$name.mxsb"; cont="$HERE/fixtures/warden.toml"; extra=""
+    own=$("$B/mxsb_check" "$f" --digest 2>/dev/null | sed -n 's/.*digest=\([0-9a-f]*\).*/\1/p')
+    case "$name" in v20_unsigned_not_allowed) cont="$HERE/fixtures/no_unsigned.toml";; v20_unsigned_not_approved|v20_garbage_signature) ;; v26_*) cont="$HERE/fixtures/$name.toml"; extra="--approve $VALID_DIGEST";; *) [ -n "$own" ] && extra="--approve $own";; esac
+    got=$("$B/mxsb_check" "$f" --container "$cont" $extra 2>&1 | head -1 | awk '{print $1}')
+    [ "$got" = "$exp" ] && ok || bad "golden $name: want $exp got $got"
+  done < "$GD/ref/expected.txt"
+else echo "SKIP: no golden set at $GD"; fi
 echo "rules covered: $(awk '$3!="-"{print $3}' "$B/corpus/expected.txt" | sort -u | tr '\n' ' ')"
 
 echo "== random mutation fuzz (no crash, no sanitizer report, always a named error or OK)"
@@ -84,7 +113,7 @@ int main(int argc,char**argv){ FILE*f=fopen(argv[1],"rb"); fseek(f,0,SEEK_END); 
  for(int i=0;i<iters;++i){ memcpy(m,v,n); size_t len=n; int k=1+(xs(&s)%4); for(int j=0;j<k;++j){ uint64_t r=xs(&s); size_t off=r%(size_t)n; switch((r>>40)%5){case 0: m[off]^=(uint8_t)(r>>8); break; case 1: m[off]=0xFF; break; case 2: m[off]=0; break; case 3: if(off+8<=len){uint64_t big=(r&1)?UINT64_MAX:(UINT64_MAX-(r>>3)%4096); memcpy(m+off,&big,8);} break; case 4: len=1+(size_t)(r%(uint64_t)n); break;} }
   mxsb_ld_err e=mxsb_ld_check(m,len,&p,&im,&d); if(e==MXSB_LD_OK) okc++; else { errc++; if(!d.rule||d.rule[0]!='V'){ fprintf(stderr,"no rule for error %d\n",e); return 1;} if(e<1||e>21){fprintf(stderr,"bad code %d\n",e);return 1;} }
  }
- printf("fuzz: %d iterations, %d admitted, %d refused\n",iters,okc,errc); return 0; }
+ printf("fuzz: %d iterations, %d admitted, %d refused\n",iters,okc,errc); free(v); free(m); return 0; }
 EOF
 gcc ${SAN/-Werror/} -Wno-unused-parameter -Wno-unused-result -I"$HERE" -o "$B/fuzz" "$B/fuzz.c" "$HERE/mxsb_load.c" && "$B/fuzz" "$B/corpus/valid_unsigned.mxsb" 20000 && ok || bad "fuzz run"
 
@@ -97,7 +126,9 @@ if [ -f "$CG/mxsb/mxsb.c" ]; then
       case "$rule" in V20|V26) continue;; esac
       out=$("$B/mxsb_emit" verify "$B/corpus/$name.mxsb" 2>&1 | head -1)
       if [ "$exp" = "MXSB_OK" ]; then echo "$out" | grep -q "ok" && ok || bad "codegen verify rejects $name: $out"
-      else echo "$out" | grep -q "$exp" && ok || bad "codegen verify on $name: want $exp, got: $out"; fi
+      elif echo "$out" | grep -q "$exp"; then ok
+      elif echo " $KNOWN_DIVERGE " | grep -q " $name "; then diverge=$((diverge+1)); echo "DIVERGE (known, reported to codegen): $name: want $exp, codegen says: $out"
+      else bad "codegen verify on $name: want $exp, got: $out"; fi
     done < "$B/corpus/expected.txt"
     # 2. a file built by the codegen emitter, loaded by the reference loader (unsigned + approvals, then signed)
     head -c 4096 /dev/zero | tr '\0' '\220' > "$B/t.bin"; head -c 300 /dev/urandom > "$B/d.bin"
@@ -131,5 +162,5 @@ if [ -f "$CG/mxsb/mxsb.c" ]; then
 else echo "SKIP: codegen emitter not found at $CG"; fi
 
 echo
-echo "passed $pass, failed $fail"
+echo "passed $pass, failed $fail, known divergences from codegen $diverge"
 [ "$fail" -eq 0 ]

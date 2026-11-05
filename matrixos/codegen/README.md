@@ -6,7 +6,7 @@ the three codegen pieces around it.
 
 | piece | files | what it does |
 |---|---|---|
-| MXSB emitter | `mxsb/` | wraps a clang-built static ELF into an MXSB v2 super-binary per `contracts/mxsb-manifest.md` 2.0.3, validates its own output with rules V1..V25, V27, V28, signs with Ed25519 |
+| MXSB emitter | `mxsb/` | wraps a clang-built static ELF into an MXSB v2 super-binary per `contracts/mxsb-manifest.md` 2.0.4, validates its own output with rules V1..V25, V27, V28, signs with Ed25519 |
 | SIMD tiers | `tiers/` | the baseline / avx2 / avx512 contract: flag strings, CPUID detection, in-process dispatch macro, three-way reproducible build script |
 | Lifter hook | `lifter/` | finds LFSR / xorshift / CRC-shaped loops in C source via the clang AST, lowers them to `mxl_insn`, calls `mxl_lift()` from `../lfsr/mx_lift.h`, and replaces the loop with one `mx_aff_jump()` on a `static const` matrix in `.rodata` |
 | tests | `tests/` | `make test`: 40k MXSB mutation/fuzz checks, independent Python cross-check, 15-file differential corpus for the lifter, tier build/dispatch tests |
@@ -78,9 +78,17 @@ guests with `clang -static-pie -nostdlib -fPIE -Wl,-z,separate-code
    grows one payload per tier.
 4. V26 (attenuation against `warden.toml`) is loader policy and is not
    implemented in the emitter.
-5. No golden `.mxsb` files are frozen yet; the tests build their inputs
-   fresh. Freezing a golden set is the first thing to do once the loader
-   exists, and from then on the contract's version policy applies strictly.
+5. `mxsb_emit verify` uses the reference loader's V20 split: unsigned
+   without `--allow-unsigned`/`--approve` is `MXSB_E_SIGNATURE`, unsigned
+   and allowed but not approved is `MXSB_E_UNTRUSTED_KEY`, unknown key id is
+   `MXSB_E_UNTRUSTED_KEY`, bad signature under a known key is
+   `MXSB_E_SIGNATURE`. With no policy flag at all, `verify` runs the
+   structural rules only and says that V20 was not checked. Type 0 entries are
+   refused (V10), types 8..0x7FFF are skipped, SUPEROPS is capped at 256
+   ids (V16), per 2.0.4 and the reference loader in `contracts/mxsb-ref/`.
+6. A golden set is frozen (2026-11-05) under `contracts/goldens/`; see
+   "Golden set" below. From that freeze on, the contract's version policy
+   applies strictly.
 
 ## 2. SIMD tiers (`tiers/`)
 
@@ -146,7 +154,7 @@ path with fork/exec, never through a shell or PATH.
 
 Verified here (this container, x86-64, clang 18.1.3, gcc 13.3, ASan+UBSan):
 
-- `tests/mxsb_test.c`: 40,113 checks pass: SHA-256 vectors; manifest
+- `tests/mxsb_test.c`: 40,117 checks pass: SHA-256 vectors; manifest
   grammar, normalisation and scope rules; one targeted mutation per
   validation rule V1..V25, V27, V28 producing the named error and rule;
   digest excludes only SIGNATURE and covers header/table/padding/BUILD_INFO; decode round
@@ -191,3 +199,7 @@ Not verified:
   baseline and avx2 can be exercised there (`MX_TIER=` forcing covers both).
 - Windows and non-x86 targets: not built.
 - The super-op name table is provisional (see contract notes).
+
+## Golden set
+
+Frozen 2026-11-05 under `../contracts/goldens/` (contract 2.0.4). `codegen/guest.mxsb` is rebuilt by `tests/run_mxsb.sh` from the frozen raw images and test key and must match byte for byte, along with its SHA-256, dump text and the directory `MANIFEST.sha256`. Any golden byte change is a reviewed contract change.

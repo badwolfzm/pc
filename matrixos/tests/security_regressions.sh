@@ -7,7 +7,8 @@
 # Usage: security_regressions.sh <matrixos_v9.c> <swrap.c> [CC]
 #   ASSETS_DIR=<matrixos/assets copy on a writable disk>  also runs F1/F1b against the asset store API
 #   FRONTEND_DIR=<matrixos/frontend copy>                  runs F2 (typed-input suite)
-#   MXSB_DIR=<matrixos/codegen/mxsb copy>                  runs F7 (unit/mxsb/mxsb_contract.c against mxsb.c)
+#   MXSB_REF_DIR=<matrixos/contracts/mxsb-ref copy>        runs F7 against the reference loader (+ its own suite)
+#   MXSB_DIR=<matrixos/codegen/mxsb copy>                  runs F7 against codegen's validator as second oracle
 set -uo pipefail
 SRC="$1"; WRAP="$2"; CC="${3:-gcc}"
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -160,16 +161,37 @@ $SANCC $SAN -w -o f6 f6.c && O="$(./f6 2>&1)"; RC=$?
 t "F6 crc32 with length beyond buffer is refused (no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q 'crc_over rc=-' <<<"$O" && echo ok)"
 
 # ---- F7: MXSB loader header validation -----------------------------------------
-# The contract test hand-builds a valid MXSB v2 file and mutates it: sizes past the file, entry_off
-# outside TEXT, header_size/nsections extremes, overlaps, duplicate/missing sections, bad manifest,
-# build_id mismatch. Each mutation must yield the error code and rule name the contract (9a) assigns.
+# The contract test (unit/mxsb/mxsb_contract.c) hand-builds a valid MXSB v2 file and mutates it: sizes
+# past the file, entry_off outside TEXT, header_size/nsections extremes, overlaps, duplicate/missing
+# sections, bad manifest, build_id mismatch. Each mutation must yield the error code and rule name the
+# contract (9a) assigns. Primary oracle: the contract owner's reference loader (MXSB_REF_DIR =
+# copy of contracts/mxsb-ref). Second oracle: codegen's validator (MXSB_DIR = copy of codegen/mxsb).
+# The two must agree on all 43 cases. With MXSB_REF_DIR set, the reference's own run_tests.sh (corpus,
+# goldens, 20k mutation fuzz under ASan, cross-check with codegen) also runs when its codegen sibling exists.
+f7_ran=0
+if [[ -n "${MXSB_REF_DIR:-}" ]]; then
+  f7_ran=1
+  $SANCC $SAN -std=c11 -w -D_GNU_SOURCE -DMXSB_CONTRACT_REF -I"$MXSB_REF_DIR" -o f7ref "$TESTS_DIR/unit/mxsb/mxsb_contract.c" "$MXSB_REF_DIR/mxsb_load.c" 2>f7ref.err && O="$(./f7ref 2>&1)"; RC=$?
+  [[ -s f7ref.err ]] && head -3 f7ref.err
+  echo "     $(tail -1 <<<"$O")"
+  t "F7 MXSB reference loader rejects every contract mutation with the assigned rule (0 failed, no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q ' 0 failed' <<<"$O" && echo ok)"
+  if [[ -f "$MXSB_REF_DIR/run_tests.sh" && -d "$MXSB_REF_DIR/../../codegen" ]]; then
+    mkdir -p f7refb; RT="$( cd "$MXSB_REF_DIR/.." && bash mxsb-ref/run_tests.sh "$WORK/f7refb" 2>&1 )"; RTRC=$?
+    echo "     $(tail -1 <<<"$RT")"
+    t "F7 reference loader own suite (corpus, goldens, mutation fuzz, codegen cross-check) passes" "ok" "$([ $RTRC -eq 0 ] && grep -q 'failed 0' <<<"$RT" && echo ok)"
+  else
+    skip "F7 reference loader own suite" "needs MXSB_REF_DIR inside a full matrixos copy (run_tests.sh looks for ../../codegen)"
+  fi
+fi
 if [[ -n "${MXSB_DIR:-}" ]]; then
+  f7_ran=1
   $SANCC $SAN -std=c11 -w -D_GNU_SOURCE -I"$MXSB_DIR" -o f7 "$TESTS_DIR/unit/mxsb/mxsb_contract.c" "$MXSB_DIR/mxsb.c" 2>f7.err && O="$(./f7 2>&1)"; RC=$?
   [[ -s f7.err ]] && head -3 f7.err
   echo "     $(tail -1 <<<"$O")"
-  t "F7 MXSB validator rejects every contract mutation with the assigned rule (0 failed, no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q ' 0 failed' <<<"$O" && echo ok)"
-else
-  skip "F7 MXSB loader rejects sizes > file, entry_off outside text, header extremes" "set MXSB_DIR=<copy of matrixos/codegen/mxsb> to run unit/mxsb/mxsb_contract.c against it"
+  t "F7 codegen validator (second oracle) rejects every contract mutation with the assigned rule (0 failed, no ASan report)" "ok" "$([ $RC -eq 0 ] && ! grep -q AddressSanitizer <<<"$O" && grep -q ' 0 failed' <<<"$O" && echo ok)"
+fi
+if [[ $f7_ran -eq 0 ]]; then
+  skip "F7 MXSB loader rejects sizes > file, entry_off outside text, header extremes" "set MXSB_REF_DIR=<copy of matrixos/contracts/mxsb-ref> (and MXSB_DIR=<copy of codegen/mxsb> as second oracle)"
 fi
 
 echo "--- $fails failure(s) (baseline is expected to fail F1, F1b, F3, F4, F5, F6)"; exit $fails

@@ -1,0 +1,7 @@
+mxsb-manifest 1
+name   codegen-golden-guest
+abi    native
+require fs.read=/sandbox/assets
+require render
+require superop=blit
+require clock=coarse

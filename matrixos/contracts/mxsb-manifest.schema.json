@@ -1,6 +1,6 @@
 {
   "schema": "mxsb-manifest",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "status": "draft",
   "date": "2026-11-05",
   "depends_on": {
@@ -197,6 +197,14 @@
       "required": false,
       "unique": true,
       "content": "utf8-kv"
+    },
+    {
+      "name": "RESERVED",
+      "id_min": 8,
+      "id_max": 32767,
+      "required": false,
+      "unique": false,
+      "content": "skipped by 2.0 readers; later minors define them"
     },
     {
       "name": "VENDOR",
@@ -594,6 +602,11 @@
       "version": "2.0.3",
       "date": "2026-11-05",
       "note": "v1 header is 40 bytes; load layout rule 3.4; digest covers whole file except SIGNATURE; zero padding V27; page-multiple TEXT V28"
+    },
+    {
+      "version": "2.0.4",
+      "date": "2026-11-05",
+      "note": "reserved section types 8..0x7FFF skipped; type 0 refused; reference loader added"
     }
   ],
   "v1_header_size": 40,
@@ -604,5 +617,17 @@
     "bss_at": "base + TEXT.size + DATA.size",
     "entry_address": "base + (entry_off - TEXT.offset)",
     "text_size_page_multiple_when_data_or_bss": 4096
+  },
+  "section_type_zero": "refused (V10)",
+  "reference_loader": {
+    "path": "matrixos/contracts/mxsb-ref/",
+    "files": [
+      "mxsb_load.h",
+      "mxsb_load.c",
+      "mxsb_check.c",
+      "mxsb_corpus.c",
+      "run_tests.sh",
+      "fixtures/"
+    ]
   }
 }

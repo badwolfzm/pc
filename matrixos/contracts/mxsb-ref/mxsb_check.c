@@ -8,6 +8,7 @@
  * Exit 1: refused (prints "<error> <rule>: <detail>").
  * Exit 2: usage or I/O error.
  *
+ * --digest      runs V1..V19 and prints the digest (to build an approvals list).
  * --structural  runs V1..V19 and V21..V25 only (no V20, no V26): what a
  *               tool uses to inspect a file. A real load always has a
  *               container and a trust list.
@@ -69,10 +70,10 @@ static bool key_id_from_pem(const char *pem, uint8_t out[32]) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: mxsb_check FILE [--container warden.toml] [--approve HEX]... [--trust KEYID]... [--pubkey PUB.pem] [--openssl PATH] [--structural] [--dump]\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: mxsb_check FILE [--container warden.toml] [--approve HEX]... [--trust KEYID]... [--pubkey PUB.pem] [--openssl PATH] [--structural] [--digest] [--dump]\n"); return 2; }
     const char *path = argv[1], *ctoml = NULL, *pubpem = NULL;
     static uint8_t approved[64][32], trusted[64][32];
-    uint32_t napp = 0, ntr = 0; bool structural = false, dump = false;
+    uint32_t napp = 0, ntr = 0; bool structural = false, dump = false, digest_only = false;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "--container") && i + 1 < argc) ctoml = argv[++i];
         else if (!strcmp(argv[i], "--approve") && i + 1 < argc && napp < 64) { if (!unhex(argv[++i], approved[napp++], 32)) { fprintf(stderr, "bad --approve hex\n"); return 2; } }
@@ -80,6 +81,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--pubkey") && i + 1 < argc) pubpem = argv[++i];
         else if (!strcmp(argv[i], "--openssl") && i + 1 < argc) g_openssl = argv[++i];
         else if (!strcmp(argv[i], "--structural")) structural = true;
+        else if (!strcmp(argv[i], "--digest")) digest_only = true;
         else if (!strcmp(argv[i], "--dump")) dump = true;
         else { fprintf(stderr, "unknown argument %s\n", argv[i]); return 2; }
     }
@@ -100,13 +102,14 @@ int main(int argc, char **argv) {
     }
     pol.approved_digests = approved; pol.napproved = napp;
     pol.trusted_key_ids = trusted; pol.ntrusted = ntr;
-    pol.skip_signature = structural;
-    if (structural) pol.container = NULL;
+    pol.skip_signature = structural || digest_only;
+    pol.digest_only = digest_only;
+    if (structural || digest_only) pol.container = NULL;
     static mxsb_ld_image im; mxsb_ld_diag d;
     mxsb_ld_err rc = mxsb_ld_check(buf, len, &pol, &im, &d);
     if (rc != MXSB_LD_OK) { printf("%s %s: %s\n", mxsb_ld_err_name(rc), d.rule, d.detail); free(buf); return 1; }
     char hex[65]; for (int k = 0; k < 32; ++k) snprintf(hex + 2*k, 3, "%02x", im.digest[k]);
-    printf("MXSB_OK%s digest=%s\n", structural ? " (structural: V20/V26 skipped)" : im.signed_ok ? " signed" : " unsigned+approved", hex);
+    printf("MXSB_OK%s digest=%s\n", digest_only ? " (digest only: V1..V19)" : structural ? " (structural: V20/V26 skipped)" : im.signed_ok ? " signed" : " unsigned+approved", hex);
     if (dump) {
         printf("  name=%s abi=%s build_id=%s\n  text=%llu+%llu data=%llu+%llu bss=%llu entry_rel=%llu mapped=%llu flags=0x%x caps=0x%llx\n",
                im.name, im.abi, im.build_id, (unsigned long long)im.text_off, (unsigned long long)im.text_size,

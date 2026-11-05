@@ -37,7 +37,7 @@ static int usage(void) {
         "  mxsb_emit build (--elf FILE | --text FILE [--data FILE] [--bss N] --entry OFF) --manifest FILE -o OUT\n"
         "                  [--superop NAME]... [--build-info k=v]... [--tier T] [--profile P] [--vendor ID:FILE]...\n"
         "                  [--deterministic-only] [--debug-sections] (--sign KEY.pem | --unsigned) [--openssl PATH]\n"
-        "  mxsb_emit verify FILE [--pubkey PUB.pem] [--approve HEXDIGEST]... [--openssl PATH]   (V1..V25, V27, V28 + V20)\n"
+        "  mxsb_emit verify FILE [--pubkey PUB.pem] [--approve HEX]... [--allow-unsigned] [--structural-only] [--openssl PATH]\n"
         "  mxsb_emit dump FILE\n"
         "  mxsb_emit digest FILE\n"
         "  mxsb_emit upgrade V1FILE --manifest FILE -o OUT (--sign KEY.pem | --unsigned)\n");
@@ -264,9 +264,11 @@ static int do_build(build_args *a, bool from_v1, const char *v1path) {
 
 static int do_verify(int argc, char **argv) {
     if (argc < 1) return usage();
-    const char *path = argv[0], *pub = NULL, *approve[64]; int napp = 0;
+    const char *path = argv[0], *pub = NULL, *approve[64]; int napp = 0; bool allow_unsigned = false, structural_only = false;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--pubkey") && i + 1 < argc) pub = argv[++i];
+        else if (!strcmp(argv[i], "--allow-unsigned")) allow_unsigned = true;
+        else if (!strcmp(argv[i], "--structural-only")) structural_only = true;
         else if (!strcmp(argv[i], "--approve") && i + 1 < argc && napp < 64) approve[napp++] = argv[++i];
         else if (!strcmp(argv[i], "--openssl") && i + 1 < argc) g_openssl = argv[++i];
         else return usage();
@@ -281,12 +283,21 @@ static int do_verify(int argc, char **argv) {
     const uint8_t *sig = im.sec[si].data;
     bool zero = true; for (int k = 0; k < 96; ++k) if (sig[k]) zero = false;
     int ret = 0;
-    if (zero) {
+    /* V20 split, aligned with the reference loader (contracts/mxsb-ref):
+     *   unsigned + not allowed              -> MXSB_E_SIGNATURE
+     *   unsigned + allowed + not approved   -> MXSB_E_UNTRUSTED_KEY
+     *   signed, key id not trusted          -> MXSB_E_UNTRUSTED_KEY
+     *   signed, trusted key, bad signature  -> MXSB_E_SIGNATURE            */
+    if (!pub && !napp && !allow_unsigned) structural_only = true;   /* no policy given: structural check only, say so */
+    if (structural_only) {
+        printf("mxsb_emit: V1..V25, V27, V28 ok; V20 NOT checked (no --pubkey / --approve / --allow-unsigned given)\n  digest=%s\n", hx);
+    } else if (zero) {
         bool approved = false;
+        if (napp) allow_unsigned = true;            /* an approvals list implies allow_unsigned */
         for (int k = 0; k < napp; ++k) if (strcmp(approve[k], hx) == 0) approved = true;
-        if (napp == 0) { printf("mxsb_emit: V1..V25 ok; UNSIGNED; V20 not checked (no --approve given)\n  digest=%s\n", hx); }
-        else if (approved) printf("mxsb_emit: V1..V25 ok; unsigned digest is on the approvals list (V20 ok)\n  digest=%s\n", hx);
-        else { fprintf(stderr, "mxsb_emit: refused: MXSB_E_SIGNATURE (V20): unsigned and digest %s not approved\n", hx); ret = 1; }
+        if (!allow_unsigned) { fprintf(stderr, "mxsb_emit: refused: MXSB_E_SIGNATURE (V20): unsigned and unsigned binaries are not allowed (no --allow-unsigned / --approve)\n"); ret = 1; }
+        else if (approved) printf("mxsb_emit: V1..V25, V27, V28 ok; unsigned digest is on the approvals list (V20 ok)\n  digest=%s\n", hx);
+        else { fprintf(stderr, "mxsb_emit: refused: MXSB_E_UNTRUSTED_KEY (V20): unsigned and digest %s not on the approvals list\n", hx); ret = 1; }
     } else if (pub) {
         uint8_t raw[32], kid[32];
         if (!pubkey_raw(pub, false, raw)) { fprintf(stderr, "mxsb_emit: cannot read public key %s\n", pub); ret = 2; }
@@ -298,7 +309,7 @@ static int do_verify(int argc, char **argv) {
         }
     } else {
         char kid[65]; mx_sha256_hex(sig, kid);
-        printf("mxsb_emit: V1..V25 ok; signed by key_id=%s; V20 not checked (no --pubkey given)\n  digest=%s\n", kid, hx);
+        fprintf(stderr, "mxsb_emit: refused: MXSB_E_UNTRUSTED_KEY (V20): signed by key_id=%s, which is not the trusted key\n", kid); ret = 1;
     }
     mxsb_image_free(&im); free(b);
     return ret;

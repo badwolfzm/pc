@@ -84,3 +84,33 @@ Addresses finding 1 (symlink escape) and the over-long path finding from `matrix
 2. Extent layout in `assetpack` (write chunks of one manifest contiguously into a pack file; the reader opens the pack and `pread`s by offset) so the HDD plan reads 4 MiB sequentially instead of 64 files.
 3. LZ4 chunks with the decompress step in the guest's 4 ms headroom.
 4. Run `make test && make bench` on the WSL2 target and replace the numbers above.
+
+## Asset streaming into the simulated GPU (`test_asset_to_gpu.c`)
+
+Owner: thread "Asset streaming tests" (worker 16). Consumer of the RCS reference
+in `matrixos/contracts/gpu-commands-ref/`; that folder is not edited.
+
+The test packs two 64x64 ARGB8888 images with `assetpack`, streams them through
+`asset_store`, and grants an RCS asset slot only for a resident mip before
+`BIND_ASSET`. The glue is the only place a store pointer becomes a GPU grant.
+
+| Check | What it proves |
+|---|---|
+| bind before any `asset_want` | NOT_READY, no grant, surface unchanged |
+| stream mip 0 from disk, bind | GPU surface equals the packed bytes, byte for byte |
+| corrupted chunk (one byte flipped in every chunk of a second store) | FAILED event, not resident, bind refused |
+| `asset_drop` + poll | EVICTED event revokes the grant at that poll; the bound surface keeps its bytes |
+| BIND of a slot the glue never granted | RCS rejects with `SLOT_EMPTY` |
+| re-stream after eviction, bind again | surface equals the bytes again |
+
+Run: `make test_asset_to_gpu && ./test_asset_to_gpu ./.scratch-gpu` (36 checks).
+Verified here: 36 passed, 0 failed under gcc `-O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion`,
+and 36 passed under ASan + UBSan (`-fno-sanitize-recover=all`). A mutant that skips the
+grant revocation on eviction fails the revocation check.
+
+Not verified: the ring transport, the real storage container, timing or latency
+numbers, cold cache, and any WSL2 run. Finding for the GPU-command thread: the RCS
+reference's `BIND_ASSET` zero-fills the surface when a granted asset has a NULL
+image ("not yet streamed in: stand-in"). Nothing in this glue reaches that path
+(it never grants a non-resident mip), but a black frame is silent if another
+caller does, so the service should reject a NULL-image grant rather than zero it.

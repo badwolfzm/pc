@@ -20,6 +20,7 @@
  */
 #include "libw.h"
 #include "site.h"
+#include "net_namespace.h"
 
 #define NFD 16
 #define MAX_OPEN 32
@@ -39,6 +40,7 @@ struct fd {
 struct client {
     int state; /* 0 never connected, 1 alive, 2 exited */
     unsigned perms;
+    unsigned netns; /* selected by kernel-issued badge via manifest */
     const char *name;
     struct fd fds[NFD];
     int pending;
@@ -80,15 +82,16 @@ static struct client clients[MAX_CLIENTS + 1];
 static const struct {
     const char *name;
     unsigned perms;
+    unsigned netns;
 } manifest[MAX_CLIENTS + 1] = {
-    {"?", 0},
-    {"httpd", PERM_FS_READ | PERM_NET_LISTEN},
-    {"fetch", PERM_NET_CONNECT},
-    {"rogue", 0},
-    /* Linux programs, forwarded by the kernel (same protocol, same rules). */
-    {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN},
-    {"lfetch", PERM_NET_CONNECT},
-    {"lrogue", 0},
+    {"?", 0, NETNS_NONE},
+    {"httpd", PERM_FS_READ | PERM_NET_LISTEN, NETNS_WARDEN},
+    {"fetch", PERM_NET_CONNECT, NETNS_WARDEN},
+    {"rogue", 0, NETNS_WARDEN},
+    /* Linux guests use a separate loopback namespace, not Warden's native network. */
+    {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN, NETNS_LINUX},
+    {"lfetch", PERM_NET_CONNECT, NETNS_LINUX},
+    {"lrogue", 0, NETNS_LINUX},
 };
 #define N_EXPECTED_CLIENTS 6
 
@@ -366,7 +369,8 @@ static long do_bind(struct client *c, long fd, size_t len) {
     if (e)
         return e;
     for (int i = 0; i < MAX_LISTEN; i++)
-        if (listeners[i].used && listeners[i].port == port)
+        if (listeners[i].used && listeners[i].port == port &&
+             netns_same(c->netns, clients[listeners[i].owner].netns))
             return -EADDRINUSE;
     streams[f->idx].bound_port = port;
     return 0;
@@ -438,7 +442,8 @@ static long do_connect(struct client *c, long fd, size_t len) {
         return e;
     struct listener *l = 0;
     for (int i = 0; i < MAX_LISTEN; i++)
-        if (listeners[i].used && listeners[i].port == port)
+        if (listeners[i].used && listeners[i].port == port &&
+             netns_same(c->netns, clients[listeners[i].owner].netns))
             l = &listeners[i];
     if (!l || l->nbacklog >= BACKLOG)
         return -ECONNREFUSED;
@@ -640,6 +645,7 @@ int main(void) {
     site[2] = (struct site_file){"/site/blob.bin", blob, SITE_BLOB_LEN};
     for (int i = 1; i <= MAX_CLIENTS; i++) {
         clients[i].perms = manifest[i].perms;
+        clients[i].netns = manifest[i].netns;
         clients[i].name = manifest[i].name;
         clients[i].buf = (uint8_t *)(SRV_BUF_BASE + (unsigned long)(i - 1) * BUF_SIZE);
         for (int fd = 0; fd < 3; fd++)

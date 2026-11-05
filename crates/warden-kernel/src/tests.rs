@@ -87,6 +87,34 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (27, "isolation: reader sees nothing of the writer", 0),
     (28, "isolation: reader's own page is still writable", 0x7),
     (29, "IPC: third sender on a full endpoint queue refused", E_QUEUE_FULL),
+    // Wrong-capability use (ids 40..49): the right bits on the wrong object,
+    // or the right object through the wrong right, must all be refused.
+    (40, "send via untyped cap (ALL rights, wrong kind)", E_KIND),
+    (41, "recv via dir cap (READ, wrong kind)", E_KIND),
+    (42, "retype via dir cap (wrong kind)", E_KIND),
+    (43, "host-exit via untyped cap (ALL rights)", E_KIND),
+    (44, "retype on a minted untyped copy (no budget)", E_BUDGET),
+    (45, "invoke console asking for every right bit", E_RIGHTS),
+    (46, "mint a slot onto itself", E_OCCUPIED),
+    (47, "revoke an empty slot", E_INVALID),
+    (48, "mint from the host slot nobody holds", E_INVALID),
+    (49, "recv via console cap (WRITE only)", E_RIGHTS),
+    // Revocation mid-flight: a server revokes a client's endpoint copy.
+    (50, "revoker: one client copy revoked", 1),
+    (51, "victim: send on revoked endpoint copy", E_REVOKED),
+    (52, "victim: recv on revoked endpoint copy", E_REVOKED),
+    // Resource exhaustion (ids 60..68): floods of refused requests must
+    // neither succeed nor consume anything. The kernel's heap and capability
+    // table checks at the end measure the "consume" half.
+    (60, "flood: 5000 retypes past budget: all refused", 0),
+    (61, "flood: budget still 0 afterwards", 0),
+    (62, "flood: 5000 revokes of a childless cap: all 0", 0),
+    (63, "flood: 5000 sends via wrong kind: all refused", 0),
+    (64, "flood: 5000 recvs on empty slot: all refused", 0),
+    (65, "flood: 5000 invokes of slot 2^32-1: all refused", 0),
+    (66, "flood: 5000 mints without GRANT: all refused", 0),
+    (67, "flood: 5000 host-exits via console: all refused", 0),
+    (68, "flood: 2000 yields come back", 2000),
 ];
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {
@@ -385,6 +413,209 @@ pub extern "C" fn iso_reader() -> ! {
     loop {}
 }
 
+// ---- wrong-capability use ---------------------------------------------------
+// Every syscall checks three things in order: the slot names a live cap, the
+// cap carries the right the call needs, and the object is of the kind the
+// call works on. These threads hold valid caps and use each one wrongly.
+
+const SLOT_EP2: u64 = 9; // revoker: Endpoint root; victim: READ|WRITE copy badge 9
+
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn wrong_kind() -> ! {
+    unsafe {
+        // Untyped has ALL rights, including WRITE: still not an endpoint.
+        let r = send!(SLOT_UNTYPED, 1u64, 2u64, 3u64, 4u64);
+        sys!(0, SLOT_CONSOLE, 40, r);
+        // Dir has READ: still not an endpoint.
+        let (r, _, _, _, _, _) = recv!(SLOT_DIR);
+        sys!(0, SLOT_CONSOLE, 41, r);
+        // Dir is not untyped memory.
+        let r = sys!(4, SLOT_DIR, 1u64, 0);
+        sys!(0, SLOT_CONSOLE, 42, r);
+        // ALL rights on untyped memory do not reach the machine.
+        let r = sys!(7, SLOT_UNTYPED, 0, 0);
+        sys!(0, SLOT_CONSOLE, 43, r);
+        // A copy of the untyped cap keeps the rights but not the budget: the
+        // parent's budget cannot be spent twice through a derived cap.
+        let _ = sys!(2, SLOT_UNTYPED, SLOT_FREE, 0x1F);
+        let r = sys!(4, SLOT_FREE, 1u64, 0);
+        sys!(0, SLOT_CONSOLE, 44, r);
+        // Bits above Rights::ALL are masked off; asking for 0xFF is asking
+        // for ALL, which the WRITE-only console does not have.
+        let r = sys!(1, SLOT_CONSOLE, 0xFFu64, 0);
+        sys!(0, SLOT_CONSOLE, 45, r);
+        let r = sys!(2, SLOT_DIR, SLOT_DIR, 0x1F);
+        sys!(0, SLOT_CONSOLE, 46, r);
+        let r = sys!(3, SLOT_LOCK, 0, 0);
+        sys!(0, SLOT_CONSOLE, 47, r);
+        let r = sys!(2, SLOT_HOST, SLOT_LOCK, 0x1F);
+        sys!(0, SLOT_CONSOLE, 48, r);
+        let (r, _, _, _, _, _) = recv!(SLOT_CONSOLE);
+        sys!(0, SLOT_CONSOLE, 49, r);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+
+/// Holds the root of a second endpoint and revokes the victim's copy before
+/// the victim gets to use it. Runs before the victim in CASES order.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn ipc_revoker() -> ! {
+    unsafe {
+        let r = sys!(3, SLOT_EP2, 0, 0);
+        sys!(0, SLOT_CONSOLE, 50, r);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+/// Yields twice so the revoker runs first, then tries its copy both ways.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn ipc_victim() -> ! {
+    unsafe {
+        sys!(5, 0, 0, 0);
+        sys!(5, 0, 0, 0);
+        let r = send!(SLOT_EP2, 1u64, 2u64, 3u64, 4u64);
+        sys!(0, SLOT_CONSOLE, 51, r);
+        let (r, _, _, _, _, _) = recv!(SLOT_EP2);
+        sys!(0, SLOT_CONSOLE, 52, r);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+
+// ---- resource exhaustion ------------------------------------------------------
+// Floods of refused syscalls. Each loop counts answers that were not the
+// refusal; the kernel's end-of-run checks (capability nodes, heap bytes)
+// show whether any refusal cost memory.
+
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn exhaust() -> ! {
+    unsafe {
+        // Spend the whole budget legitimately, then hammer it.
+        let _ = sys!(4, SLOT_UNTYPED, 1u64 << 20, 0);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if sys!(4, SLOT_UNTYPED, 1u64 << 20, 0) != E_BUDGET {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 60, bad);
+        // retype of 0 bytes reports the remaining budget without spending.
+        let r = sys!(4, SLOT_UNTYPED, 0, 0);
+        sys!(0, SLOT_CONSOLE, 61, r);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if sys!(3, SLOT_UNTYPED, 0, 0) != 0 {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 62, bad);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if send!(SLOT_UNTYPED, 0u64, 0u64, 0u64, 0u64) != E_KIND {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 63, bad);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            let (r, _, _, _, _, _) = recv!(SLOT_EMPTY);
+            if r != E_INVALID {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 64, bad);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if sys!(1, 0xFFFF_FFFFu64, 0, 0) != E_INVALID {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 65, bad);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if sys!(2, SLOT_CONSOLE, SLOT_FREE, 0x1F) != E_RIGHTS {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 66, bad);
+        let mut bad = 0u64;
+        let mut i = 0u64;
+        while i < 5000 {
+            if sys!(7, SLOT_CONSOLE, 0, 0) != E_KIND {
+                bad += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 67, bad);
+        // Yielding is free: 2000 round trips through the scheduler.
+        let mut n = 0u64;
+        let mut i = 0u64;
+        while i < 2000 {
+            if sys!(5, 0, 0, 0) == 0 {
+                n += 1;
+            }
+            i += 1;
+        }
+        sys!(0, SLOT_CONSOLE, 68, n);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+
+/// Grow the stack past its 64 KiB until it hits the unmapped page below.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn stack_overflow() -> ! {
+    loop {
+        unsafe { asm!("push rax", options(nomem)) }
+    }
+}
+/// Run off the end of the single data page.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn data_page_overrun() -> ! {
+    unsafe {
+        let mut p = DATA_PAGE;
+        while p < DATA_PAGE + 0x2000 {
+            asm!("mov qword ptr [{0}], 1", in(reg) p, options(nostack));
+            p += 8;
+        }
+    }
+    loop {}
+}
+/// Yield refills the budget: 1000 yields on a 2-tick budget are never
+/// killed, and the thread exits by itself with code 9.
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn yield_forever_then_exit() -> ! {
+    unsafe {
+        let mut i = 0u64;
+        while i < 1000 {
+            sys!(5, 0, 0, 0);
+            i += 1;
+        }
+        sys!(6, 9u64, 0, 0);
+    }
+    loop {}
+}
+
 pub struct Case {
     pub name: &'static str,
     pub entry: extern "C" fn() -> !,
@@ -417,4 +648,11 @@ pub const CASES: &[Case] = &[
     Case { name: "ipc eavesdropper", entry: ipc_eavesdropper, expect: Death::Exited(0), budget: 50 },
     Case { name: "isolation writer", entry: iso_writer, expect: Death::Exited(0), budget: 50 },
     Case { name: "isolation reader", entry: iso_reader, expect: Death::Exited(0), budget: 50 },
+    Case { name: "wrong-kind caps", entry: wrong_kind, expect: Death::Exited(0), budget: 50 },
+    Case { name: "ipc revoker", entry: ipc_revoker, expect: Death::Exited(0), budget: 50 },
+    Case { name: "ipc victim", entry: ipc_victim, expect: Death::Exited(0), budget: 50 },
+    Case { name: "exhaustion floods", entry: exhaust, expect: Death::Exited(0), budget: 50 },
+    Case { name: "stack overflow", entry: stack_overflow, expect: Death::Fault(14), budget: 50 },
+    Case { name: "data page overrun", entry: data_page_overrun, expect: Death::Fault(14), budget: 50 },
+    Case { name: "yield then exit", entry: yield_forever_then_exit, expect: Death::Exited(9), budget: 2 },
 ];

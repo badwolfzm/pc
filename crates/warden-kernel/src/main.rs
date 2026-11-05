@@ -80,7 +80,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let mut k = Kernel {
         caps: warden_caps::CapTable::new(), frames, endpoints: alloc::collections::BTreeMap::new(),
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
-        cap_nodes_baseline: 0, expected_mints: 2, heap_baseline: 0, host_object: None, // tests 4 and 13 each mint once
+        cap_nodes_baseline: 0, expected_mints: 3, heap_baseline: 0, host_object: None, // tests 4, 13 and 44 each mint once
     };
     k.checks += 1;
     if !mm_ok {
@@ -119,6 +119,12 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     thread::root_endpoint(&mut k, flood[0], 8, Rights::WRITE.union(Rights::GRANT), 2);
     thread::mint_to(&mut k, flood[0], 8, flood[1], 8, Rights::WRITE, 0);
     thread::mint_to(&mut k, flood[0], 8, flood[2], 8, Rights::WRITE, 0);
+    // A second endpoint for the revocation test: the revoker holds the root,
+    // the victim a READ|WRITE copy badged 9 that the revoker kills first.
+    let revoker = k.threads.iter().position(|t| t.name == "ipc revoker").unwrap();
+    let victim = k.threads.iter().position(|t| t.name == "ipc victim").unwrap();
+    thread::root_endpoint(&mut k, revoker, 9, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 1);
+    thread::mint_to(&mut k, revoker, 9, victim, 9, Rights::READ.union(Rights::WRITE), 9);
     k.cap_nodes_baseline = k.caps.len();
     k.heap_baseline = heap::used();
     kprintln!("{} ring-3 threads in {} address spaces, {} frames ({} KiB) allocated, {} bytes of kernel heap; starting the partition timer",

@@ -38,8 +38,8 @@ int main(void) {
         if (wsend_nb(s, 1, 2, 3, 4) != WERR_INVALID)
             named++;
     report(T_ROGUE_FOREIGN_SLOTS, named);
-    /* 49: fd exhaustion is ours alone: 13 descriptors, then EMFILE, and
-     * the other apps keep running. */
+    /* 49: namespace epoll exhaustion is ours alone: at most 8 objects,
+     * then ENOMEM; the other namespace retains its own capacity. */
     long opened = 0;
     for (int i = 0; i < 100; i++)
         if (sys_epoll_create1(0) >= 0)

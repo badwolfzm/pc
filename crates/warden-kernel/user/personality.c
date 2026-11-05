@@ -20,12 +20,17 @@
  */
 #include "libw.h"
 #include "site.h"
+#include "net_namespace.h"
 
 #define NFD 16
 #define MAX_OPEN 32
 #define MAX_LISTEN 4
 #define MAX_STREAM 8
 #define MAX_EPOLL 16
+/* Fixed reservation: neither compartment can consume the other half. */
+#define STREAMS_PER_NETNS (MAX_STREAM / 2)
+#define LISTENERS_PER_NETNS (MAX_LISTEN / 2)
+#define EPOLLS_PER_NETNS (MAX_EPOLL / 2)
 #define EP_ITEMS 8
 #define BACKLOG 8
 #define RING 32768
@@ -39,6 +44,7 @@ struct fd {
 struct client {
     int state; /* 0 never connected, 1 alive, 2 exited */
     unsigned perms;
+    unsigned netns; /* selected by kernel-issued badge via manifest */
     const char *name;
     struct fd fds[NFD];
     int pending;
@@ -80,15 +86,16 @@ static struct client clients[MAX_CLIENTS + 1];
 static const struct {
     const char *name;
     unsigned perms;
+    unsigned netns;
 } manifest[MAX_CLIENTS + 1] = {
-    {"?", 0},
-    {"httpd", PERM_FS_READ | PERM_NET_LISTEN},
-    {"fetch", PERM_NET_CONNECT},
-    {"rogue", 0},
-    /* Linux programs, forwarded by the kernel (same protocol, same rules). */
-    {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN},
-    {"lfetch", PERM_NET_CONNECT},
-    {"lrogue", 0},
+    {"?", 0, NETNS_NONE},
+    {"httpd", PERM_FS_READ | PERM_NET_LISTEN, NETNS_WARDEN},
+    {"fetch", PERM_NET_CONNECT, NETNS_WARDEN},
+    {"rogue", 0, NETNS_WARDEN},
+    /* Linux guests use a separate loopback namespace, not Warden's native network. */
+    {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN, NETNS_LINUX},
+    {"lfetch", PERM_NET_CONNECT, NETNS_LINUX},
+    {"lrogue", 0, NETNS_LINUX},
 };
 #define N_EXPECTED_CLIENTS 6
 
@@ -131,6 +138,13 @@ static int fd_alloc(struct client *c, int type, int idx) {
     return -EMFILE;
 }
 static int stream_alloc(int owner) {
+    unsigned ns = clients[owner].netns;
+    int used = 0;
+    if (ns == NETNS_NONE) return -1;
+    for (int i = 0; i < MAX_STREAM; i++)
+        if (streams[i].used && netns_same(ns, clients[streams[i].owner].netns))
+            used++;
+    if (used >= STREAMS_PER_NETNS) return -1;
     for (int i = 0; i < MAX_STREAM; i++)
         if (!streams[i].used) {
             memset(&streams[i], 0, sizeof streams[i]);
@@ -366,7 +380,8 @@ static long do_bind(struct client *c, long fd, size_t len) {
     if (e)
         return e;
     for (int i = 0; i < MAX_LISTEN; i++)
-        if (listeners[i].used && listeners[i].port == port)
+        if (listeners[i].used && listeners[i].port == port &&
+             netns_same(c->netns, clients[listeners[i].owner].netns))
             return -EADDRINUSE;
     streams[f->idx].bound_port = port;
     return 0;
@@ -383,6 +398,11 @@ static long do_listen(struct client *c, long fd) {
     struct stream *s = &streams[f->idx];
     if (s->bound_port == 0 || s->connected)
         return -EINVAL;
+    int used_ns = 0;
+    for (int i = 0; i < MAX_LISTEN; i++)
+        if (listeners[i].used && netns_same(c->netns, clients[listeners[i].owner].netns))
+            used_ns++;
+    if (used_ns >= LISTENERS_PER_NETNS) return -ENOMEM;
     int li = -1;
     for (int i = 0; i < MAX_LISTEN; i++)
         if (!listeners[i].used) {
@@ -438,7 +458,8 @@ static long do_connect(struct client *c, long fd, size_t len) {
         return e;
     struct listener *l = 0;
     for (int i = 0; i < MAX_LISTEN; i++)
-        if (listeners[i].used && listeners[i].port == port)
+        if (listeners[i].used && listeners[i].port == port &&
+             netns_same(c->netns, clients[listeners[i].owner].netns))
             l = &listeners[i];
     if (!l || l->nbacklog >= BACKLOG)
         return -ECONNREFUSED;
@@ -455,6 +476,11 @@ static long do_connect(struct client *c, long fd, size_t len) {
 }
 
 static long do_epoll_create(struct client *c) {
+    int used_ns = 0;
+    for (int i = 0; i < MAX_EPOLL; i++)
+        if (epolls[i].used && netns_same(c->netns, clients[epolls[i].owner].netns))
+            used_ns++;
+    if (used_ns >= EPOLLS_PER_NETNS) return -ENOMEM;
     int ei = -1;
     for (int i = 0; i < MAX_EPOLL; i++)
         if (!epolls[i].used) {
@@ -640,6 +666,7 @@ int main(void) {
     site[2] = (struct site_file){"/site/blob.bin", blob, SITE_BLOB_LEN};
     for (int i = 1; i <= MAX_CLIENTS; i++) {
         clients[i].perms = manifest[i].perms;
+        clients[i].netns = manifest[i].netns;
         clients[i].name = manifest[i].name;
         clients[i].buf = (uint8_t *)(SRV_BUF_BASE + (unsigned long)(i - 1) * BUF_SIZE);
         for (int fd = 0; fd < 3; fd++)

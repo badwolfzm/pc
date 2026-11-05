@@ -154,6 +154,36 @@ impl AddressSpace {
         Some(frame)
     }
 
+    /// Physical address of the user byte at `va`, if that page is mapped.
+    pub fn translate(&self, va: u64) -> Option<u64> {
+        if !(USER_BASE..USER_END).contains(&va) {
+            return None;
+        }
+        let idx = ((va - USER_BASE) / PAGE) as usize;
+        let e = unsafe { *(self.pt_user as *const u64).add(idx) };
+        if e & P == 0 {
+            return None;
+        }
+        Some((e & 0x000F_FFFF_FFFF_F000) + (va & (PAGE - 1)))
+    }
+
+    /// Copy `out.len()` bytes of this space's user memory starting at `va`
+    /// into `out`, through the kernel identity map and this space's own page
+    /// table (never by dereferencing the user address). False if any byte is
+    /// unmapped; nothing is then promised about `out`.
+    pub fn read_user(&self, va: u64, out: &mut [u8]) -> bool {
+        let mut done = 0usize;
+        while done < out.len() {
+            let cur = va + done as u64;
+            let Some(pa) = self.translate(cur) else { return false };
+            let in_page = (cur & (PAGE - 1)) as usize;
+            let n = core::cmp::min(PAGE as usize - in_page, out.len() - done);
+            unsafe { ptr::copy_nonoverlapping(pa as *const u8, out[done..].as_mut_ptr(), n) };
+            done += n;
+        }
+        true
+    }
+
     /// Is `va` mapped in this space's user window?
     pub fn is_mapped(&self, va: u64) -> bool {
         if !(USER_BASE..USER_END).contains(&va) {

@@ -39,6 +39,9 @@ pub enum State {
     SendBlocked(u32),
     /// Waiting for a sender on this endpoint object.
     RecvBlocked(u32),
+    /// A CALL whose message is still queued on the endpoint; once a receiver
+    /// takes it the caller moves to RecvBlocked on this reply endpoint.
+    CallBlocked(u32),
 }
 
 /// An endpoint's wait queues. Both queues are allocated once, at creation,
@@ -179,6 +182,17 @@ impl Kernel {
         self.threads[to].state = State::Runnable;
     }
 
+    /// Park `who` as a receiver on reply endpoint `rep`. False when that
+    /// queue is full (nothing changed).
+    fn wait_for_reply(&mut self, who: usize, rep: u32) -> bool {
+        let Some(ep) = self.endpoints.get_mut(&rep) else { return false };
+        if !Endpoint::enqueue(&mut ep.receivers, ep.capacity, who) {
+            return false;
+        }
+        self.threads[who].state = State::RecvBlocked(rep);
+        true
+    }
+
     /// A thread died: drop it from any endpoint queue.
     fn unqueue(&mut self, idx: usize) {
         for ep in self.endpoints.values_mut() {
@@ -284,6 +298,14 @@ pub const SYS_RECV: u64 = 9; // (slot) blocks until sent -> rax=0, rdi=badge, rs
 pub const SYS_DELETE: u64 = 10; // (slot) -> nodes freed; frees the object if this was its last cap
 pub const SYS_MAP: u64 = 11; // (frame_slot, va, writable) -> 0; needs MAP
 pub const SYS_BUDGET: u64 = 12; // (untyped_slot) -> remaining bytes
+pub const SYS_CONSOLE_WRITE: u64 = 13; // (console_slot, buf, len <= 1024) -> len
+pub const SYS_SEND_NB: u64 = 14; // like SEND, but E_AGAIN when nobody is receiving
+pub const SYS_CALL: u64 = 15; // (slot, w0, w1, w2, w3; r9 = reply_slot): SEND then RECV(reply) as one step
+/// Returned by SEND_NB when no receiver is waiting.
+pub const E_AGAIN: u64 = -(8i64) as u64;
+/// Returned by CONSOLE_WRITE when the buffer is not mapped in the caller.
+pub const E_FAULT: u64 = -(9i64) as u64;
+pub const CONSOLE_WRITE_MAX: usize = 1024;
 
 fn err(e: CapError) -> u64 {
     -(match e {
@@ -310,7 +332,7 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
     let cur = k.current;
     let (a, b, c) = (f.rdi, f.rsi, f.rdx);
     match f.rax {
-        SYS_SEND | SYS_RECV => return ipc(k, f),
+        SYS_SEND | SYS_RECV | SYS_SEND_NB | SYS_CALL => return ipc(k, f),
         _ => {}
     }
     let r = match f.rax {
@@ -321,6 +343,24 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
                 crate::tests::judge(k, b, c);
                 0
             })
+        }
+        SYS_CONSOLE_WRITE => {
+            // Raw bytes to the serial console, through the caller's own page
+            // table. Needs WRITE on the console endpoint, like SYS_LOG.
+            match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
+                Err(e) => Err(err(e)),
+                Ok(r) if r.kind != ObjectKind::Endpoint => Err(err(CapError::WrongKind)),
+                Ok(_) => {
+                    let n = core::cmp::min(c as usize, CONSOLE_WRITE_MAX);
+                    let mut buf = [0u8; CONSOLE_WRITE_MAX];
+                    if k.threads[cur].aspace.read_user(b, &mut buf[..n]) {
+                        crate::serial::write_bytes(&buf[..n]);
+                        Ok(n as u64)
+                    } else {
+                        Err(E_FAULT)
+                    }
+                }
+            }
         }
         SYS_INVOKE => k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights(b as u8 & 0x1F)).map(|_| 0).map_err(err),
         SYS_MINT => {
@@ -425,11 +465,16 @@ fn map(k: &mut Kernel, frame_slot: usize, va: u64, writable: bool) -> Result<u64
 /// Synchronous rendezvous IPC. SEND needs WRITE on the endpoint capability,
 /// RECV needs READ. The sender's badge travels with the message, so a server
 /// knows which grant a client is speaking through.
+///
+/// CALL is SEND followed by RECV on a second, reply endpoint (slot in r9)
+/// without a gap: by the time the server sees the message the caller is
+/// already waiting for the answer, so a server can answer with SEND_NB and
+/// never block on a client. SEND_NB refuses with E_AGAIN instead of waiting.
 fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
     let cur = k.current;
     let slot = f.rdi as usize;
-    let sending = f.rax == SYS_SEND;
-    let need = if sending { Rights::WRITE } else { Rights::READ };
+    let op = f.rax;
+    let need = if op == SYS_RECV { Rights::READ } else { Rights::WRITE };
     let r = match k.caps.invoke(&k.threads[cur].cspace, slot, need) {
         Ok(r) => r,
         Err(e) => return Ok(After::Resume(err(e))),
@@ -438,32 +483,40 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
         return Ok(After::Resume(err(CapError::WrongKind)));
     }
     let ep_id = r.object.0;
+    // Every check before any state change: the reply capability of a CALL
+    // must name an endpoint with READ, and have a queue.
+    let reply_ep = if op == SYS_CALL {
+        match k.caps.invoke(&k.threads[cur].cspace, f.r9 as usize, Rights::READ) {
+            Err(e) => return Ok(After::Resume(err(e))),
+            Ok(rr) if rr.kind != ObjectKind::Endpoint || !k.endpoints.contains_key(&rr.object.0) => {
+                return Ok(After::Resume(err(CapError::WrongKind)))
+            }
+            Ok(rr) => Some(rr.object.0),
+        }
+    } else {
+        None
+    };
     // The queue was allocated when the endpoint was created; nothing is
     // allocated on the IPC path. An endpoint object with no queue is a
     // kernel bug, not something user code can cause, so refuse it.
     let Some(ep) = k.endpoints.get_mut(&ep_id) else {
         return Ok(After::Resume(err(CapError::WrongKind)));
     };
-    if sending {
-        let msg = Msg { badge: r.badge, w: [f.rsi, f.rdx, f.r10, f.r8] };
-        if !ep.receivers.is_empty() {
-            let to = ep.receivers.remove(0);
-            k.deliver(to, msg);
-            return Ok(After::Resume(0));
-        }
-        if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
-            return Ok(After::Resume(E_QUEUE_FULL));
-        }
-        k.threads[cur].pending = msg;
-        k.threads[cur].state = State::SendBlocked(ep_id);
-        // The sender resumes with rax = 0 once a receiver takes the message.
-        k.threads[cur].frame.rax = 0;
-        Ok(After::Block)
-    } else {
+    if op == SYS_RECV {
         if !ep.senders.is_empty() {
             let from = ep.senders.remove(0);
             let msg = k.threads[from].pending;
-            k.threads[from].state = State::Runnable;
+            match k.threads[from].state {
+                // A caller whose message was queued now waits for the reply.
+                State::CallBlocked(rep) => {
+                    if !k.wait_for_reply(from, rep) {
+                        // Reply queue full: the caller gets E_QUEUE_FULL as its answer.
+                        k.threads[from].frame.rax = E_QUEUE_FULL;
+                        k.threads[from].state = State::Runnable;
+                    }
+                }
+                _ => k.threads[from].state = State::Runnable,
+            }
             k.deliver(cur, msg);
             // deliver() wrote the message into cur's frame; resume it.
             return Ok(After::Resume(0));
@@ -472,8 +525,34 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             return Ok(After::Resume(E_QUEUE_FULL));
         }
         k.threads[cur].state = State::RecvBlocked(ep_id);
-        Ok(After::Block)
+        return Ok(After::Block);
     }
+    let msg = Msg { badge: r.badge, w: [f.rsi, f.rdx, f.r10, f.r8] };
+    if !ep.receivers.is_empty() {
+        let to = ep.receivers.remove(0);
+        k.deliver(to, msg);
+        if let Some(rep) = reply_ep {
+            if !k.wait_for_reply(cur, rep) {
+                return Ok(After::Resume(E_QUEUE_FULL));
+            }
+            return Ok(After::Block);
+        }
+        return Ok(After::Resume(0));
+    }
+    if op == SYS_SEND_NB {
+        return Ok(After::Resume(E_AGAIN));
+    }
+    if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
+        return Ok(After::Resume(E_QUEUE_FULL));
+    }
+    k.threads[cur].pending = msg;
+    k.threads[cur].state = match reply_ep {
+        Some(rep) => State::CallBlocked(rep),
+        None => State::SendBlocked(ep_id),
+    };
+    // The sender resumes with rax = 0 once a receiver takes the message.
+    k.threads[cur].frame.rax = 0;
+    Ok(After::Block)
 }
 
 /// Rust side of every trap. Never returns.
@@ -516,7 +595,8 @@ pub extern "C" fn trap(frame: *mut TrapFrame) -> ! {
                 unsafe { enter_user(&k.threads[cur].frame, k.threads[cur].aspace.cr3) }
             }
             Ok(After::Yield) => k.threads[cur].frame.rax = 0,
-            Ok(After::Block) => {}
+            // Blocking in IPC gives the CPU up as surely as a yield does.
+            Ok(After::Block) => k.threads[cur].budget = k.threads[cur].budget_period,
             Err(d) => k.kill(cur, d),
         },
         v => {

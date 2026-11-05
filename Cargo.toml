@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/warden-caps", "crates/warden-abi", "crates/warden-libgrant", "crates/warden-sentry", "crates/warden-kernel"]
+members = ["crates/warden-caps", "crates/warden-elf", "crates/warden-abi", "crates/warden-libgrant", "crates/warden-sentry", "crates/warden-kernel"]
 # The kernel is bare metal; build it with `cargo build -p warden-kernel --target x86_64-unknown-none`.
-default-members = ["crates/warden-caps", "crates/warden-abi", "crates/warden-libgrant", "crates/warden-sentry"]
+default-members = ["crates/warden-caps", "crates/warden-elf", "crates/warden-abi", "crates/warden-libgrant", "crates/warden-sentry"]
 
 [workspace.package]
 edition = "2021"

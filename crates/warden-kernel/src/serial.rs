@@ -25,6 +25,16 @@ pub fn init() {
     }
 }
 
+/// Raw bytes, as given, for user console output.
+pub fn write_bytes(b: &[u8]) {
+    for &c in b {
+        unsafe {
+            while inb(COM1 + 5) & 0x20 == 0 {}
+            outb(COM1, c);
+        }
+    }
+}
+
 pub struct Serial;
 
 impl fmt::Write for Serial {

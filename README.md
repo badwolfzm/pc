@@ -71,8 +71,68 @@ through the unused entries, so freeing never allocates). 108 of 108
 checks hold. Not yet: threads and address spaces as retypable objects, frame
 sharing between threads, unmap without delete.
 
-Not in the kernel yet: a loader, the Linux personality server, SMP, ARM64.
-See the kernel plan.
+### Phase 2b: two isolated applications, one workload
+
+The kernel now **loads static ELF programs** and runs them beside a
+**user-space Linux personality server**. The programs are ordinary C, built
+from `crates/warden-kernel/user/` by the kernel's `build.rs` with the host C
+compiler (`-ffreestanding -static -mgeneral-regs-only`) and embedded in the
+kernel image:
+
+- `personality.c`: the personality server. It receives one marshalled Linux
+  syscall per `CALL`, identifies the caller by the **badge** the kernel put on
+  the caller's capability (never by anything the caller wrote), and serves it
+  from per-client state: `read`/`write`/`open`/`close` on a read-only in-memory
+  site (`fs.read`), AF_INET stream sockets over an in-server loopback
+  (`net.listen`, `net.connect`), `epoll`, `exit_group`. A call that cannot
+  complete yet is parked as the client's one pending operation; the client
+  stays blocked in the kernel meanwhile, so the server never blocks on a
+  client and never spins.
+- `httpd.c`: a static HTTP/1.0 server, epoll over a listening socket and its
+  connections, files through the `fs.read` grant.
+- `fetch.c`: an HTTP/1.0 client that makes 60 requests over fresh connections
+  and checks every response byte for byte against the site fixture.
+- `rogue.c`: a hostile third application that runs at the same time.
+
+Kernel additions: `warden-elf` (a `no_std`, `unsafe`-free parser that
+validates an image completely before a single frame is allocated: window,
+page overlap, W^X, file bounds, entry in code), `loader.rs`, shared frames
+(`map_frame`) for the per-client IPC buffers, `CALL` (send and wait for the
+reply as one step, so a server can answer with the non-blocking `SEND_NB` and
+can never be made to block on a client), and `CONSOLE_WRITE` (raw bytes
+through the caller's own page table). Blocking in IPC refills the CPU budget
+like a yield.
+
+Verified under QEMU, 131 of 131 checks (23 new): httpd serves 60 requests and fetch
+finds 60 of 60 responses correct while the rogue runs; the rogue's read of
+httpd's descriptor is EBADF, its `open` and `socket` are EACCES (no grant),
+a 1 MiB write from a 16 KiB buffer is EFAULT, 5,001 unknown syscalls are
+ENOSYS with no kernel allocation, host-exit through either capability it
+holds is refused, slots 4..0xFFFF name nothing, it gets 13 descriptors and
+then EMFILE while the other apps keep running, and its final read of httpd's
+buffer at the server's address faults (#PF). Five malformed images (segment
+in kernel memory, segment reaching the IPC buffer, RWX segment, truncated,
+foreign machine) are refused without allocating a frame. Under the Phase 3
+rules the loader charges each program's image, stack, IPC buffer and page
+tables to that program's untyped memory before it runs (httpd starts with
+884 KiB of its 1 MiB left), the boot-time roots of the personality and reply
+endpoints are deleted once the programs hold their copies, and the
+end-of-run checks still find 0 live objects, every frame returned and a heap
+high-water mark that grew by 0 bytes.
+
+Honest limits: there is no NIC, TCP stack or VFS service yet; the loopback
+and the site live in the personality server's own memory. Programs are built
+against a tiny marshalling libc (`libw.c`), not run unmodified: trapping the
+`syscall` instruction and forwarding it is the next step. Read-only data
+segments are mapped R-X because the page table has no R-- variant yet. The
+FPU/SSE state is not saved on a trap, so user programs are compiled without
+it. The permission table (which client has `fs.read`, `net.listen`,
+`net.connect`) lives in the server until the policy service exists.
+
+Not in the kernel yet: syscall trapping for unmodified binaries, dynamic
+loading, the network container, SMP, ARM64; the frames a loaded image
+occupies are charged but not yet returned when the program dies (they are
+not Frame objects). See the kernel plan.
 
 See [HOST.md](HOST.md) for running everything on the Windows/WSL2 target host.
 
@@ -162,8 +222,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 31 unit tests across the crates
-tests/kernel/run.sh             # 108 in-guest checks against the kernel
+cargo test                      # 38 unit tests across the crates
+tests/kernel/run.sh             # 131 in-guest checks against the kernel
 tests/escape/run.sh             # 67 attack checks: hostile program (58) plus the harness's
                                 #   inspection of a directory outside every grant (9)
 tests/compat/run.sh             # 14 checks with ls, sh, grep, sort, tar, sha256sum, python3

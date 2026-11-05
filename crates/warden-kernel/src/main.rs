@@ -4,8 +4,10 @@
 
 extern crate alloc;
 
+mod apps;
 mod arch;
 mod heap;
+mod loader;
 mod mm;
 mod serial;
 mod tests;
@@ -128,6 +130,8 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     let victim = k.threads.iter().position(|t| t.name == "ipc victim").unwrap();
     thread::root_endpoint(&mut k, revoker, 9, Rights::READ.union(Rights::WRITE).union(Rights::GRANT), 1);
     thread::mint_to(&mut k, revoker, 9, victim, 9, Rights::READ.union(Rights::WRITE), 9);
+    // Phase 2b: the personality server and the three applications.
+    apps::setup(&mut k);
     k.cap_nodes_baseline = k.caps.len();
     k.heap_baseline = heap::used();
     k.heap_carved_baseline = heap::carved();

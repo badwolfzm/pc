@@ -1,0 +1,8 @@
+[package]
+name = "warden-elf"
+description = "Static ELF64 image parser for the Warden loader (no_std, no unsafe, no alloc): validates headers and PT_LOAD segments against a fixed user window before anything is mapped."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

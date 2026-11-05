@@ -43,7 +43,7 @@
  * kernel's Linux personality forwards for (src/linux.rs); the server serves
  * both through the same protocol. */
 #define SRV_SLOT_REPLY0 4
-#define MAX_CLIENTS 6
+#define MAX_CLIENTS 10
 
 /* Memory layout inside the 2 MiB user window 0x800000..0xA00000. */
 #define APP_LOAD_BASE 0x800000UL

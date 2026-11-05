@@ -169,7 +169,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (108, "rogue: slots 4..0xFFFF name nothing", 0),
     (109, "rogue: 8 epoll objects then namespace quota", 8),
     (110, "personality: HTTP connections accepted", 62), // 60 native + 2 Linux
-    (111, "personality: exit_group from every client", 6),
+    (111, "personality: exit_group from every client", 10),
     // Linux personality (src/linux.rs): real static Linux binaries on the
     // `syscall` ABI, served by the same personality server. Reported as
     // `CHECK <id> <value>` lines on their stdout, which the kernel reads.
@@ -197,6 +197,12 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (161, "linux hostile: read of fd 3 (not open) is EBADF", -(9i64) as u64),
     (162, "linux hostile: 1 MiB write from a 64-byte buffer is EFAULT", -(14i64) as u64),
     (163, "linux hostile: 5000 bad syscalls, all ENOSYS, still alive", 1),
+    // Unmodified static musl BusyBox 1.36.1 (linux/busybox/), judged on its
+    // exact output and exit code.
+    (170, "busybox echo: prints its argument", 1),
+    (171, "busybox cat: /site/style.css byte for byte", 1),
+    (172, "busybox sh -c: arithmetic, printf builtin, expansion", 1),
+    (173, "busybox cat without fs.read: Permission denied, exit 1", 1),
     (112, "rogue: its own buffer is read/write", 0xB0B),
 ];
 

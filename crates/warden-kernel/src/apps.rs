@@ -106,7 +106,7 @@ use crate::thread::grant;
 pub fn setup(k: &mut Kernel) {
     loader_checks(k);
 
-    let mut boot = CSpace::new(8);
+    let mut boot = CSpace::new(16);
     // Root of the personality endpoint: queue room for every client, native
     // and Linux, and the server.
     let n_clients = APPS.len() + crate::linux::N_APPS;

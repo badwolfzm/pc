@@ -178,11 +178,25 @@ object) with a unit test, and the end-of-run checks still hold: 0 live
 objects, every frame returned, 0 fresh frames beyond the Linux heap pages,
 heap high-water mark grew by 0 bytes.
 
-Not in the kernel yet: fs.write, signals, fork/clone/execve, poll/select,
-file-backed mmap, dynamic loading, a real libc run (the test programs are
-freestanding), the network container, SMP, ARM64; the frames a loaded image
-occupies are charged but not yet returned when the program dies (they are
-not Frame objects). See the kernel plan.
+**A real libc run: BusyBox.** `crates/warden-kernel/linux/busybox/` holds
+an unmodified static musl BusyBox 1.36.1 (158 KiB, built from the upstream
+tarball by its `build.sh`; config and hashes in the folder). The kernel
+starts it four times with different argv and grants, as it would any Linux
+program, and judges the exact bytes each run writes: `echo hello from
+busybox`; `cat /site/style.css` through the personality server's fs.read
+grant, byte for byte; `sh -c 'echo $((6*7)); printf ...; echo ${x#war}'`
+(ash: arithmetic, the printf builtin, parameter expansion); and `cat` of the
+same file without the grant, which prints `Permission denied` and exits 1.
+musl's start code runs as is: auxv, `arch_prctl(ARCH_SET_FS)`, brk/mmap
+malloc, `rt_sigaction`, `fcntl(F_GETFL)`, `ioctl(TIOCGWINSZ)` (ENOTTY),
+writev. 191 of 191 checks hold; the heap and frame invariants are unchanged.
+
+Not in the kernel yet: fs.write, signals (installed, never delivered),
+fork/clone/execve (so no pipelines or external commands from the shell),
+poll/select, the stat family, pipes, dup, file-backed mmap, dynamic loading,
+the network container, SMP, ARM64; the frames a loaded image occupies are
+charged but not yet returned when the program dies (they are not Frame
+objects). See the kernel plan.
 
 **Endpoint queues are priced into untyped memory, and badges are sticky.**
 An endpoint's price is now `128 + 2 * capacity * 16` bytes, so its two wait
@@ -295,8 +309,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 39 unit tests across the crates
-tests/kernel/run.sh             # 182 in-guest checks against the kernel
+cargo test                      # 41 unit tests across the crates
+tests/kernel/run.sh             # 191 in-guest checks against the kernel
 tests/escape/run.sh             # 67 attack checks: hostile program (58) plus the harness's
                                 #   inspection of a directory outside every grant (9)
 tests/compat/run.sh             # 14 checks with ls, sh, grep, sort, tar, sha256sum, python3

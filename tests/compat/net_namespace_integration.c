@@ -67,5 +67,55 @@ int main(void) {
     sockaddr_port(5, 8080);
     assert(do_connect(&clients[5], linux_cli2, sizeof(struct sockaddr_in)) == -ECONNREFUSED);
     puts("PASS Linux blocked from native-only listener");
+
+    /* A hostile compartment cannot consume all global stream slots. */
+    memset(streams, 0, sizeof streams);
+    for (int i = 0; i < STREAMS_PER_NETNS; i++)
+        assert(stream_alloc(1) >= 0);
+    assert(stream_alloc(1) < 0);
+    for (int i = 0; i < STREAMS_PER_NETNS; i++)
+        assert(stream_alloc(4) >= 0);
+    assert(stream_alloc(4) < 0);
+    int native_first = -1;
+    for (int i = 0; i < MAX_STREAM; i++)
+        if (streams[i].used && streams[i].owner == 1) { native_first = i; break; }
+    assert(native_first >= 0);
+    stream_release(native_first);
+    assert(stream_alloc(1) >= 0);
+    puts("PASS stream quota separation and reclaim");
+
+    /* Also reserve listener slots, even when the namespaces use the same ports. */
+    memset(streams, 0, sizeof streams);
+    memset(listeners, 0, sizeof listeners);
+    memset(clients[1].fds, 0, sizeof clients[1].fds);
+    memset(clients[4].fds, 0, sizeof clients[4].fds);
+    for (int i = 0; i < LISTENERS_PER_NETNS; i++) {
+        int fd = make_socket(1);
+        sockaddr_port(1, (unsigned short)(8090 + i));
+        assert(do_bind(&clients[1], fd, sizeof(struct sockaddr_in)) == 0);
+        assert(do_listen(&clients[1], fd) == 0);
+    }
+    int extra = make_socket(1);
+    sockaddr_port(1, 8099);
+    assert(do_bind(&clients[1], extra, sizeof(struct sockaddr_in)) == 0);
+    assert(do_listen(&clients[1], extra) == -ENOMEM);
+    for (int i = 0; i < LISTENERS_PER_NETNS; i++) {
+        int fd = make_socket(4);
+        sockaddr_port(4, (unsigned short)(8090 + i));
+        assert(do_bind(&clients[4], fd, sizeof(struct sockaddr_in)) == 0);
+        assert(do_listen(&clients[4], fd) == 0);
+    }
+    puts("PASS listener quota separation");
+
+    memset(epolls, 0, sizeof epolls);
+    memset(clients[1].fds, 0, sizeof clients[1].fds);
+    memset(clients[4].fds, 0, sizeof clients[4].fds);
+    for (int i = 0; i < EPOLLS_PER_NETNS; i++)
+        assert(do_epoll_create(&clients[1]) >= 0);
+    assert(do_epoll_create(&clients[1]) == -ENOMEM);
+    for (int i = 0; i < EPOLLS_PER_NETNS; i++)
+        assert(do_epoll_create(&clients[4]) >= 0);
+    assert(do_epoll_create(&clients[4]) == -ENOMEM);
+    puts("PASS epoll quota separation");
     return 0;
 }

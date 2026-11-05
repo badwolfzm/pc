@@ -91,6 +91,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
         threads: alloc::vec::Vec::new(), current: 0, ticks: 0, failures: 0, checks: 0,
         cap_nodes_baseline: 0, heap_baseline: 0, heap_carved_baseline: 0, frames_baseline: 0,
         frames_high_water_baseline: 0, host_object: None, linux_run_frames: 0,
+        fx_owner: None, ts_set: false, fs_loaded: 0,
     };
     k.checks += mm_checks;
     k.failures += mm_fails;

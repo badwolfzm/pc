@@ -254,7 +254,10 @@ impl AddressSpace {
     pub fn protect(&mut self, va: u64, perm: Perm) -> bool {
         match self.slot(None, va) {
             Some(e) if unsafe { *e } & P != 0 => {
-                unsafe { *e = (*e & ADDR) | P | U | perm.bits() };
+                unsafe {
+                    *e = (*e & ADDR) | P | U | perm.bits();
+                    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+                }
                 true
             }
             _ => false,

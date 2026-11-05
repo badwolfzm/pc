@@ -26,7 +26,7 @@ objcopy -I elf64-x86-64 -O elf32-i386 "$kernel" "$kernel.game-probe.mb32"
 cc -std=c11 -O2 -Wall -Wextra -Werror -o /tmp/warden-host-frame-oracle \
   tools/game-frame-probe/main.c tools/game-frame-probe/render.c
 host_line=$(/tmp/warden-host-frame-oracle 60)
-host_hex=$(sed -n 's/.* digest=\\([0-9a-f]*\\) .*/\\1/p' <<< "$host_line")
+host_hex=$(sed -n 's/.* digest=\([0-9a-f]*\) .*/\1/p' <<< "$host_line")
 [[ "$host_hex" =~ ^[0-9a-f]{16}$ ]] || { echo "invalid host oracle: $host_line" >&2; exit 1; }
 for repeat in 1 2; do
   log="$(mktemp)"
@@ -40,10 +40,10 @@ for repeat in 1 2; do
   # correctness verdict for the substituted guest. The guest must still
   # actually report its frame count and match the independently compiled
   # host digest, then exit without panic or timeout.
-  if ! grep -Eq '^report pong 40 60\\r?$' "$log"; then
+  if ! grep -Eq '^report pong 40 60\r?$' "$log"; then
       echo "ERROR: native guest did not report 60 frames in run $repeat (qemu rc $rc)" >&2; exit 1
   fi
-  guest_dec=$(sed -n 's/^report pong 41 \\([0-9]*\\)\\r*$/\\1/p' "$log" | tail -1)
+  guest_dec=$(sed -n 's/^report pong 41 \([0-9]*\)\r*$/\1/p' "$log" | tail -1)
   if [[ ! "$guest_dec" =~ ^[0-9]+$ ]]; then
       echo "ERROR: no guest digest in run $repeat" >&2; exit 1
   fi

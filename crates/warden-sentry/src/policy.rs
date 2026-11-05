@@ -100,6 +100,9 @@ impl Policy {
                     self.spawn_slot = Some(self.mint_root(ObjectKind::Thread, Rights::WRITE)?);
                 }
             }
+            // Native-app permissions (ABI v0.2). No Linux syscall maps to them in
+            // Phase 0; they are recorded so manifests and approvals can carry them.
+            "render" | "superop" | "clock" | "random" => {}
             other => return Err(format!("unknown permission {other}")),
         }
         self.held.push(g.clone());

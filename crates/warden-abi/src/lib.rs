@@ -18,7 +18,7 @@ pub use linux_x86_64::SYSCALLS;
 
 /// Bump when the meaning of a class, family or permission name changes.
 /// The DSL pins this; additive changes bump the minor number only.
-pub const ABI_SCHEMA_VERSION: &str = "0.1";
+pub const ABI_SCHEMA_VERSION: &str = "0.2";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
@@ -176,6 +176,11 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("net.connect", "Open TCP connections to host:port (\"*\" wildcards allowed)."),
     ("net.listen", "Listen on a local port."),
     ("proc.spawn", "Create processes and threads (no namespaces)."),
+    // v0.2 additions for native (MXSB) apps. Additive: nothing above changed.
+    ("render", "Submit commands to the render service's command ring (no scope). The render capability is the only path to the ring."),
+    ("superop", "Use one named compiler super-op / accelerated kernel; scope is its name."),
+    ("clock", "Clock resolution: scope is \"coarse\" (default, ms) or \"precise\" (ns; enables timing side channels, ask twice)."),
+    ("random", "Read from the system entropy source (no scope)."),
 ];
 
 /// The versioned ABI contract, as JSON. Kernel and DSL both build against it;
@@ -236,7 +241,7 @@ mod tests {
     #[test]
     fn schema_is_well_formed_enough() {
         let s = schema_json();
-        assert!(s.contains("\"version\": \"0.1\""));
+        assert!(s.contains("\"version\": \"0.2\""));
         assert_eq!(s.matches("\"nr\":").count(), SYSCALLS.len());
     }
 }

@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 
 /// Rights carried by a capability. A plain bit set, kept tiny on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Rights(u8);
+pub struct Rights(pub u8);
 
 impl Rights {
     pub const NONE: Rights = Rights(0);

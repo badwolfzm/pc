@@ -1,6 +1,38 @@
-# Warden: Phase 0
+# Warden
 
-Phase 0 of the Warden secure container OS. It is a **host-side prototype**,
+Phases 0 and 1 of the Warden secure container OS.
+
+## Phase 1: the kernel boots
+
+`crates/warden-kernel` is a Rust x86-64 microkernel that boots under QEMU
+(`-kernel`, Multiboot), switches to long mode, and runs ring-3 threads under
+the `warden-caps` capability model. There are no device interrupts: the PIT
+is the single partition timer, every other IRQ line is masked, and a thread
+that spends its whole budget without yielding is killed. The syscall boundary
+is `int 0x80` with `invoke(slot, ...)`-style calls; every syscall, even
+logging, needs a capability.
+
+```sh
+rustup target add x86_64-unknown-none
+tests/kernel/run.sh        # build, boot in QEMU, run the in-guest escape suite
+```
+
+The in-guest suite runs 13 hostile ring-3 threads: forged and out-of-range
+slots, minting with a wider mask, using a revoked copy, over-budget retype,
+host-exit without the host capability, writing and reading kernel memory,
+jumping into kernel code, moving the stack outside the partition, `cli`,
+`hlt`, `out`, `rdmsr`, `mov cr3`, an unprogrammed `int`, the `syscall`
+instruction, and an infinite loop. 27 of 27 checks hold; the kernel then
+stops QEMU with its verdict.
+
+Not in Phase 1 yet: user address spaces (one shared identity map with one
+user page), IPC endpoints, a loader, SMP, ARM64. See the kernel plan.
+
+See [HOST.md](HOST.md) for running everything on the Windows/WSL2 target host.
+
+## Phase 0: the host prototype
+
+Phase 0 is a **host-side prototype**,
 not the kernel yet. It runs unmodified Linux programs under a syscall
 supervisor that enforces a capability manifest and **per-library permission
 checkboxes**, using the same capability model and syscall table the Warden
@@ -20,6 +52,7 @@ against real programs before kernel code depends on them.
 | `warden-abi` | Every x86-64 Linux syscall (373) classified as pass, mediated, denied or unimplemented; exports the versioned ABI contract `abi/warden-abi.json`. | Yes, drives the personality server |
 | `warden-libgrant` | Library requests, checkbox screen, approval records bound to SHA-256. | Yes, in the policy service |
 | `warden-sentry` | `warden` CLI and the seccomp user-notification supervisor (host only). | No, replaced by the kernel |
+| `warden-kernel` | Phase 1 microkernel (bare metal, `x86_64-unknown-none`). | It is the kernel |
 
 ## Use
 
@@ -66,9 +99,17 @@ join the process's authority only once that library is actually loaded.
 
 ```sh
 cargo test                      # 21 unit tests across the crates
+tests/kernel/run.sh             # 27 in-guest checks against the Phase 1 kernel
 tests/escape/run.sh             # 44 attack checks from a hostile program, running as root
 tests/compat/run.sh             # 13 checks with ls, sh, grep, sort, tar, sha256sum, python3
 ```
+
+## ABI contract
+
+`abi/warden-abi.json` (schema 0.2) is the shared contract between the kernel,
+the DSL workstream and the MXSB native-app manifest. v0.2 added the native-app
+permissions `render`, `superop=<name>`, `clock=coarse|precise` and `random`;
+nothing from v0.1 changed. A test fails if the file and the table drift.
 
 ## Known Phase 0 limits
 

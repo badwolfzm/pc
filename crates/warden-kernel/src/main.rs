@@ -79,6 +79,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 
     arch::init();
     arch::init_syscall();
+    arch::init_fpu();
 
     // Review finding: a refused mapping must not consume a frame. The mm
     // self-test checks that and the rest of the mapping rules (W^X bits,
@@ -152,7 +153,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 pub fn finish(k: &mut Kernel) -> ! {
     #[cfg(feature = "pong")]
     pong::finish(k);
-    let expected_logs = tests::EXPECT.len() as u32;
+    let expected_logs = tests::expected_count() as u32;
     let logs: u32 = k.threads.iter().map(|t| t.logs).sum();
     k.checks += 1;
     if logs != expected_logs {

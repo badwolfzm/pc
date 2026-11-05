@@ -11,8 +11,11 @@ K="target/x86_64-unknown-none/$DIR/warden-kernel"
 # QEMU's -kernel loader takes only ELF32 multiboot images; the code is 64-bit.
 objcopy -I elf64-x86-64 -O elf32-i386 "$K" "$K.mb32"
 ACCEL=tcg; [[ -w /dev/kvm ]] && ACCEL=kvm
+# The CPU model decides whether the AVX checks run: qemu64 has no AVX, so the
+# fpu programs stay silent there. max gives the full AVX/XSAVE path.
+CPU="${CPU:-max}"
 set +e
-timeout "${TIMEOUT:-120}" qemu-system-x86_64 -machine pc,accel="$ACCEL" -m 128M -display none -serial stdio \
+timeout "${TIMEOUT:-120}" qemu-system-x86_64 -machine pc,accel="$ACCEL" -cpu "$CPU" -m 128M -display none -serial stdio \
     -no-reboot -device isa-debug-exit,iobase=0xf4,iosize=0x04 -kernel "$K.mb32"
 RC=$?
 set -e

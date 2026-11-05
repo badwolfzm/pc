@@ -124,8 +124,9 @@ pub struct Thread {
     pub personality: Personality,
     /// FS base (Linux TLS), loaded into the MSR before the thread runs.
     pub fs_base: u64,
-    /// SSE/x87 state, saved on every trap and restored before every run.
-    pub fx: arch::FxArea,
+    /// x87/SSE/AVX state. Saved when another Linux thread takes the FPU, and
+    /// restored before a Linux thread runs (see `Kernel::run`).
+    pub fx: arch::FpuArea,
     pub linux: linux::Proc,
 }
 
@@ -191,7 +192,7 @@ impl Kernel {
         self.threads.push(Thread {
             name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(),
             budget, budget_period: budget, death: None, expect, logs: 0,
-            personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), linux: linux::Proc::new(),
+            personality: Personality::Native, fs_base: 0, fx: arch::FpuArea::initial(), linux: linux::Proc::new(),
         });
         self.threads.len() - 1
     }
@@ -303,7 +304,7 @@ impl Kernel {
     /// Enter thread `i`. The FPU and the FS base are touched only when the
     /// thread differs from what the CPU holds, so a native thread resuming
     /// after its own syscall, or following another native thread, pays
-    /// nothing for the Linux personality: no fxsave, no fxrstor, no wrmsr.
+    /// nothing for the Linux personality: no vector save, no vector restore, no wrmsr.
     fn run(&mut self, i: usize) -> ! {
         self.current = i;
         if self.threads[i].personality == Personality::Linux {
@@ -313,16 +314,16 @@ impl Kernel {
             }
             if self.fx_owner != Some(i) {
                 if let Some(o) = self.fx_owner {
-                    arch::fxsave(&mut self.threads[o].fx);
+                    arch::fpu_save(&mut self.threads[o].fx);
                 }
-                arch::fxrstor(&self.threads[i].fx);
+                arch::fpu_restore(&self.threads[i].fx);
                 self.fx_owner = Some(i);
             }
         } else {
             if let Some(o) = self.fx_owner.take() {
                 // Leaving a Linux thread: bank its state. Its registers stay
                 // in the FPU but TS keeps every native thread away from them.
-                arch::fxsave(&mut self.threads[o].fx);
+                arch::fpu_save(&mut self.threads[o].fx);
             }
             if !self.ts_set {
                 arch::set_ts();

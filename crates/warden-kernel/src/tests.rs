@@ -79,6 +79,13 @@ const E_OCCUPIED: u64 = -(2i64) as u64;
 const E_QUEUE_FULL: u64 = -(7i64) as u64;
 const SLOT_FLOOD: u64 = 8; // Endpoint with queue capacity 2 and no receiver, held by the three flood senders
 
+/// Check ids 164 and 165 come from the AVX test programs, which print nothing
+/// on a CPU without AVX (not verified), so they are expected only with AVX.
+pub fn expected_count() -> usize {
+    let avx = crate::arch::avx_enabled();
+    EXPECT.iter().filter(|(id, _, _)| avx || !matches!(*id, 164 | 165)).count()
+}
+
 /// (id, name, expected observed value)
 pub const EXPECT: &[(u64, &str, u64)] = &[
     (1, "legit invoke of held console cap", 0),
@@ -167,7 +174,7 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (108, "rogue: slots 4..0xFFFF name nothing", 0),
     (109, "rogue: 8 epoll objects then namespace quota", 8),
     (110, "personality: HTTP connections accepted", 62), // 60 native + 2 Linux
-    (111, "personality: exit_group from every client", 6),
+    (111, "personality: exit_group from every client", 8),
     // Linux personality (src/linux.rs): real static Linux binaries on the
     // `syscall` ABI, served by the same personality server. Reported as
     // `CHECK <id> <value>` lines on their stdout, which the kernel reads.
@@ -195,6 +202,8 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (161, "linux hostile: read of fd 3 (not open) is EBADF", -(9i64) as u64),
     (162, "linux hostile: 1 MiB write from a 64-byte buffer is EFAULT", -(14i64) as u64),
     (163, "linux hostile: 5000 bad syscalls, all ENOSYS, still alive", 1),
+    (164, "linux fpu a: ymm survive 50 yields beside another thread", 1),
+    (165, "linux fpu b: ymm survive 50 yields beside another thread", 1),
     (112, "rogue: its own buffer is read/write", 0xB0B),
 ];
 

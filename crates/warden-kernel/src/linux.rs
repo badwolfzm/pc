@@ -72,7 +72,7 @@ const PATH_MAX: usize = 256;
 const PROGRAM_UNTYPED: u64 = 1 << 20;
 /// The first badge after the native applications (1..3).
 pub const FIRST_BADGE: u64 = 4;
-pub const N_APPS: usize = 3;
+pub const N_APPS: usize = 5;
 
 const EPERM: i64 = 1;
 const EBADF: i64 = 9;
@@ -94,6 +94,8 @@ fn e(n: i64) -> u64 {
 const LINUX_HTTPD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_httpd.elf"));
 const LINUX_CLIENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_client.elf"));
 const LINUX_HOSTILE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_hostile.elf"));
+const LINUX_FPU_A: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_fpu_a.elf"));
+const LINUX_FPU_B: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/linux_fpu_b.elf"));
 
 struct App {
     name: &'static str,
@@ -106,6 +108,10 @@ const APPS: &[App] = &[
     App { name: "linux httpd", image: LINUX_HTTPD, expect: Death::Exited(0) },
     App { name: "linux client", image: LINUX_CLIENT, expect: Death::Exited(0) },
     App { name: "linux hostile", image: LINUX_HOSTILE, expect: Death::WrongAbi },
+    // Same program, two identities: each keeps eight ymm registers live
+    // across yields to the other. Silent (not verified) without AVX.
+    App { name: "linux fpu a", image: LINUX_FPU_A, expect: Death::Exited(0) },
+    App { name: "linux fpu b", image: LINUX_FPU_B, expect: Death::Exited(0) },
 ];
 
 /// What to do with the server's answer to the call in flight.

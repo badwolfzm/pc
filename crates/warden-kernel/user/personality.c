@@ -96,8 +96,11 @@ static const struct {
     {"lhttpd", PERM_FS_READ | PERM_NET_LISTEN, NETNS_LINUX},
     {"lfetch", PERM_NET_CONNECT, NETNS_LINUX},
     {"lrogue", 0, NETNS_LINUX},
+    /* The two AVX test programs (linux/fpu.c): no permissions at all. */
+    {"lfpua", 0, NETNS_LINUX},
+    {"lfpub", 0, NETNS_LINUX},
 };
-#define N_EXPECTED_CLIENTS 6
+#define N_EXPECTED_CLIENTS 8
 
 static struct ofile ofiles[MAX_OPEN];
 static struct listener listeners[MAX_LISTEN];

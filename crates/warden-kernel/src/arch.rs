@@ -148,28 +148,94 @@ pub fn init_syscall() {
     }
 }
 
-/// SSE/x87 state of one thread, saved with fxsave on every trap.
-#[repr(C, align(16))]
+/// Room for the x87/SSE/AVX state of one thread. With XCR0 = x87|SSE|AVX the
+/// XSAVE standard format is 832 bytes; the first 512 bytes are the FXSAVE
+/// layout, so the same buffer serves the fallback path on a CPU without AVX.
+/// 64-byte aligned as XSAVE requires.
+#[repr(C, align(64))]
 #[derive(Clone, Copy)]
-pub struct FxArea(pub [u8; 512]);
+pub struct FpuArea(pub [u8; FPU_MAX]);
 
-impl FxArea {
+/// Largest XSAVE area the kernel accepts (XCR0 = 0x7 needs 832 bytes).
+pub const FPU_MAX: usize = 1024;
+
+impl FpuArea {
     /// Power-on defaults: FCW 0x037F, MXCSR 0x1F80 (all exceptions masked).
+    /// The XSAVE header (XSTATE_BV at 512) is zero, so AVX state starts in
+    /// its init state (all upper halves zero).
     pub const fn initial() -> Self {
-        let mut a = [0u8; 512];
+        let mut a = [0u8; FPU_MAX];
         a[0] = 0x7F;
         a[1] = 0x03;
         a[24] = 0x80;
         a[25] = 0x1F;
-        FxArea(a)
+        FpuArea(a)
     }
 }
 
-pub fn fxsave(a: &mut FxArea) {
-    unsafe { core::arch::asm!("fxsave64 [{}]", in(reg) a.0.as_mut_ptr(), options(nostack, preserves_flags)) }
+/// True once `init_fpu` found AVX and turned on XSAVE. Otherwise the kernel
+/// saves SSE state with FXSAVE, which covers XMM0-15 but not the upper halves.
+static mut XSAVE: bool = false;
+
+unsafe fn cpuid(leaf: u32, sub: u32) -> core::arch::x86_64::CpuidResult {
+    core::arch::x86_64::__cpuid_count(leaf, sub)
 }
-pub fn fxrstor(a: &FxArea) {
-    unsafe { core::arch::asm!("fxrstor64 [{}]", in(reg) a.0.as_ptr(), options(nostack, preserves_flags)) }
+
+/// Enable the vector state the Linux personality's programs may use, before
+/// any thread runs. SSE is already on (boot.asm). AVX needs CR4.OSXSAVE and
+/// XCR0 bits 0..2 (x87, SSE, AVX). Without AVX in the CPU this does nothing
+/// and the kernel keeps saving with FXSAVE.
+pub fn init_fpu() {
+    unsafe {
+        let leaf1 = cpuid(1, 0);
+        let xsave_ok = leaf1.ecx & (1 << 26) != 0 && leaf1.ecx & (1 << 28) != 0;
+        if !xsave_ok {
+            return;
+        }
+        let cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov cr4, {}", in(reg) cr4 | (1 << 18), options(nomem, nostack, preserves_flags));
+        // CPUID.(EAX=0DH,ECX=0): EDX:EAX = XCR0 bits the CPU supports.
+        let supported = cpuid(0xD, 0);
+        let want: u32 = 0b111;
+        if supported.eax & want != want {
+            return;
+        }
+        // XCR0 = x87 | SSE | AVX. Nothing wider: AVX-512 stays build-only.
+        core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") want, in("edx") 0u32, options(nomem, nostack, preserves_flags));
+        // EBX of the same leaf is now the size the enabled state needs.
+        let size = cpuid(0xD, 0).ebx as usize;
+        assert!(size <= FPU_MAX, "XSAVE area larger than the kernel's buffer");
+        XSAVE = true;
+    }
+}
+
+/// True when AVX state is saved and restored (XSAVE in use). The AVX test
+/// programs report only when this holds; without AVX they are not verified.
+pub fn avx_enabled() -> bool {
+    unsafe { XSAVE }
+}
+
+/// Save the live vector/x87 state of a Linux thread into its buffer.
+pub fn fpu_save(a: &mut FpuArea) {
+    unsafe {
+        if XSAVE {
+            core::arch::asm!("xsave64 [{}]", in(reg) a.0.as_mut_ptr(), in("eax") 0b111u32, in("edx") 0u32, options(nostack, preserves_flags));
+        } else {
+            core::arch::asm!("fxsave64 [{}]", in(reg) a.0.as_mut_ptr(), options(nostack, preserves_flags));
+        }
+    }
+}
+
+/// Load a Linux thread's saved vector/x87 state into the CPU.
+pub fn fpu_restore(a: &FpuArea) {
+    unsafe {
+        if XSAVE {
+            core::arch::asm!("xrstor64 [{}]", in(reg) a.0.as_ptr(), in("eax") 0b111u32, in("edx") 0u32, options(nostack, preserves_flags));
+        } else {
+            core::arch::asm!("fxrstor64 [{}]", in(reg) a.0.as_ptr(), options(nostack, preserves_flags));
+        }
+    }
 }
 
 /// FS base for the thread about to run (Linux TLS).

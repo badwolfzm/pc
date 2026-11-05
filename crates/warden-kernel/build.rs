@@ -9,6 +9,8 @@ const PROGRAMS: &[&str] = &["personality", "httpd", "fetch", "rogue"];
 /// executables (the `syscall` ABI, SSE allowed, linked at 0x400000) and
 /// served by the Linux personality.
 const LINUX_PROGRAMS: &[&str] = &["httpd", "client", "hostile"];
+/// The AVX register test (linux/fpu.c) built twice: name, check id, seed.
+const LINUX_FPU: &[(&str, u32, u32)] = &[("fpu_a", 164, 0x3a), ("fpu_b", 165, 0x5c)];
 
 fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -63,6 +65,27 @@ fn main() {
             .status()
             .unwrap_or_else(|e| panic!("{cc} not found ({e}); set WARDEN_CC to a C compiler"));
         assert!(st.success(), "{cc} failed on linux/{prog}.c");
+    }
+    // The AVX test programs: one source, two identities (check ids and seeds).
+    // -mgeneral-regs-only keeps the compiler out of the vector registers.
+    for (name, id, seed) in LINUX_FPU {
+        let elf = out.join(format!("linux_{name}.elf"));
+        let st = Command::new(&cc)
+            .args([
+                "-std=gnu11", "-O2", "-Wall", "-Wextra",
+                "-ffreestanding", "-nostdlib", "-nostartfiles", "-static", "-no-pie", "-fno-pie",
+                "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-fno-builtin", "-fcf-protection=none",
+                "-mgeneral-regs-only",
+                "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-z,max-page-size=4096", "-s",
+            ])
+            .arg(format!("-DFPU_ID={id}"))
+            .arg(format!("-DFPU_SEED={seed}"))
+            .arg("-o")
+            .arg(&elf)
+            .arg(linux.join("fpu.c"))
+            .status()
+            .unwrap_or_else(|e| panic!("{cc} not found ({e}); set WARDEN_CC to a C compiler"));
+        assert!(st.success(), "{cc} failed on linux/fpu.c");
     }
     for prog in PROGRAMS {
         let elf = out.join(format!("{prog}.elf"));

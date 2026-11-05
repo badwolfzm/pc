@@ -43,7 +43,7 @@ execution**, and must not be wired into any kernel trust boundary.
   `.github/workflows/elf-compat-preflight.yml`.
 - **No concurrent edits** to `warden-elf`, the kernel loader,
   `control/STATUS.md`, or existing agent coordination files.
-- **Tests actually executed:** GitHub Actions result attached to PR after run.
+- **Tests actually executed:** GitHub Actions run [42008925083](https://github.com/badwolfzm/pc/actions/runs/42008925083): Python regression suite passed (17 tests), and real host ELF classification check passed. This validates the scanner, not Warden runtime compatibility.
 - **Unverified:** real Warden execution, Windows/WSL2 target host,
   libc/static-musl/dynamic-linker behavior.
 - **Review:** independent comparison with `warden-elf` parser invariants,

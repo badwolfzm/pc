@@ -121,16 +121,66 @@ end-of-run checks still find 0 live objects, every frame returned and a heap
 high-water mark that grew by 0 bytes.
 
 Honest limits: there is no NIC, TCP stack or VFS service yet; the loopback
-and the site live in the personality server's own memory. Programs are built
-against a tiny marshalling libc (`libw.c`), not run unmodified: trapping the
-`syscall` instruction and forwarding it is the next step. Read-only data
-segments are mapped R-X because the page table has no R-- variant yet. The
-FPU/SSE state is not saved on a trap, so user programs are compiled without
-it. The permission table (which client has `fs.read`, `net.listen`,
-`net.connect`) lives in the server until the policy service exists.
+and the site live in the personality server's own memory. The permission
+table (which client has `fs.read`, `net.listen`, `net.connect`) lives in the
+server until the policy service exists.
 
-Not in the kernel yet: syscall trapping for unmodified binaries, dynamic
-loading, the network container, SMP, ARM64; the frames a loaded image
+### Phase 2b, second slice: the Linux personality runs real static binaries
+
+`crates/warden-kernel/src/linux.rs` lets a thread speak the **x86-64 Linux
+ABI**: the `syscall` instruction (EFER.SCE, LSTAR; `int 0x80` stays the
+native entry, and a thread that uses the other personality's entry is killed,
+`WrongAbi`), Linux numbers and arguments, negative errno. The programs in
+`crates/warden-kernel/linux/` are built with ordinary Linux flags (linked at
+0x400000, SSE allowed, no libc) and loaded by `warden-elf` into an address
+space of their own; the user range is now `0x400000..0x2000000` with a page
+table per 2 MiB window created on first use, read-only data segments get a
+real R-- mapping, and every trap saves and restores the thread's SSE state
+(`fxsave`/`fxrstor`) and FS base, so TLS and vector code work. The Linux
+initial stack carries argc/argv/envp and an auxv (AT_PHDR, AT_PHNUM,
+AT_PAGESZ, AT_ENTRY, AT_RANDOM, ...), what a static glibc or musl start
+needs.
+
+Every syscall number is looked up in the **Phase 0 table** (`warden-abi`,
+now `no_std`), and its tier decides: `Pass` calls on the thread's own memory,
+time and identity (brk, mmap, munmap, mprotect, arch_prctl, uname,
+getrandom, clock_gettime, nanosleep, exit_group, ...) are served in the
+kernel, paid from the thread's untyped memory and refunded on munmap and
+death; `Pass` calls on descriptors (read, write, writev, close, accept4,
+epoll) and every `Mediated` call (open/openat, socket, bind, listen, connect)
+are **forwarded to `user/personality.c`**, the same server with the same
+protocol the native apps use: the kernel owns the client's 16 KiB buffer
+(the Linux program never sees it, so the header cannot be raced), writes
+the six-word header and the data it copied out of the caller, and CALLs the
+personality endpoint through the thread's own capability (slot 1, badge =
+client id); the server's SEND_NB on the reply endpoint lands as the syscall's
+result in rax, with read data or epoll events copied back. `Denied` is EPERM
+and `Unimplemented` is ENOSYS, both logged. A Linux thread that dies without
+exit_group (fault, wrong ABI) still releases its descriptors: the kernel
+posts the exit_group to the server for it. The server needed only three new
+manifest rows and two aliases (openat, accept4).
+
+Verified under QEMU, 182 of 182 checks (51 new): a Linux httpd listens on
+8081 and serves a Linux client two requests over the server's loopback (200
+with the right body length, 404 for a missing file) alongside the native
+pair on 8080 (the server counts 62 connections and 6 exits); the client's own
+openat is EACCES, uname says Linux x86_64, brk and mmap give usable zeroed
+memory and munmap gives the range back; the hostile Linux program gets EPERM
+for ptrace and bpf (denied tier), EACCES for open and socket without grants,
+EFAULT for a write from kernel memory and for a 1 MiB write from a 64-byte
+buffer, ENOMEM for 64 MiB from a 1 MiB budget, EACCES for an RWX mprotect,
+EINVAL for MAP_FIXED over the kernel, EBADF for descriptors it never
+opened, ENOSYS 5,000 times without dying, and is killed the moment it tries
+`int 0x80`. The mm self-test now has 25 checks (W^X bits per page kind, user
+copies refused into read-only or unmapped pages, teardown returns every
+page), `warden-caps` gained `pay` (charge untyped memory without creating an
+object) with a unit test, and the end-of-run checks still hold: 0 live
+objects, every frame returned, 0 fresh frames beyond the Linux heap pages,
+heap high-water mark grew by 0 bytes.
+
+Not in the kernel yet: fs.write, signals, fork/clone/execve, poll/select,
+file-backed mmap, dynamic loading, a real libc run (the test programs are
+freestanding), the network container, SMP, ARM64; the frames a loaded image
 occupies are charged but not yet returned when the program dies (they are
 not Frame objects). See the kernel plan.
 
@@ -222,8 +272,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 38 unit tests across the crates
-tests/kernel/run.sh             # 131 in-guest checks against the kernel
+cargo test                      # 39 unit tests across the crates
+tests/kernel/run.sh             # 182 in-guest checks against the kernel
 tests/escape/run.sh             # 67 attack checks: hostile program (58) plus the harness's
                                 #   inspection of a directory outside every grant (9)
 tests/compat/run.sh             # 14 checks with ls, sh, grep, sort, tar, sha256sum, python3

@@ -23,6 +23,8 @@
 #define NR_epoll_wait 232
 #define NR_epoll_ctl 233
 #define NR_epoll_create1 291
+#define NR_accept4 288
+#define NR_openat 257
 
 #define ENOENT 2
 #define EBADF 9

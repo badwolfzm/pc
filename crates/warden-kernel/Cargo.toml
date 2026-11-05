@@ -9,6 +9,7 @@ build = "build.rs"
 [dependencies]
 warden-caps = { path = "../warden-caps" }
 warden-elf = { path = "../warden-elf" }
+warden-abi = { path = "../warden-abi" }
 
 
 [features]

@@ -38,9 +38,12 @@
 #define SLOT_PERSONALITY 1   /* app: WRITE on the personality endpoint, badge = client id; server: READ */
 #define SLOT_REPLY 2         /* app: READ on its own reply endpoint */
 #define SLOT_UNTYPED 3       /* app: 64 KiB untyped budget */
-/* Personality server: WRITE on client i's reply endpoint at SRV_SLOT_REPLY0 + i. */
+/* Personality server: WRITE on client i's reply endpoint at SRV_SLOT_REPLY0 + i.
+ * Clients 1..3 are the native applications, 4..6 the Linux programs the
+ * kernel's Linux personality forwards for (src/linux.rs); the server serves
+ * both through the same protocol. */
 #define SRV_SLOT_REPLY0 4
-#define MAX_CLIENTS 4
+#define MAX_CLIENTS 6
 
 /* Memory layout inside the 2 MiB user window 0x800000..0xA00000. */
 #define APP_LOAD_BASE 0x800000UL
@@ -72,5 +75,7 @@
 /* Workload size, shared by httpd and fetch. */
 #define N_REQUESTS 60
 #define HTTP_PORT 8080
+/* The Linux httpd listens here; the native one owns 8080. */
+#define LINUX_HTTP_PORT 8081
 
 #endif

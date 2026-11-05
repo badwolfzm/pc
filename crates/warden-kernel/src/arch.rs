@@ -122,6 +122,61 @@ pub fn init() {
     }
 }
 
+extern "C" {
+    fn syscall_entry();
+}
+
+unsafe fn wrmsr(msr: u32, v: u64) {
+    core::arch::asm!("wrmsr", in("ecx") msr, in("eax") v as u32, in("edx") (v >> 32) as u32, options(nomem, nostack, preserves_flags));
+}
+unsafe fn rdmsr(msr: u32) -> u64 {
+    let (lo, hi): (u32, u32);
+    core::arch::asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags));
+    ((hi as u64) << 32) | lo as u64
+}
+
+/// Enable the `syscall` instruction for the Linux personality: EFER.SCE,
+/// STAR (kernel CS 0x08), LSTAR = entry, SFMASK clears IF, TF and DF.
+/// Native threads that use it are killed by the trap handler.
+pub fn init_syscall() {
+    unsafe {
+        wrmsr(0xC000_0081, 0x08u64 << 32);
+        wrmsr(0xC000_0082, syscall_entry as *const () as usize as u64);
+        wrmsr(0xC000_0084, 0x700);
+        let efer = rdmsr(0xC000_0080);
+        wrmsr(0xC000_0080, efer | 1);
+    }
+}
+
+/// SSE/x87 state of one thread, saved with fxsave on every trap.
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+pub struct FxArea(pub [u8; 512]);
+
+impl FxArea {
+    /// Power-on defaults: FCW 0x037F, MXCSR 0x1F80 (all exceptions masked).
+    pub const fn initial() -> Self {
+        let mut a = [0u8; 512];
+        a[0] = 0x7F;
+        a[1] = 0x03;
+        a[24] = 0x80;
+        a[25] = 0x1F;
+        FxArea(a)
+    }
+}
+
+pub fn fxsave(a: &mut FxArea) {
+    unsafe { core::arch::asm!("fxsave64 [{}]", in(reg) a.0.as_mut_ptr(), options(nostack, preserves_flags)) }
+}
+pub fn fxrstor(a: &FxArea) {
+    unsafe { core::arch::asm!("fxrstor64 [{}]", in(reg) a.0.as_ptr(), options(nostack, preserves_flags)) }
+}
+
+/// FS base for the thread about to run (Linux TLS).
+pub fn set_fs_base(v: u64) {
+    unsafe { wrmsr(0xC000_0100, v) }
+}
+
 pub fn timer_eoi() {
     unsafe { outb(0x20, 0x20) }
 }

@@ -90,6 +90,16 @@ long_mode:
     mov fs, ax
     mov gs, ax
     mov rsp, kernel_stack_top
+    ; SSE for ring 3 (Linux programs use it freely): CR0.EM off, CR0.MP on,
+    ; CR4.OSFXSR and OSXMMEXCPT on. The kernel itself is built soft-float;
+    ; per-thread state is saved with fxsave/fxrstor around every switch.
+    mov rax, cr0
+    and ax, ~(1 << 2)
+    or ax, 1 << 1
+    mov cr0, rax
+    mov rax, cr4
+    or eax, (1 << 9) | (1 << 10)
+    mov cr4, rax
     mov edi, edi                    ; zero-extend the 32-bit values
     mov esi, esi
     call kmain
@@ -150,6 +160,25 @@ TRAP_NOERR 31
 TRAP_NOERR 32                       ; the partition timer
 TRAP_NOERR 128                      ; syscall: int 0x80
 
+; syscall entry (Linux personality). The CPU loaded CS/SS from STAR, masked
+; IF via SFMASK, and left rip in rcx and rflags in r11. Build the same
+; TrapFrame as an interrupt would (vector 256), on the kernel stack.
+section .bss
+syscall_user_rsp: resq 1
+section .text
+global syscall_entry
+syscall_entry:
+    mov [syscall_user_rsp], rsp
+    mov rsp, kernel_stack_top
+    push qword 0x23                 ; user ss
+    push qword [syscall_user_rsp]   ; user rsp
+    push r11                        ; rflags
+    push qword 0x1B                 ; user cs
+    push rcx                        ; rip (after the syscall instruction)
+    push qword 0                    ; error code
+    push qword 256                  ; vector: Linux syscall
+    jmp trap_common
+
 extern trap
 trap_common:
     push rax
@@ -180,11 +209,7 @@ trap_common:
 ; heap, mapped in every space) is used as the stack to pop from.
 global enter_user
 enter_user:
-    mov rax, cr3
-    cmp rax, rsi
-    je .same
-    mov cr3, rsi
-.same:
+    mov cr3, rsi                    ; always: also flushes the TLB after unmap/protect
     mov rsp, rdi
     pop r15
     pop r14

@@ -1,7 +1,7 @@
 //! Warden microkernel, Phase 1.
 #![no_std]
 #![no_main]
-#![cfg_attr(feature = "pong", allow(unreachable_code, unused_variables))]
+#![cfg_attr(any(feature = "pong", feature = "game_probe"), allow(unreachable_code, unused_variables))]
 
 extern crate alloc;
 
@@ -53,7 +53,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
     }
     let info = unsafe { &*(mbi as *const MultibootInfo) };
     let (lo, hi) = (info.mem_lower, info.mem_upper);
-    #[cfg(feature = "pong")]
+    #[cfg(any(feature = "pong", feature = "game_probe"))]
     pong::boot(hi);
     kprintln!("memory: {} KiB low, {} MiB high", lo, hi / 1024);
     if info.flags & (1 << 6) != 0 {
@@ -178,7 +178,7 @@ pub extern "C" fn kmain(mbi: u64, magic: u64) -> ! {
 }
 
 pub fn finish(k: &mut Kernel) -> ! {
-    #[cfg(feature = "pong")]
+    #[cfg(any(feature = "pong", feature = "game_probe"))]
     pong::finish(k);
     let expected_logs = tests::EXPECT.len() as u32;
     let logs: u32 = k.threads.iter().map(|t| t.logs).sum();

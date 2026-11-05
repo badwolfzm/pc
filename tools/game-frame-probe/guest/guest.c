@@ -19,6 +19,21 @@ static u64 call(u64 nr, u64 a, u64 b, u64 c) {
     return result;
 }
 static int failed(u64 result) { return (long long)result < 0; }
+/* Mirror the kernel's full 320x240 ARGB framebuffer digest. Only 320x200
+ * was submitted, so the remaining 40 rows retain the kernel's black clear.
+ * Deliberately independent of probe_hash(), which covers only rendered rows.
+ */
+static u64 expected_display_hash(void) {
+    u64 h = 1469598103934665603ULL;
+    for (unsigned int i = 0; i < 320U * 240U; ++i) {
+        unsigned int v = i < 320U * 200U ? framebuffer[i] : 0xff000000U;
+        for (unsigned int j = 0; j < 4U; ++j) {
+            h ^= (u64)((v >> (j * 8U)) & 255U);
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
 int game_probe_main(void) {
     /* Existing device contract: a granted 320x240 display; renderer draws
      * only 320x200 within the start of the larger stride-matched buffer. */
@@ -42,5 +57,6 @@ int game_probe_main(void) {
     }
     call(SYS_REPORT, SLOT_CONSOLE, 40, completed);
     call(SYS_REPORT, SLOT_CONSOLE, 41, digest);
+    call(SYS_REPORT, SLOT_CONSOLE, 42, expected_display_hash());
     return completed == 60U ? 0 : 5;
 }

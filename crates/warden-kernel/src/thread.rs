@@ -482,7 +482,7 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             return Ok(After::Yield);
         }
         SYS_EXIT => return Err(Death::Exited(a)),
-        #[cfg(feature = "pong")]
+        #[cfg(any(feature = "pong", feature = "game_probe"))]
         crate::pong::SYS_DISPLAY_INFO..=crate::pong::SYS_REPORT => crate::pong::syscall(k, f),
         SYS_HOST_EXIT => {
             // The capability must name the machine-control object itself;

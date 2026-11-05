@@ -15,3 +15,5 @@ warden-abi = { path = "../warden-abi" }
 [features]
 # Pong inside Warden: display + keyboard syscalls, the C guest app and three hostile threads (src/pong.rs).
 pong = []
+# Deterministic ring-3 renderer using the existing native display ABI.
+game_probe = []

@@ -22,8 +22,8 @@ security-sensitive Linux callers.
 
 ## Acceptance and outstanding requirements
 
-- [ ] Rust host-compatible unit tests on PR head
-- [ ] Boot Warden under QEMU, all in-guest checks pass on PR head
+- [x] Rust host-compatible unit tests on PR head — GitHub Actions run 42008214231
+- [x] Boot Warden under QEMU, all in-guest checks pass on PR head — GitHub Actions run 42008214231
 - [ ] Independent adversarial review of user-pointer, rate/budget, and ABI behavior
 - [ ] Confirm correctness on target Windows/WSL2 PC
 - [ ] Proper cryptographic entropy service, independent trusted clock source,
@@ -40,3 +40,15 @@ Diff against `feat/linux-network-container-isolation`. Review the Linux
 syscall table in `warden-abi` (classes remain unchanged). Check invalid
 pointer, short-buffer, bad resource, and wrong-pid behavior. Ensure there
 is no fallback to kernel privileges or host Linux APIs.
+
+## Verified handoff record
+
+GitHub Actions: https://github.com/badwolfzm/pc/actions/runs/42008214231
+
+Both namespace regression steps, host-compatible Rust unit tests, and the
+QEMU kernel boot/check step completed successfully on PR #26. The six new
+Linux-client CHECK assertions were included in the QEMU suite. These are
+cloud GitHub-hosted tests, **not** the target Windows/WSL2 host.
+
+Related unclaimed follow-up work is tracked in issues #27 (trusted entropy
+and clock), #28 (process lifecycle), and #29 (loader/libc/filesystem).

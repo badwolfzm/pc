@@ -1,0 +1,29 @@
+name: Warden read-only file service tests
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/user/rofs.*'
+      - 'tests/rofs/**'
+      - '.github/workflows/warden-rofs.yml'
+      - 'docs/rofs-handoff.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rofs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run rofs with strict warnings and sanitizers
+        run: |
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all \
+            crates/warden-kernel/user/rofs.c tests/rofs/test_rofs.c -o /tmp/warden-rofs-test
+          /tmp/warden-rofs-test
+      - name: Build with an alternate compiler
+        run: |
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            crates/warden-kernel/user/rofs.c tests/rofs/test_rofs.c -o /tmp/warden-rofs-clang
+          /tmp/warden-rofs-clang

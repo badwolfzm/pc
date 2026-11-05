@@ -64,6 +64,21 @@ t "lib net box unticked: stays closed" "after refused" "$PY" -c "$NETTEST"
 printf '1 2\ndone\n' | "$W" approve --state "$S" > /dev/null   # now: load + net.connect
 t "lib net box ticked: opens on load"  "before refused
 after connected" "$PY" -c "$NETTEST"
+# The grant belongs to the process that has libz mapped, not to the sandbox:
+# a child process that never loads libz stays closed.
+printf 'fs.read\t/usr\nfs.read\t/lib\nfs.read\t/lib64\nfs.read\t/etc/alternatives\nfs.read\t%s/lib\nexec\t/usr/bin\nexec\t%s/bin\nnet.connect\t127.0.0.1:1\nproc.spawn\n' "$PYPREFIX" "$PYPREFIX" > "$S/manifest.wdn"
+CHILDTEST="
+import socket, subprocess, sys, zlib
+def tryc():
+    s=socket.socket()
+    try: s.connect(('127.0.0.1',$PORT)); return 'connected'
+    except PermissionError: return 'refused'
+print('parent', tryc())
+code = 'import socket\ns=socket.socket()\n' + 'try:\n s.connect((\"127.0.0.1\",$PORT)); print(\"child connected\")\nexcept PermissionError: print(\"child refused\")'
+r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+print(r.stdout.strip() or r.stderr.strip()[-200:])"
+t "lib grant is per process, not per sandbox" "parent connected
+child refused" "$PY" -c "$CHILDTEST"
 kill $LP 2>/dev/null
 echo "--- $fails failure(s); $(grep -c ' deny ' "$S/audit.log") denials logged"
 exit $fails

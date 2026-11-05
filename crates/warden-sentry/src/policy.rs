@@ -5,6 +5,7 @@
 //! same `warden-caps` model the kernel will enforce. Every check below is a
 //! capability invocation with the rights the operation needs.
 
+use std::collections::BTreeSet;
 use std::os::fd::{AsRawFd, OwnedFd};
 use warden_caps::{CSpace, CapTable, ObjectKind, Rights};
 use warden_libgrant::Grant;
@@ -13,6 +14,10 @@ pub struct DirGrant {
     pub root: String,
     pub fd: OwnedFd,
     slot: usize,
+    /// `None` for a manifest grant; `Some(sha256)` for a grant a ticked box
+    /// on an approved library brought. The latter counts only for a caller
+    /// that has that library mapped right now.
+    pub origin: Option<String>,
 }
 
 pub struct NetGrant {
@@ -20,6 +25,18 @@ pub struct NetGrant {
     pub port: String,
     pub listen: bool,
     slot: usize,
+    pub origin: Option<String>,
+}
+
+/// The libraries (by SHA-256) mapped in the calling process at the time of
+/// the check. Library-brought grants apply only through this set.
+pub type Active = BTreeSet<String>;
+
+fn live(origin: &Option<String>, active: &Active) -> bool {
+    match origin {
+        None => true,
+        Some(sha) => active.contains(sha),
+    }
 }
 
 pub struct Policy {
@@ -29,7 +46,9 @@ pub struct Policy {
     pub dirs: Vec<DirGrant>,
     pub nets: Vec<NetGrant>,
     spawn_slot: Option<usize>,
-    pub held: Vec<Grant>,
+    spawn_origins: Vec<Option<String>>,
+    held: Vec<(Grant, Option<String>)>,
+    lib_grants: usize,
 }
 
 /// What an operation on a path needs.
@@ -49,7 +68,9 @@ impl Policy {
             dirs: Vec::new(),
             nets: Vec::new(),
             spawn_slot: None,
+            spawn_origins: Vec::new(),
             held: Vec::new(),
+            lib_grants: 0,
         }
     }
 
@@ -62,10 +83,20 @@ impl Policy {
         Ok(slot)
     }
 
-    /// Add one grant. Returns false if the same grant was already held.
+    /// Add one manifest grant. Returns false if the same grant was already held.
     pub fn add(&mut self, g: &Grant) -> Result<bool, String> {
-        if self.held.contains(g) {
+        self.add_from(g, None)
+    }
+
+    /// Add a grant; `origin` is the library that brought it (see `DirGrant`).
+    /// A manifest grant is held once; a library grant is held once per
+    /// library, since each applies under a different condition.
+    pub fn add_from(&mut self, g: &Grant, origin: Option<String>) -> Result<bool, String> {
+        if self.held.contains(&(g.clone(), origin.clone())) {
             return Ok(false);
+        }
+        if origin.is_some() {
+            self.lib_grants += 1;
         }
         match g.perm.as_str() {
             "load" => {}
@@ -80,7 +111,7 @@ impl Policy {
                 let fd = crate::sys::open_path(&root, libc::O_PATH | libc::O_DIRECTORY)
                     .map_err(|e| format!("grant {}: cannot open {root}: {e}", g.render()))?;
                 let slot = self.mint_root(ObjectKind::Dir, rights)?;
-                self.dirs.push(DirGrant { root, fd, slot });
+                self.dirs.push(DirGrant { root, fd, slot, origin: origin.clone() });
             }
             "net.connect" | "net.listen" => {
                 let (host, port) = g
@@ -93,25 +124,27 @@ impl Policy {
                     port: port.to_string(),
                     listen: g.perm == "net.listen",
                     slot,
+                    origin: origin.clone(),
                 });
             }
             "proc.spawn" => {
                 if self.spawn_slot.is_none() {
                     self.spawn_slot = Some(self.mint_root(ObjectKind::Thread, Rights::WRITE)?);
                 }
+                self.spawn_origins.push(origin.clone());
             }
             // Native-app permissions (ABI v0.2). No Linux syscall maps to them in
             // Phase 0; they are recorded so manifests and approvals can carry them.
             "render" | "superop" | "clock" | "random" => {}
             other => return Err(format!("unknown permission {other}")),
         }
-        self.held.push(g.clone());
+        self.held.push((g.clone(), origin));
         Ok(true)
     }
 
     /// The most specific directory grant whose root contains `path` and whose
     /// capability carries the needed right.
-    pub fn dir_for(&self, path: &str, need: Need) -> Option<&DirGrant> {
+    pub fn dir_for(&self, path: &str, need: Need, active: &Active) -> Option<&DirGrant> {
         let r = match need {
             Need::Read => Rights::READ,
             Need::Write => Rights::WRITE,
@@ -119,7 +152,7 @@ impl Policy {
         };
         self.dirs
             .iter()
-            .filter(|d| under(&d.root, path))
+            .filter(|d| under(&d.root, path) && live(&d.origin, active))
             .filter(|d| self.table.invoke(&self.cs, d.slot, r).is_ok())
             .max_by_key(|d| d.root.len())
     }
@@ -128,21 +161,37 @@ impl Policy {
         d.fd.as_raw_fd()
     }
 
-    pub fn net_allowed(&self, host: &str, port: u16, listen: bool) -> bool {
+    pub fn net_allowed(&self, host: &str, port: u16, listen: bool, active: &Active) -> bool {
         self.nets.iter().any(|n| {
-            n.listen == listen
+            n.listen == listen && live(&n.origin, active)
                 && self.table.invoke(&self.cs, n.slot, Rights::WRITE).is_ok()
                 && (n.host == "*" || n.host == host)
                 && (n.port == "*" || n.port == port.to_string())
         })
     }
 
-    pub fn any_net(&self) -> bool {
-        !self.nets.is_empty()
+    pub fn any_net(&self, active: &Active) -> bool {
+        self.nets.iter().any(|n| live(&n.origin, active))
     }
 
-    pub fn may_spawn(&self) -> bool {
+    pub fn may_listen(&self, active: &Active) -> bool {
+        self.nets.iter().any(|n| n.listen && live(&n.origin, active))
+    }
+
+    pub fn may_spawn(&self, active: &Active) -> bool {
         self.spawn_slot.map(|s| self.table.invoke(&self.cs, s, Rights::WRITE).is_ok()).unwrap_or(false)
+            && self.spawn_origins.iter().any(|o| live(o, active))
+    }
+
+    /// Does any grant depend on which libraries the caller has mapped?
+    pub fn has_lib_grants(&self) -> bool {
+        self.lib_grants > 0
+    }
+
+    /// Every directory grant root that carries READ or EXEC, whatever its
+    /// origin: the places a mapped file may legitimately come from.
+    pub fn readable_roots(&self) -> impl Iterator<Item = &str> {
+        self.dirs.iter().map(|d| d.root.as_str())
     }
 }
 
@@ -189,13 +238,37 @@ mod tests {
         p.add(&Grant::parse("fs.read=/usr").unwrap()).unwrap();
         p.add(&Grant::parse("fs.write=/tmp").unwrap()).unwrap();
         p.add(&Grant::parse("net.connect=127.0.0.1:8080").unwrap()).unwrap();
-        assert!(p.dir_for("/usr/lib/x", Need::Read).is_some());
-        assert!(p.dir_for("/usr/lib/x", Need::Write).is_none());
-        assert!(p.dir_for("/tmp/a", Need::Write).is_some());
-        assert!(p.dir_for("/etc/passwd", Need::Read).is_none());
-        assert!(p.net_allowed("127.0.0.1", 8080, false));
-        assert!(!p.net_allowed("127.0.0.1", 8081, false));
-        assert!(!p.net_allowed("127.0.0.1", 8080, true));
-        assert!(!p.may_spawn());
+        let none = Active::new();
+        assert!(p.dir_for("/usr/lib/x", Need::Read, &none).is_some());
+        assert!(p.dir_for("/usr/lib/x", Need::Write, &none).is_none());
+        assert!(p.dir_for("/tmp/a", Need::Write, &none).is_some());
+        assert!(p.dir_for("/etc/passwd", Need::Read, &none).is_none());
+        assert!(p.net_allowed("127.0.0.1", 8080, false, &none));
+        assert!(!p.net_allowed("127.0.0.1", 8081, false, &none));
+        assert!(!p.net_allowed("127.0.0.1", 8080, true, &none));
+        assert!(!p.may_spawn(&none));
+    }
+
+    #[test]
+    fn library_grants_apply_only_while_mapped() {
+        let mut p = Policy::new();
+        p.add(&Grant::parse("fs.read=/usr").unwrap()).unwrap();
+        let sha = "ab".repeat(32);
+        assert!(p.add_from(&Grant::parse("net.connect=*:443").unwrap(), Some(sha.clone())).unwrap());
+        assert!(!p.add_from(&Grant::parse("net.connect=*:443").unwrap(), Some(sha.clone())).unwrap());
+        assert!(p.add_from(&Grant::parse("fs.write=/tmp").unwrap(), Some(sha.clone())).unwrap());
+        assert!(p.has_lib_grants());
+        let none = Active::new();
+        let with: Active = [sha.clone()].into_iter().collect();
+        let other: Active = ["cd".repeat(32)].into_iter().collect();
+        assert!(!p.net_allowed("1.2.3.4", 443, false, &none));
+        assert!(!p.net_allowed("1.2.3.4", 443, false, &other));
+        assert!(p.net_allowed("1.2.3.4", 443, false, &with));
+        assert!(!p.any_net(&none));
+        assert!(p.any_net(&with));
+        assert!(p.dir_for("/tmp/x", Need::Write, &none).is_none());
+        assert!(p.dir_for("/tmp/x", Need::Write, &with).is_some());
+        // Manifest grants never depend on the mapped set.
+        assert!(p.dir_for("/usr/x", Need::Read, &none).is_some());
     }
 }

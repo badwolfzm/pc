@@ -26,7 +26,8 @@ A working "GPU" that lives in CPU RAM. It is the render service from
 | `gpusim.h`, `gpusim.c` | Device: open/close, asset grants and polling, submit, scanout, client batch encoder |
 | `gpusim_game.c` | 720p game workload and frame-time benchmark, all three tiers |
 | `tier_env.c` | Picks the super-op tier from `$MXS_TIER` for the contract suite |
-| `bench_cloud.txt` | Last benchmark output (cloud container) |
+| `bench_pc.txt` | Benchmark output on the user's PC (i3-14100) |
+| `bench_cloud.txt` | Benchmark output on the cloud container, for comparison |
 | `caps_frame.png` | Last frame of the `caps` scene, from the front buffer |
 
 Change outside this folder: `contracts/gpu-commands-ref/rcs.c` gained an optional
@@ -50,10 +51,32 @@ make B=/tmp/gpusim bench   # 300 frames per scene per tier, -O2, prints the tabl
 - The game workload runs 5 frames per scene per tier under ASan + UBSan with no
   findings and no rejected batch.
 
-## Benchmark: 720p, one core, 30 fps target (33.3 ms)
+## Benchmark on the user's PC (headline numbers)
 
-Machine: cloud container, Intel Xeon @ 2.10 GHz, 4 vCPU, gcc 13.3 `-O2`. **Not the
-user's PC**; the PC run is the next step. Each frame is client encode + service
+Intel Core i3-14100 inside the desktop Linux VM (2 vCPU), gcc 11.4 `-O2`, one
+core, 300 frames per row, 2026-11-05. The contract suite also passed there on all
+three tiers (57 685 / 0). Scenes are described in the next section.
+
+| tier | scene | mean ms | p99 ms | max ms | fps | misses / 300 |
+|---|---|---|---|---|---|---|
+| scalar | 2d | 4.03 | 6.31 | 11.61 | 248 | 0 |
+| scalar | 2d+3d | 4.54 | 7.17 | 7.90 | 220 | 0 |
+| scalar | caps | 9.63 | 13.26 | 20.86 | 104 | 0 |
+| v128 (SSE2) | 2d | 2.48 | 3.67 | 4.03 | 403 | 0 |
+| v128 (SSE2) | 2d+3d | 3.93 | 15.69 | 26.70 | 255 | 0 |
+| v128 (SSE2) | caps | 9.08 | 22.29 | 23.60 | 110 | 0 |
+| v256 (AVX2) | 2d | 1.67 | 3.96 | 8.50 | 600 | 0 |
+| v256 (AVX2) | 2d+3d | 2.69 | 4.38 | 5.00 | 371 | 0 |
+| v256 (AVX2) | caps | 7.07 | 9.64 | 11.76 | 141 | 0 |
+
+No frame missed 33.3 ms on the PC. The v128 rows have p99 spikes (15–27 ms) that
+the other tiers in the same run do not show; that looks like VM scheduling noise
+and was not investigated. At every cap with AVX2 the render side uses about 7 ms
+of the 33.3 ms frame, leaving ~26 ms for game logic and encode.
+
+## Benchmark on the cloud container (comparison): 720p, one core, 30 fps target (33.3 ms)
+
+Machine: cloud container, Intel Xeon @ 2.10 GHz, 4 vCPU, gcc 13.3 `-O2`. Each frame is client encode + service
 submit (copy-out, validate, execute) + scanout. Unthrottled, so `fps` is what one
 core could produce; `miss` counts frames over 33.3 ms out of 300.
 
@@ -108,7 +131,8 @@ on the slower tiers.
 4. **BIND is synchronous on resident data.** If an asset is not resident yet,
    BIND writes zeros and DRAW_TRIANGLES draws nothing (reference behaviour,
    contract open point 6); the demo waits for residency before drawing.
-5. **Measured on the cloud container only**, not the user's i3-14100.
+5. **Warm cache only.** Asset load times are with the page cache warm; a cold
+   disk read was not measured on either machine.
 6. **Images must be linear** (`assetpack image`, not `--tiles`) with stride equal
    to width; the RCS asset table has no stride field. Meshes are blobs of whole
    28-byte triangles; anything else is refused at grant time.

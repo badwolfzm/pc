@@ -36,6 +36,6 @@ jobs:
           cc -std=c11 -O0 -fno-builtin -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-unused-function tests/compat/net_namespace_integration.c -o /tmp/warden-netns-integration
           /tmp/warden-netns-integration
       - name: Rust unit tests
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude warden-kernel
       - name: Boot Warden and run its in-guest checks
         run: tests/kernel/run.sh

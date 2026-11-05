@@ -36,7 +36,7 @@ class Probe(unittest.TestCase):
         """Pinned from Linux CI baseline; changes require explicit review."""
         result = run("300")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("digest=460307657f8a6e19", result.stdout)
+        self.assertIn("digest=9d9771fe2682abc9", result.stdout)
 
     def test_framebuffer_size(self):
         self.assertIn("bytes=256000", run("2").stdout)

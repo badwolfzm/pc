@@ -14,6 +14,14 @@ def positive_int(value):
 def nonnegative_int(value):
     return type(value) is int and 0 <= value <= 2**63 - 1
 
+def finite_positive_milliseconds(value):
+    if type(value) not in (int, float) or value <= 0:
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
 def validate(doc):
     errors = []
     def check(condition, message):
@@ -61,7 +69,7 @@ def validate(doc):
         if not isinstance(times, list) or not positive_int(frames) or len(times) != frames or frames > 100000:
             errors.append(prefix + "frametimes must match timed_frames (max 100000)")
         else:
-            check(all(type(t) in (float, int) and math.isfinite(t) and t > 0 for t in times),
+            check(all(finite_positive_milliseconds(t) for t in times),
                   prefix + "frametimes must be finite positive milliseconds")
         h = run.get("frame_digest")
         check(isinstance(h, str) and len(h) == 16 and all(c in "0123456789abcdef" for c in h),

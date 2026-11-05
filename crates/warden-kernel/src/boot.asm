@@ -1,6 +1,6 @@
 ; Multiboot1 entry for QEMU -kernel: 32-bit protected mode -> long mode -> kmain.
-; Identity-maps the first 1 GiB with 2 MiB pages. Page 0 (kernel) is
-; supervisor-only; page 4 (0x800000, the user partition) is user-accessible.
+; Identity-maps the first 1 GiB with 2 MiB supervisor pages. User memory is
+; mapped per thread by mm.rs; this boot map is the kernel's own view.
 
 MB_MAGIC    equ 0x1BADB002
 MB_FLAGS    equ 0x3                 ; page-align modules, provide memory map
@@ -13,6 +13,7 @@ align 4
 section .bss
 align 4096
 global boot_pml4
+global boot_pd0
 boot_pml4:    resb 4096
 boot_pdpt:    resb 4096
 boot_pd0:     resb 4096
@@ -57,11 +58,7 @@ _start:
 .fill_pd:
     mov eax, ecx
     shl eax, 21
-    or eax, 0x83                    ; present | writable | 2 MiB
-    cmp ecx, 4
-    jne .not_user
-    or eax, 0x4                     ; user-accessible: the user partition
-.not_user:
+    or eax, 0x83                    ; present | writable | 2 MiB, supervisor
     mov [boot_pd0 + ecx*8], eax
     mov dword [boot_pd0 + ecx*8 + 4], 0
     inc ecx
@@ -178,10 +175,16 @@ trap_common:
     hlt
     jmp .hang
 
-; enter_user(frame: *const TrapFrame) -> !  Restores a saved frame and iretq's
-; into ring 3. The frame memory is used as the stack to pop from.
+; enter_user(frame: *const TrapFrame, cr3: u64) -> !  Switches address space,
+; restores a saved frame and iretq's into ring 3. The frame memory (kernel
+; heap, mapped in every space) is used as the stack to pop from.
 global enter_user
 enter_user:
+    mov rax, cr3
+    cmp rax, rsi
+    je .same
+    mov cr3, rsi
+.same:
     mov rsp, rdi
     pop r15
     pop r14

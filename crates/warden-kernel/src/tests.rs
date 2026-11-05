@@ -4,6 +4,8 @@
 //!
 //! Test ids reported through SYS_LOG and what the kernel expects back.
 
+#![allow(clippy::empty_loop)]
+
 use crate::thread::{Death, Kernel};
 use core::arch::asm;
 
@@ -25,6 +27,28 @@ const SLOT_FREE: u64 = 2;
 const SLOT_UNTYPED: u64 = 3; // Untyped, 1 MiB
 const SLOT_HOST: u64 = 4; // not held by any test thread
 const SLOT_LOCK: u64 = 5; // slot with no cap and never will be
+const SLOT_EP: u64 = 6; // Endpoint: server READ|WRITE|GRANT, client WRITE badge 42, eavesdropper WRITE badge 7
+const SLOT_EMPTY: u64 = 7;
+pub const DATA_PAGE: u64 = 0x90_0000; // one private, zeroed, writable page per thread
+pub const STACK_TOP: u64 = USER_END; // same VA in every thread: spaces are private
+
+macro_rules! send {
+    ($slot:expr, $w0:expr, $w1:expr, $w2:expr, $w3:expr) => {{
+        let r: u64;
+        asm!("int 0x80", inlateout("rax") 8u64 => r, in("rdi") $slot as u64, in("rsi") $w0 as u64, in("rdx") $w1 as u64,
+             in("r10") $w2 as u64, in("r8") $w3 as u64, options(nostack));
+        r
+    }};
+}
+/// -> (status, badge, w0, w1, w2, w3)
+macro_rules! recv {
+    ($slot:expr) => {{
+        let (r, badge, w0, w1, w2, w3): (u64, u64, u64, u64, u64, u64);
+        asm!("int 0x80", inlateout("rax") 9u64 => r, inlateout("rdi") $slot as u64 => badge, lateout("rsi") w0,
+             lateout("rdx") w1, lateout("r10") w2, lateout("r8") w3, options(nostack));
+        (r, badge, w0, w1, w2, w3)
+    }};
+}
 
 const E_INVALID: u64 = -(1i64) as u64;
 const E_RIGHTS: u64 = -(3i64) as u64;
@@ -46,6 +70,15 @@ pub const EXPECT: &[(u64, &str, u64)] = &[
     (11, "retype 1 MiB from 1 MiB budget (legit)", 0),
     (12, "retype 1 more byte", E_BUDGET),
     (13, "mint into empty slot 5 then invoke", 1),
+    (20, "IPC: server sees client's badge", 42),
+    (21, "IPC: server gets word 0", 0x1234),
+    (22, "IPC: server gets word 3", 0x4444),
+    (23, "IPC: client send completes", 0),
+    (24, "IPC: recv with WRITE-only cap", E_RIGHTS),
+    (25, "IPC: send on empty slot", E_INVALID),
+    (26, "isolation: writer reads back its own page", 0x5EC),
+    (27, "isolation: reader sees nothing of the writer", 0),
+    (28, "isolation: reader's own page is still writable", 0x7),
 ];
 
 pub fn judge(k: &mut Kernel, id: u64, observed: u64) {
@@ -193,6 +226,75 @@ pub extern "C" fn good_citizen() -> ! {
     loop {}
 }
 
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn ipc_server() -> ! {
+    unsafe {
+        let (r, badge, w0, _w1, _w2, w3) = recv!(SLOT_EP);
+        sys!(0, SLOT_CONSOLE, 20, if r == 0 { badge } else { r });
+        sys!(0, SLOT_CONSOLE, 21, w0);
+        sys!(0, SLOT_CONSOLE, 22, w3);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn ipc_client() -> ! {
+    unsafe {
+        let r = send!(SLOT_EP, 0x1234u64, 0x2222u64, 0x3333u64, 0x4444u64);
+        sys!(0, SLOT_CONSOLE, 23, r);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn ipc_eavesdropper() -> ! {
+    unsafe {
+        let (r, _, _, _, _, _) = recv!(SLOT_EP);
+        sys!(0, SLOT_CONSOLE, 24, r);
+        let r = send!(SLOT_EMPTY, 1u64, 2u64, 3u64, 4u64);
+        sys!(0, SLOT_CONSOLE, 25, r);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn iso_writer() -> ! {
+    unsafe {
+        asm!("mov qword ptr [{0}], 0x5EC", in(reg) DATA_PAGE, options(nostack));
+        // Let the reader run before and after the write.
+        sys!(5, 0, 0, 0);
+        let v: u64;
+        asm!("mov {0}, qword ptr [{1}]", out(reg) v, in(reg) DATA_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 26, v);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+#[link_section = ".user"]
+#[inline(never)]
+pub extern "C" fn iso_reader() -> ! {
+    unsafe {
+        let mut i = 0u64;
+        while i < 4 {
+            sys!(5, 0, 0, 0);
+            i += 1;
+        }
+        let v: u64;
+        asm!("mov {0}, qword ptr [{1}]", out(reg) v, in(reg) DATA_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 27, v);
+        asm!("mov qword ptr [{0}], 7", in(reg) DATA_PAGE, options(nostack));
+        let v: u64;
+        asm!("mov {0}, qword ptr [{1}]", out(reg) v, in(reg) DATA_PAGE, options(nostack));
+        sys!(0, SLOT_CONSOLE, 28, v);
+        sys!(6, 0, 0, 0);
+    }
+    loop {}
+}
+
 pub struct Case {
     pub name: &'static str,
     pub entry: extern "C" fn() -> !,
@@ -214,4 +316,9 @@ pub const CASES: &[Case] = &[
     Case { name: "syscall instruction", entry: hostile_syscall_insn, expect: Death::Fault(6), budget: 50 },
     Case { name: "stack outside partition", entry: hostile_stack_outside, expect: Death::Fault(14), budget: 50 },
     Case { name: "good citizen", entry: good_citizen, expect: Death::Exited(7), budget: 50 },
+    Case { name: "ipc server", entry: ipc_server, expect: Death::Exited(0), budget: 50 },
+    Case { name: "ipc client", entry: ipc_client, expect: Death::Exited(0), budget: 50 },
+    Case { name: "ipc eavesdropper", entry: ipc_eavesdropper, expect: Death::Exited(0), budget: 50 },
+    Case { name: "isolation writer", entry: iso_writer, expect: Death::Exited(0), budget: 50 },
+    Case { name: "isolation reader", entry: iso_reader, expect: Death::Exited(0), budget: 50 },
 ];

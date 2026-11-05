@@ -9,7 +9,8 @@
 //! non-PIE), at most [`MAX_SEGMENTS`] `PT_LOAD` segments that lie inside the
 //! caller's window, do not share pages with each other, are never both
 //! writable and executable, and whose file bytes lie inside the image. The
-//! entry point must fall in an executable segment.
+//! entry point must fall in an executable segment. PT_INTERP/PT_DYNAMIC are
+//! rejected until an explicitly capability-scoped dynamic linker exists.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -21,6 +22,8 @@ pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
 
 const PT_LOAD: u32 = 1;
+const PT_DYNAMIC: u32 = 2;
+const PT_INTERP: u32 = 3;
 const ET_EXEC: u16 = 2;
 const EM_X86_64: u16 = 0x3E;
 const EHDR_SIZE: usize = 64;
@@ -35,6 +38,9 @@ pub enum ElfError {
     BadClass,
     /// Not ET_EXEC (dynamic and PIE images are not supported yet).
     NotExecutable,
+    /// A runtime interpreter or dynamic relocations are present, but no
+    /// Warden dynamic-loader service is implemented. Reject before mapping.
+    UnsupportedDynamicLinking,
     /// Not x86-64.
     WrongMachine,
     /// e_phentsize is not 56, or there are more PT_LOAD segments than MAX_SEGMENTS.
@@ -140,7 +146,11 @@ pub fn parse(bytes: &[u8], lo: u64, hi: u64) -> Result<Image, ElfError> {
     let mut img = Image { entry, segments: [Segment::default(); MAX_SEGMENTS], count: 0 };
     for i in 0..phnum {
         let p = phoff + i * PHDR_SIZE;
-        if u32_at(bytes, p)? != PT_LOAD {
+        let kind = u32_at(bytes, p)?;
+        if kind == PT_INTERP || kind == PT_DYNAMIC {
+            return Err(ElfError::UnsupportedDynamicLinking);
+        }
+        if kind != PT_LOAD {
             continue;
         }
         let flags = u32_at(bytes, p + 4)?;
@@ -319,6 +329,30 @@ mod tests {
         let segs: Vec<_> = (0..MAX_SEGMENTS as u64 + 1).map(|i| (LO + i * PAGE, 0x10, 0x10, if i == 0 { PF_R | PF_X } else { PF_R })).collect();
         let b = build(LO, &segs);
         assert_eq!(parse(&b, LO, HI), Err(ElfError::BadProgramHeaders));
+    }
+
+
+    #[test]
+    fn rejects_dynamic_headers_before_allocating() {
+        // A valid static image with a forged PT_INTERP/PT_DYNAMIC header
+        // must never be misclassified as runnable without a linker.
+        for ty in [PT_INTERP, PT_DYNAMIC] {
+            let mut b = good();
+            let p = 64 + 56; // second program header, normally PT_LOAD
+            b[p..p + 4].copy_from_slice(&ty.to_le_bytes());
+            assert_eq!(parse(&b, LO, HI), Err(ElfError::UnsupportedDynamicLinking));
+        }
+    }
+
+    #[test]
+    fn rejects_dynamic_header_even_with_no_loadable_bytes() {
+        // Treat even an empty auxiliary program header as a request for
+        // unsupported interpreter/relocation semantics.
+        let mut b = good();
+        let p = 64 + 56;
+        b[p..p + 4].copy_from_slice(&PT_INTERP.to_le_bytes());
+        b[p + 40..p + 48].copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(parse(&b, LO, HI), Err(ElfError::UnsupportedDynamicLinking));
     }
 
     #[test]

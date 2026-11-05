@@ -132,7 +132,6 @@ pub struct Proc {
     mmap_next: u64,
     pub pending: Pending,
     sleep_until: Option<u64>,
-    rng: u64,
     /// The server has been told this process is gone.
     pub exited: bool,
     /// Refusals logged so far; a flood of bad syscalls is reported once.
@@ -143,7 +142,7 @@ impl Proc {
     pub const fn new() -> Self {
         Proc {
             badge: 0, buf: 0, brk_start: 0, brk: 0, mmap_next: MMAP_TOP, pending: Pending::None, sleep_until: None,
-            rng: 0x9E37_79B9_7F4A_7C15, exited: false, noise: 0,
+            exited: false, noise: 0,
         }
     }
 }
@@ -325,7 +324,13 @@ fn pass(k: &mut Kernel, cur: usize, nr: u32, name: &str, a: &[u64; 6]) -> Result
         "set_tid_address" | "gettid" | "getpid" => ret(Ok(1000 + cur as u64)),
         "getppid" | "getpgrp" | "getpgid" | "getsid" => ret(Ok(1)),
         "getuid" | "geteuid" | "getgid" | "getegid" => ret(Ok(1000)),
-        "set_robust_list" | "sigaltstack" | "rt_sigaction" | "rt_sigprocmask" | "prctl" | "membarrier" | "sched_getaffinity" => ret(Ok(0)),
+        // Affinity and resource queries must fill the caller's output;
+        // silently returning success leaves libc inspecting uninitialized data.
+        "sched_getaffinity" => ret(sched_getaffinity(k, cur, a[1], a[2])),
+        "getrlimit" => ret(getrlimit(k, cur, a[0], a[1])),
+        "prlimit64" => ret(prlimit64(k, cur, a[0], a[1], a[2], a[3])),
+        "clock_getres" => ret(clock_getres(k, cur, a[0], a[1])),
+        "set_robust_list" | "sigaltstack" | "rt_sigaction" | "rt_sigprocmask" | "prctl" | "membarrier" => ret(Ok(0)),
         "umask" => ret(Ok(0o22)),
         "uname" => ret(uname(k, cur, a[0])),
         "exit" | "exit_group" => Err(Death::Exited(a[0] & 0xFF)),
@@ -335,7 +340,9 @@ fn pass(k: &mut Kernel, cur: usize, nr: u32, name: &str, a: &[u64; 6]) -> Result
             Ok(After::Yield)
         }
         "getrandom" => ret(getrandom(k, cur, a[0], a[1])),
-        "clock_gettime" | "gettimeofday" => ret(clock_gettime(k, cur, a[1], name == "gettimeofday")),
+        "clock_gettime" => ret(clock_gettime(k, cur, a[1], false)),
+        // x86-64 gettimeofday(tv, tz): tv is argument 0, not argument 1.
+        "gettimeofday" => ret(gettimeofday(k, cur, a[0], a[1])),
         "nanosleep" | "clock_nanosleep" => nanosleep(k, cur, if name == "nanosleep" { a[0] } else { a[2] }),
         "ioctl" => ret(Err(ENOTTY)),
         "getcwd" => ret(getcwd(k, cur, a[0], a[1])),
@@ -745,24 +752,62 @@ fn uname(k: &mut Kernel, cur: usize, buf: u64) -> Result<u64, i64> {
     if k.threads[cur].aspace.copy_to_user(buf, &b) { Ok(0) } else { Err(EFAULT) }
 }
 
-fn getrandom(k: &mut Kernel, cur: usize, buf: u64, n: u64) -> Result<u64, i64> {
-    // xorshift64*, seeded per thread. Not a cryptographic source; the real
-    // entropy service and the `random` permission come with the policy
-    // service in Phase 3.
-    let n = n.min(256) as usize;
-    let mut out = [0u8; 256];
-    let p = &mut k.threads[cur].linux;
-    p.rng ^= k.ticks.wrapping_mul(0x2545_F491_4F6C_DD1D) | 1;
-    for chunk in out[..n].chunks_mut(8) {
-        let mut x = p.rng;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        p.rng = x;
-        let v = x.wrapping_mul(0x2545_F491_4F6C_DD1D).to_le_bytes();
-        chunk.copy_from_slice(&v[..chunk.len()]);
+// Until Warden has an authenticated entropy service, do not return a
+// predictable xorshift stream as Linux getrandom. Linux applications use
+// this syscall for key material and address randomization. Fail closed.
+fn getrandom(_k: &mut Kernel, _cur: usize, _buf: u64, n: u64) -> Result<u64, i64> {
+    if n == 0 { Ok(0) } else { Err(ENOSYS) }
+}
+
+/// The only implemented limit queries reflect actual kernel/server bounds.
+/// Do not pretend to implement unbounded resources not enforced by Warden.
+fn resource_limit(resource: u64) -> Result<u64, i64> {
+    match resource {
+        3 => Ok(STACK_PAGES * PAGE), // RLIMIT_STACK: 64 KiB mapped stack
+        7 => Ok(16), // RLIMIT_NOFILE: personality server NFD
+        _ => Err(ENOSYS),
     }
-    if k.threads[cur].aspace.copy_to_user(buf, &out[..n]) { Ok(n as u64) } else { Err(EFAULT) }
+}
+
+fn getrlimit(k: &mut Kernel, cur: usize, resource: u64, out: u64) -> Result<u64, i64> {
+    let n = resource_limit(resource)?;
+    let mut b = [0u8; 16];
+    b[..8].copy_from_slice(&n.to_le_bytes());
+    b[8..].copy_from_slice(&n.to_le_bytes());
+    if k.threads[cur].aspace.copy_to_user(out, &b) { Ok(0) } else { Err(EFAULT) }
+}
+
+fn prlimit64(k: &mut Kernel, cur: usize, pid: u64, resource: u64, new: u64, old: u64) -> Result<u64, i64> {
+    let own = 1000 + cur as u64;
+    if pid != 0 && pid != own { return Err(EPERM); }
+    if new != 0 { return Err(EPERM); } // no mutable rlimits yet
+    resource_limit(resource)?;
+    if old == 0 { return Ok(0); }
+    getrlimit(k, cur, resource, old)
+}
+
+fn sched_getaffinity(k: &mut Kernel, cur: usize, size: u64, mask: u64) -> Result<u64, i64> {
+    if size < 8 { return Err(EINVAL); }
+    // Single CPU, CPU 0. The Linux syscall returns the bytes written.
+    if k.threads[cur].aspace.copy_to_user(mask, &1u64.to_le_bytes()) { Ok(8) } else { Err(EFAULT) }
+}
+
+fn clock_getres(k: &mut Kernel, cur: usize, id: u64, out: u64) -> Result<u64, i64> {
+    // Partition timer granularity: 100Hz. Only supported virtual clocks.
+    if id != 0 && id != 1 && id != 4 && id != 7 { return Err(EINVAL); }
+    if out == 0 { return Ok(0); }
+    let mut b = [0u8; 16];
+    b[8..].copy_from_slice(&10_000_000u64.to_le_bytes());
+    if k.threads[cur].aspace.copy_to_user(out, &b) { Ok(0) } else { Err(EFAULT) }
+}
+
+fn gettimeofday(k: &mut Kernel, cur: usize, tv: u64, tz: u64) -> Result<u64, i64> {
+    if tv != 0 { clock_gettime(k, cur, tv, true)?; }
+    // Linux's legacy timezone data: UTC, zero minutes west and DST.
+    if tz != 0 && !k.threads[cur].aspace.copy_to_user(tz, &[0u8; 8]) {
+        return Err(EFAULT);
+    }
+    Ok(0)
 }
 
 fn clock_gettime(k: &mut Kernel, cur: usize, ts: u64, micro: bool) -> Result<u64, i64> {

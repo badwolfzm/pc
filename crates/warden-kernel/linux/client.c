@@ -60,5 +60,21 @@ void prog(void) {
     volatile u64 *mm2 = (u64 *)m2;
     /* a fresh anonymous mapping is zero even though the old one held data */
     check(149, u == 0 && m2 == m && mm2[0] == 0 && mm2[1023] == 0);
+    /* ABI fidelity: output arguments must be filled, not just return 0. */
+    struct { i64 sec, usec; } tv = {-1, -1};
+    check(164, sys2(SYS_gettimeofday, &tv, 0) == 0 && tv.sec >= 0 &&
+          tv.usec >= 0 && tv.usec < 1000000);
+    struct { u64 soft, hard; } lim = {0, 0};
+    check(165, sys2(SYS_getrlimit, 7, &lim) == 0 && lim.soft == 16 && lim.hard == 16);
+    struct { u64 soft, hard; } oldlim = {0, 0};
+    check(166, sys4(SYS_prlimit64, 0, 3, 0, &oldlim) == 0 &&
+          oldlim.soft == 65536 && oldlim.hard == 65536);
+    u64 cpumask = 0;
+    check(167, sys3(SYS_sched_getaffinity, 0, sizeof(cpumask), &cpumask) == 8 && cpumask == 1);
+    struct timespec resolution = {-1, -1};
+    check(168, sys2(SYS_clock_getres, 1, &resolution) == 0 &&
+          resolution.sec == 0 && resolution.nsec == 10000000);
+    char entropy[32];
+    check(169, sys3(SYS_getrandom, entropy, sizeof(entropy), 0) == -38);
     exit_group(0);
 }

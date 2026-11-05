@@ -309,8 +309,8 @@ join the process's authority only once that library is actually loaded.
 ## Verified (run these)
 
 ```sh
-cargo test                      # 41 unit tests across the crates
-tests/kernel/run.sh             # 191 in-guest checks against the kernel
+cargo test                      # 43 unit tests across the crates
+tests/kernel/run.sh             # 196 in-guest checks against the kernel
 tests/escape/run.sh             # 67 attack checks: hostile program (58) plus the harness's
                                 #   inspection of a directory outside every grant (9)
 tests/compat/run.sh             # 14 checks with ls, sh, grep, sort, tar, sha256sum, python3

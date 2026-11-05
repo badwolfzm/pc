@@ -35,3 +35,20 @@ These checks were executed locally on a Linux tool container with C compiler and
 7. No host-PC or WSL2 verification. Independent security review required.
 
 For the complete contract and gates, see [../contracts/entropy-time-services.md](../contracts/entropy-time-services.md).
+
+
+## Linux host provider slice (not connected to Warden)
+
+`linux_entropy_provider.{h,c}` delegates to the **host Linux kernel's getrandom(2) CSPRNG** using `GRND_NONBLOCK`. It refuses when unavailable instead of generating predictable output. Provider output is staged and copied only after a complete successful read; transient bytes are wiped best-effort. A maximum of 16 getrandom attempts prevents an unbounded EINTR/partial-read loop. `warden_linux_entropy_attach` probes a 32-byte read before enabling the broker and fails closed on unsuccessful probe. The trust assumption is a non-compromised, correctly seeded Linux host kernel; neither the probe nor a differing-output smoke test independently proves cryptographic unpredictability.
+
+### Provider host test
+
+```sh
+cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
+  entropy_broker.c linux_entropy_provider.c test_linux_entropy_provider.c -o provider_test
+ASAN_OPTIONS=detect_leaks=1 ./provider_test
+```
+
+**Observed:** equivalent local copies of the broker and published provider/test source compiled and passed on the tool container with GCC, ASan and UBSan. The full published GitHub checkout itself was not compiled due to unavailable direct raw-GitHub network access. It has not been run on the user's PC or in Warden/QEMU.
+
+**Not done:** a secure host-to-guest trust bridge; authenticated kernel identity/capability checks; stable pinned guest writable pages; concurrent synchronized quota accounting; Linux syscall/ELF `AT_RANDOM` integration; suspend/restore protection; and a trusted monotonic/UTC clock. The original C broker API accepts booleans and is **not safe to expose directly to guests**.

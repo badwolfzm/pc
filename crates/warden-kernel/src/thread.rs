@@ -99,6 +99,9 @@ pub struct Kernel {
     pub expected_mints: usize,
     /// Kernel heap in use after setup. The run may add only a little.
     pub heap_baseline: usize,
+    /// The one machine-control object, if any was ever created. Phase 2a
+    /// creates none, so no capability can stop the machine.
+    pub host_object: Option<warden_caps::ObjectId>,
 }
 
 pub static mut KERNEL: Option<Kernel> = None;
@@ -257,7 +260,10 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             // WRITE on some other object (the console) is not enough.
             match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
                 Err(e) => return Ok(After::Resume(err(e))),
-                Ok(r) if r.kind != ObjectKind::Host => return Ok(After::Resume(err(CapError::WrongKind))),
+                // Kind and identity: it must be *the* machine-control object.
+                Ok(r) if r.kind != ObjectKind::Host || Some(r.object) != k.host_object => {
+                    return Ok(After::Resume(err(CapError::WrongKind)))
+                }
                 Ok(_) => {}
             }
             crate::kprintln!("thread {} holds the host capability and stops the machine", k.threads[cur].name);

@@ -131,6 +131,9 @@ pub struct Thread {
     pub death: Option<Death>,
     pub expect: Death,
     pub logs: u32,
+    /// Exact boot-created serial-console endpoint object, never inferred from slot or kind.
+    /// None means this thread cannot access host serial output via SYS_CONSOLE_WRITE.
+    pub console_object: Option<ObjectId>,
     pub personality: Personality,
     /// FS base (Linux TLS), loaded into the MSR before the thread runs.
     pub fs_base: u64,
@@ -204,7 +207,7 @@ impl Kernel {
         };
         self.threads.push(Thread {
             name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(), deferred_exit: None,
-            budget, budget_period: budget, death: None, expect, logs: 0,
+            budget, budget_period: budget, death: None, expect, logs: 0, console_object: None,
             personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), linux: linux::Proc::new(),
         });
         self.threads.len() - 1
@@ -440,19 +443,27 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
     }
     let r = match f.rax {
         SYS_LOG => {
-            // Even logging needs a capability: the console endpoint with WRITE.
-            k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE).map_err(err).map(|_| {
-                k.threads[cur].logs += 1;
-                crate::tests::judge(k, b, c);
-                0
-            })
+            // A writable IPC endpoint is not itself a console grant.
+            match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
+                Err(e) => Err(err(e)),
+                Ok(cap) if cap.kind != ObjectKind::Endpoint
+                    || Some(cap.object) != k.threads[cur].console_object =>
+                    Err(err(CapError::WrongKind)),
+                Ok(_) => {
+                    k.threads[cur].logs += 1;
+                    crate::tests::judge(k, b, c);
+                    Ok(0)
+                }
+            }
         }
         SYS_CONSOLE_WRITE => {
             // Raw bytes to the serial console, through the caller's own page
             // table. Needs WRITE on the console endpoint, like SYS_LOG.
             match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
                 Err(e) => Err(err(e)),
-                Ok(r) if r.kind != ObjectKind::Endpoint => Err(err(CapError::WrongKind)),
+                Ok(r) if r.kind != ObjectKind::Endpoint
+                    || Some(r.object) != k.threads[cur].console_object =>
+                    Err(err(CapError::WrongKind)),
                 Ok(_) => {
                     let n = core::cmp::min(c as usize, CONSOLE_WRITE_MAX);
                     let mut buf = [0u8; CONSOLE_WRITE_MAX];
@@ -760,11 +771,16 @@ pub fn root_cap(k: &mut Kernel, thread: usize, slot: usize, kind: ObjectKind, ri
     k.caps.create_root(&mut t.cspace, slot, kind, rights, budget).expect("root cap")
 }
 
-/// Boot-time endpoint the kernel itself grants (the per-thread console):
-/// nobody is charged. Endpoints a thread owns go through `create_endpoint`.
+/// Boot-time endpoint; slot zero is reserved for the trusted console grant.
+/// User-created IPC endpoints go through `create_endpoint` and NEVER become
+/// authorized consoles just by acquiring WRITE rights or occupying slot zero.
 pub fn root_endpoint(k: &mut Kernel, thread: usize, slot: usize, rights: Rights, capacity: usize) -> ObjectId {
     let id = root_cap(k, thread, slot, ObjectKind::Endpoint, rights, 0);
     k.endpoints.insert(id.0, Endpoint::with_capacity(capacity));
+    if slot == 0 {
+        assert!(k.threads[thread].console_object.is_none(), "duplicate console root");
+        k.threads[thread].console_object = Some(id);
+    }
     id
 }
 

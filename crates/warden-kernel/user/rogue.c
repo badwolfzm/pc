@@ -37,6 +37,15 @@ int main(void) {
     for (long s = 4; s < 0x10000; s = s < 16 ? s + 1 : s * 2)
         if (wsend_nb(s, 1, 2, 3, 4) != WERR_INVALID)
             named++;
+    /* An ordinary IPC endpoint with WRITE must not impersonate the console.
+     * The rogue has a real console in slot 0 and a separate writable
+     * personality endpoint in slot 1. Both are mapped, valid endpoints.
+     * A successful serial write is a security failure, even with WRITE.
+     */
+    volatile unsigned char *console_probe = (volatile unsigned char *)(APP_BUF + BUF_DATA_OFF);
+    *console_probe = '.';
+    if (wsys(WSYS_CONSOLE_WRITE, SLOT_PERSONALITY, (long)console_probe, 1) != WERR_KIND)
+        named++;
     report(T_ROGUE_FOREIGN_SLOTS, named);
     /* 49: namespace epoll exhaustion is ours alone: at most 8 objects,
      * then ENOMEM; the other namespace retains its own capacity. */

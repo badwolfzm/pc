@@ -22,10 +22,23 @@ jobs:
           test "$(git -C /tmp/doom-native-source rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
       - name: Real freestanding compile and partial link size report
         run: python3 tools/doom-native-link-audit/audit.py --source /tmp/doom-native-source/doomgeneric --out target/doom-native-link-audit
+      - name: Stage exact reviewed-candidate Warden combined link gate
+        run: |
+          git fetch --quiet --depth=1 origin 4045f7aa1875d73019994a2613184eb688a489b9
+          test "$(git rev-parse FETCH_HEAD)" = 4045f7aa1875d73019994a2613184eb688a489b9
+          git restore --source=FETCH_HEAD -- tools/doom-native-link-gate
+      - name: Build actual engine plus Warden adapter relocatable object
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom-native-source/doomgeneric --output target/doom-native-link-gate
+          python3 tools/doom-native-link-audit/audit_combined.py \
+            --combined target/doom-native-link-gate/all-objects.o \
+            --engine-report target/doom-native-link-audit/report.json \
+            --gate-report target/doom-native-link-gate/gate.json \
+            --out target/doom-native-link-audit/combined.json
       - name: Save link audit evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-doom-freestanding-elf-audit
-          path: target/doom-native-link-audit/report.json
+          path: |\n            target/doom-native-link-audit/report.json\n            target/doom-native-link-audit/combined.json\n            target/doom-native-link-gate/gate.json
           if-no-files-found: warn

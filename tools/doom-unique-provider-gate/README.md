@@ -1,34 +1,22 @@
-# Genuine Doom — selected runtime strong-symbol provider gate
+# Genuine Doom — canonical merged runtime provider link gate
 
-Task #184. The success of PR #180's ten-function ET_REL closure is real, but
-its historical six-function PR #177 snapshot is not what was merged:
-**merged PR #177 supplies abs/fabs ONLY**. The tested C string extras from
-PR #175 are in a CLOSED, UNMERGED PR. This gate combines the *actual merged
-abs/fabs source* with that *explicitly identified historical four-string
-candidate*, plus draft #176 allocator aliases and #113 bounded arena.
+The canonical providers are now **merged into main**:
 
-This is **not** an attempt to reopen or merge someone else's PR. It is an
-independent integration experiment on exact pinned candidate component
-snapshots. The workflow verifies the current checkout's pure source against
-the merged PR #177 SHA before using it. It temporarily restores only the
-named candidate source files from the pinned commits, never edits shared
-source on main.
+- PR #177 contributes only `abs` and `fabs` in `tools/doom-pure-crt-symbols/pure.c`
+- PR #215 restores the four independently verified C-locale functions from the closed #175 into `tools/doom-mini-crt/mini_extra.c`
+- PR #176 provides `malloc`, `calloc`, `realloc`, and `free` through bounded arena PR #113
 
-For actual Doom pinned engine + real Warden WAD/graphics adapters, the test:
-- builds C freestanding objects,
-- parses real `nm -P -g --defined-only` output and **rejects duplicate
-  strong global providers across ALL candidate and baseline objects**,
-- requires unique known providers for exactly ten pure+allocator names,
-- links all components with `ld -r`,
-- requires exactly those ten undefined imports disappear; no new imports,
-- requires system/file host calls remain undefined.
+This workflow uses these sources **directly from the checkout**, not obsolete
+draft snapshots. Actual pinned upstream Doomgeneric and merged Warden adapters
+are compiled as freestanding x86-64 objects. Before a genuine `ld -r` link,
+the gate rejects duplicate strong definitions among all selected objects.
+It then requires precisely the ten reviewed imports to disappear, zero new
+unresolved imports and no masking of privileged host file/process functions.
 
-The result is **a candidate ET_REL**, not ET_EXEC; no entrypoint, privilege
-allocation, guest linker-map proof, full 512 MiB guest accounting, or Doom
-execution. The allocator includes a 1 MiB static arena of unknown adequacy.
-Before final integration: obtain the D1 lead's decision on reusing #175
-string implementation, independently approve #113/#176 heap, provide
-capability-controlled WAD and process termination, run a truly final linker
-and native QEMU test. Never link fake `system`/host file stubs.
+A passing **ET_REL** is not a native ET_EXEC executable. A 1 MiB arena
+is a candidate static reservation, not a measured Doom heap requirement.
+Native Warden-loader placement, complete runtime, capability-scoped WAD
+storage, actual guest resident RAM and QEMU gameplay still need independent
+verification. This tool itself introduces no kernel or host-service authority.
 
-Own only `tools/doom-unique-provider-gate/**` and the dedicated workflow.
+Issue #184. Owns only `tools/doom-unique-provider-gate/**` and the workflow.

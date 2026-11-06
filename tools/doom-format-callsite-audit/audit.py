@@ -17,6 +17,9 @@ TOKENS = re.compile(r'(?P<skip>\s+|//[^\n]*|/\*[\s\S]*?\*/)|'
                     r'(?P<ident>[A-Za-z_]\w*)|(?P<punct>[^\s])')
 SPEC = re.compile(r'%(%|(?:[-+ #0]*)(?:\*|\d*)(?:\.(?:\*|\d*))?(?:hh|ll|[hljztL])?[A-Za-z%])')
 SUPPORTED = set("diuoxXsc%")
+# Current merged freestanding runtime + console covers printf, snprintf,
+# vsnprintf; the remaining stdio-family calls are NOT implemented ABI.
+MISSING_RUNTIME_FUNCTIONS = {"fprintf", "sprintf", "vprintf", "vfprintf", "vsprintf"}
 
 def tokenize(source):
     tokens = []
@@ -98,6 +101,8 @@ def scan_source(source, file):
         else:
             evidence = {"format_literal": None, "classification": "dynamic-or-unparsed",
                         "problems": ["manual-review-required"]}
+        if name in MISSING_RUNTIME_FUNCTIONS:
+            evidence["problems"] = sorted(set(evidence["problems"] + ["unimplemented-stdio-function"]))
         results.append({"file": file, "line": line, "function": name, **evidence})
     return results
 
@@ -125,6 +130,7 @@ def run(source):
     return {"upstream_commit": PIN, "real_engine_translation_units": 79,
             "callsites": calls, "counts": classifications,
             "manual_review_required": sum(bool(x["problems"]) for x in calls),
+            "unimplemented_abi_callsites": sum("unimplemented-stdio-function" in x["problems"] for x in calls),
             "source_scanner_not_full_c_parser": True,
             "native_guest_boot_verified": False, "printf_runtime_compatibility_verified": False}
 

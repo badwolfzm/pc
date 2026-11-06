@@ -11,27 +11,27 @@ class JoinTests(unittest.TestCase):
     def test_canonical_eight_mib_report(self):
         report = {'arena_bytes_reserved_in_BSS': 8388608,
                   'pinned_default_doom_zone_bytes': 6291456,
-                  'candidate_object_sha256': 'abc',
+                  'candidate_object_sha256': 'a' * 64,
                   'static_elf_allocatable_section_metrics': {
                       'allocatable_nobits_bytes': 8388608,
                       'allocatable_total_section_bytes': 9000000}}
-        self.assertTrue(verify_runtime_report(report, 'abc'))
+        self.assertTrue(verify_runtime_report(report, 'a' * 64))
         for key, bad in [('arena_bytes_reserved_in_BSS', 1048576),
                          ('pinned_default_doom_zone_bytes', 0),
                          ('candidate_object_sha256', 'wrong')]:
             with self.subTest(key=key):
                 changed = dict(report, **{key: bad})
                 with self.assertRaises(ValueError):
-                    verify_runtime_report(changed, 'abc')
+                    verify_runtime_report(changed, 'a' * 64)
         for metrics in ({'allocatable_nobits_bytes': 0,
                          'allocatable_total_section_bytes': 9000000},
                         {'allocatable_nobits_bytes': 8388608,
                          'allocatable_total_section_bytes': 512 * 1024 * 1024}):
             with self.subTest(metrics=metrics):
                 with self.assertRaises(ValueError):
-                    verify_runtime_report(dict(report, static_elf_allocatable_section_metrics=metrics), 'abc')
+                    verify_runtime_report(dict(report, static_elf_allocatable_section_metrics=metrics), 'a' * 64)
         with self.assertRaises(ValueError):
-            verify_runtime_report(None, 'abc')
+            verify_runtime_report(None, 'a' * 64)
 
     def test_scanner_report_is_exactly_bound_to_eight_mib_runtime(self):
         base = 'a' * 64

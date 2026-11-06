@@ -26,6 +26,21 @@ jobs:
           git merge-base --is-ancestor 4246bde3e786f1c51e3b047292a592cb5c057bf1 FETCH_HEAD
           mkdir -p target/doom-runtime-bundle/staged
           git show 4246bde3e786f1c51e3b047292a592cb5c057bf1:tools/doom-native-format/doom_format.c > target/doom-runtime-bundle/staged/format.c
+      - name: Verify source-backed 6 MiB Doom default zone fits 8 MiB
+        run: |
+          python3 tools/doom-zone-capacity-gate/gate.py \
+            --source /tmp/warden-upstream-doom/doomgeneric/i_system.c \
+            --commit e257a09527062bfb986b6e5e0780839b6cbd5b71 \
+            --arena-bytes 8388608
+      - name: Exercise real 8 MiB arena on 6 MiB zone plus 1 MiB scratch with UBSan
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic \
+            -DDOOM_ARENA_BYTES=8388608 \
+            -fsanitize=undefined -fno-sanitize-recover=all \
+            -I tools/doom-freestanding-arena \
+            tools/doom-freestanding-arena/arena.c tools/doom-eight-mib-zone/test_zone.c \
+            -o /tmp/warden-doom-eight-mib-arena
+          /tmp/warden-doom-eight-mib-arena
       - name: Compile genuine Doom + all merged CRT providers and one pinned candidate
         run: |
           python3 tools/doom-native-runtime-bundle/compose.py \

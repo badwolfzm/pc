@@ -85,8 +85,12 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
             raise InvalidELF("overlapping load virtual ranges")
     for i, (lo, hi, flags) in enumerate(page_permissions):
         for other_lo, other_hi, other_flags in page_permissions[i + 1:]:
-            if lo < other_hi and other_lo < hi and ((flags | other_flags) & (PF_X | PF_W)) == (PF_X | PF_W):
-                raise InvalidELF("load segments would share a writable+executable page")
+            if lo < other_hi and other_lo < hi:
+                # One x86 page has one effective permission set. Even RX/R
+                # or R/RW aliases would silently weaken one segment's
+                # intended isolation when the loader maps both ranges.
+                if flags != other_flags:
+                    raise InvalidELF("load segments share a page with conflicting permissions")
     if not any(lo <= entry < hi for lo, hi in executable):
         raise InvalidELF("entry point not in file-backed executable load bytes")
     # This is an upper bound on direct loaded-image bytes, NOT real peak RSS:

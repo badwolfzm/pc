@@ -63,8 +63,12 @@ fn main() {
     let before = fragmented.used;
     let failed = fragmented.alloc_contiguous(2);
     let leak = failed.is_none() && fragmented.used != before;
-    // This scenario must never accidentally return a noncontiguous range.
-    if failed.is_some() { panic!("non-contiguous allocation unexpectedly returned success"); }
+    // A repaired allocator may correctly choose a new contiguous bump range.
+    // Its successful request must account for exactly two newly owned frames.
+    if let Some(start) = failed {
+        assert_eq!(fragmented.used, before + 2);
+        assert_eq!(start % 4096, 0);
+    }
     println!("{{\"source\":\"actual FrameAlloc from mm.rs\",\"normal_contiguous_ok\":true,\"zero_count_has_side_effect\":{},\"noncontiguous_failure_leaks_used\":{},\"before_used\":{},\"after_used\":{},\"zero_after_used\":{}}}",
         zero_side_effect, leak, before, fragmented.used, zero.used);
 }

@@ -30,9 +30,9 @@ jobs:
           curl --fail --location --retry 3 --max-time 120 \
             https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip \
             -o /tmp/freedoom.zip
-          unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$'
+          echo "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  /tmp/freedoom.zip" | sha256sum --check\n          unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$'
           file="$(unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$' | head -n1)"
           unzip -p /tmp/freedoom.zip "$file" > DOOM1.WAD
           test "$(head -c4 DOOM1.WAD)" = IWAD
-      - name: Start actual Doom engine and collect three real game-loop frames (host mock only)
+      - name: Start genuine Doom and verify ten gameplay frames plus consumed keyboard transitions (host only)
         run: bash tools/doom-host-frames/run.sh /tmp/genuine-doomgeneric/doomgeneric DOOM1.WAD

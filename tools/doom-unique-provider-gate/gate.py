@@ -70,11 +70,11 @@ def verify(before,after,own):
         "resolved_symbols":sorted(EXPECTED),
         "protected_imports_still_unresolved":sorted(PROTECTED),
         "sources":{"upstream_doom":PIN_DOOM,"merged_pure":PIN_PURE,
-                   "candidate_string_extras_closed_unmerged_pr175":PIN_STRINGS,
-                   "draft_heap_alias":PIN_HEAP,"draft_arena":PIN_ARENA},
+                   "canonical_string_source_premerge_pr175":PIN_STRINGS,
+                   "merged_heap_source_premerge":PIN_HEAP,"merged_arena_source_premerge":PIN_ARENA},
         "selected_providers":{s:own[s] for s in sorted(EXPECTED)},
         "build_kind":"genuine pinned Doom + Warden + selected runtime ET_REL partial link",
-        "fully_merged_runtime":False,"native_executable":False,
+        "selected_runtime_sources_merged":True,"native_executable":False,
         "warden_guest_boot_verified":False,"guest_512m_usage_verified":False
     }
 
@@ -117,7 +117,7 @@ def process(args):
     result["combined_et_rel_sha256"]=hashlib.sha256(combined.read_bytes()).hexdigest()
     result["static_arena_candidate_bytes"]=1048576
     result["remaining_undefined"]=missing
-    result["note"]="Candidate source composition, NOT merged deployment or native ELF/guest. No host-service substitution."
+    result["note"]="All selected source providers are now merged in main; this remains only an ET_REL link, NOT a bootable native ELF/guest. No host-service substitution."
     (out/"report.json").write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
     print(json.dumps({k:result[k] for k in ("status","baseline_undefined_count",
           "combined_undefined_count","resolved_symbols","build_kind")},sort_keys=True))

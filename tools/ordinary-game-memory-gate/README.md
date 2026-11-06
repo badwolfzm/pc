@@ -43,3 +43,14 @@ Important caveats:
 Task #137, complements the game FPS gate #70 and merged PR #134.
 Requires independent review and a native Warden producer before use as
 project acceptance evidence. No existing kernel or agent-owned code changed.
+
+## Input integrity controls
+
+The loader rejects reports over 4 MiB (before JSON parsing) and refuses
+**duplicate object keys**, including duplicate keys in nested sample objects.
+Without these checks an attacker or malformed telemetry producer could silently
+replace a reported memory budget or vCPU count with its later duplicate value.
+These are data-validation safeguards, not proof of authentic guest telemetry.
+The file-size limit bounds input bytes, but a hostile report can still use
+CPU/memory during JSON parsing; run untrusted producers in an OS-isolated
+context and apply resource limits. The validator is not a sandbox.

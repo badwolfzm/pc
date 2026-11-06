@@ -112,3 +112,22 @@ or a trace that ends before its last unreported allocation. A valid synthetic
 report is still not proof that the native guest telemetry producer captured all
 kernel frames, hardware reservations or device memory. Provenance and
 physical-guest integrity remain an owner-reviewed integration task (#153).
+
+## Initial reserved physical frames (schema v2)
+
+Schema v1 still requires `capture_started_empty=true` and assumes every
+allocated frame appears in the event sequence. Actual kernel instrumentation
+may start after bootstrap reservations have already been made. Schema v2
+can express this explicitly, adding `capture_start_ns` and an
+`initial_frames` list while setting `capture_started_empty=false`.
+The list contains distinct `{"frame_id": integer, "kind": category}` items,
+bounded by the configured number of physical frames. Allocation of an already
+reserved frame is rejected; valid later release is allowed. The initial
+inventory contributes to peak and live resident counts, and reconciliation
+starts with those category counts and forbids samples before capture begins.
+
+This new mode only verifies **consistency of the declared initial inventory**.
+It does not independently measure or authenticate the kernel's boot memory
+reservations; omitting a reserved frame can still underreport memory.
+Until native Warden producer ownership (#153) establishes complete provenance,
+neither v1 nor v2 can support verified whole-guest RAM claims.

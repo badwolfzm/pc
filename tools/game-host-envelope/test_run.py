@@ -15,6 +15,12 @@ class EnvelopeTests(unittest.TestCase):
         self.assertEqual(result['exit_code'], 0)
         self.assertFalse(result['timed_out'])
 
+    def test_child_is_pinned_to_one_cpu(self):
+        script = 'import os; assert os.sched_getaffinity(0) == {' + str(self.cpu()) + '}'
+        result = run([sys.executable, '-c', script], 256, 3, self.cpu())
+        self.assertEqual(result['exit_code'], 0)
+        self.assertFalse(result['timed_out'])
+
     def test_failing_child(self):
         result = run([sys.executable, '-c', 'raise SystemExit(7)'], 256, 3, self.cpu())
         self.assertEqual(result['exit_code'], 7)

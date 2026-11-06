@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "source": "warden_guest_physical_frame_events",
+  "capture_started_empty": true,
+  "page_bytes": 4096,
+  "guest_physical_capacity_bytes": 536870912,
+  "events": [
+    {"time_ns": 0, "op": "alloc", "frame_id": 2, "kind": "kernel"},
+    {"time_ns": 1, "op": "alloc", "frame_id": 3, "kind": "game"},
+    {"time_ns": 2, "op": "free", "frame_id": 3, "kind": "game"}
+  ]
+}

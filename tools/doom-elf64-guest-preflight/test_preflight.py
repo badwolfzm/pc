@@ -64,6 +64,10 @@ class PreflightTests(unittest.TestCase):
         self.bad(elf(second=(0x6474e551, 7, 0, 0, 0, 0, 0, 0)))
     def test_overlap_rejected(self):
         self.bad(elf(second=(1, 4, 0x1000, 0x400800, 0x400800, 1, 4096, 1)))
+    def test_page_alias_wx_rejected(self):
+        # No byte overlap; executable and writable mappings alias one 4 KiB frame.
+        second = (1, 6, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)
+        self.bad(elf(memsz=0x800, second=second))
     def test_insufficient_budget(self):
         self.bad(elf(memsz=420*1048576, align=1), reserved=100)
     def test_invalid_reserve(self):

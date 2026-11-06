@@ -55,7 +55,7 @@ def inspect(before, after, provider):
         "max_single_console_write_bytes": 1024,
         "format_provider": "canonical merged bounded snprintf/vsnprintf",
         "genuine_upstream_doom_et_rel_link": True,
-        "bootable_w arden_executable": False,
+        "bootable_warden_executable": False,
         "native_game_boot_verified": False,
         "512_mib_guest_peak_measured": False,
         "fps_measured": None,

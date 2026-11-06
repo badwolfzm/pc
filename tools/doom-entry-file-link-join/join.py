@@ -12,6 +12,8 @@ import subprocess
 FILE_APIS = frozenset({'fopen', 'fclose', 'fread', 'fseek', 'ftell'})
 EXPECTED = FILE_APIS | {'exit'}
 PROTECTED = frozenset({'system', 'fwrite', 'remove', 'rename'})
+REQUIRED_ARENA = 8 * 1024 * 1024
+REQUIRED_ZONE = 6 * 1024 * 1024
 
 
 def symbols(text):
@@ -54,6 +56,24 @@ def verify(before, after, existing_defs, extras):
     return sorted(EXPECTED)
 
 
+
+def verify_runtime_report(report, runtime_digest):
+    if not isinstance(report, dict):
+        raise ValueError('invalid runtime report type')
+    if report.get('arena_bytes_reserved_in_BSS') != REQUIRED_ARENA:
+        raise ValueError('runtime arena must be exactly the reviewed 8 MiB')
+    if report.get('pinned_default_doom_zone_bytes') != REQUIRED_ZONE:
+        raise ValueError('6 MiB genuine Doom startup-zone evidence missing')
+    if report.get('candidate_object_sha256') != runtime_digest:
+        raise ValueError('runtime report does not match actual linked object')
+    metrics = report.get('static_elf_allocatable_section_metrics')
+    if not isinstance(metrics, dict) or metrics.get('allocatable_nobits_bytes', 0) < REQUIRED_ARENA:
+        raise ValueError('8 MiB NOBITS reservation not demonstrated in actual ELF')
+    if metrics.get('allocatable_total_section_bytes', REQUIRED_ARENA * 1024) >= 512 * 1024 * 1024:
+        raise ValueError('linked static sections exceed 512 MiB guest budget')
+    return True
+
+
 def call(cmd):
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -61,10 +81,14 @@ def call(cmd):
     return result.stdout
 
 
-def run(runtime, output, entry, exit_source, file_source):
+def run(runtime, runtime_report, output, entry, exit_source, file_source):
     for file in (runtime, entry, exit_source, file_source):
         if not file.is_file():
             raise ValueError('missing required input: ' + str(file))
+    if not runtime_report.is_file():
+        raise ValueError('missing canonical runtime report')
+    verify_runtime_report(json.loads(runtime_report.read_text()),
+                          hashlib.sha256(runtime.read_bytes()).hexdigest())
     output.mkdir(parents=True, exist_ok=True)
     def inspect(obj):
         return symbols(call(['nm', '-P', '-g', str(obj)]))
@@ -105,6 +129,7 @@ def run(runtime, output, entry, exit_source, file_source):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--runtime-object', required=True, type=Path)
+    p.add_argument('--runtime-report', required=True, type=Path)
     p.add_argument('--output', required=True, type=Path)
     p.add_argument('--entry', default='tools/doom-native-entry/entry.c', type=Path)
     p.add_argument('--exit-source', default='tools/doom-native-safe-exit/exit.c', type=Path)
@@ -112,7 +137,7 @@ if __name__ == '__main__':
                    help='exact source from reviewed PR #264; not a host FILE stub')
     args = p.parse_args()
     try:
-        print(json.dumps(run(args.runtime_object, args.output, args.entry,
+        print(json.dumps(run(args.runtime_object, args.runtime_report, args.output, args.entry,
                              args.exit_source, args.file_source), sort_keys=True))
     except (OSError, RuntimeError, ValueError) as exc:
         p.error(str(exc))

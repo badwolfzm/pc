@@ -25,14 +25,20 @@ jobs:
         run: |
           python3 tools/ordinary512-native-qemu/prepare.py tests/kernel/pong.sh --manifest target/native512-profile.json
           grep -F -- '-m 512M -smp 1' tests/kernel/pong.sh
-      - name: Boot native Warden Pong and verify kernel evidence
-        env:
-          LOG: target/native512-pong-serial.log
-          SCREENSHOT: target/native512-pong-screen.ppm
+      - name: Boot native Warden Pong twice at 512 MiB and one vCPU
         run: |
-          timeout 240 bash tests/kernel/pong.sh
-          python3 tests/game/check_pong_guest.py target/native512-pong-serial.log
-          python3 tools/ordinary512-native-qemu/evidence.py target/native512-pong-serial.log target/native512-profile.json target/native512-evidence.json
+          set -euo pipefail
+          for run in 1 2; do
+            export LOG="target/native512-pong-boot${run}.log"
+            export SCREENSHOT="target/native512-pong-boot${run}.ppm"
+            timeout 240 bash tests/kernel/pong.sh
+            python3 tests/game/check_pong_guest.py "$LOG"
+            python3 tools/ordinary512-native-qemu/evidence.py "$LOG" \
+              target/native512-profile.json "target/native512-boot${run}-evidence.json"
+          done
+          python3 tools/ordinary512-native-qemu/compare.py \
+            target/native512-boot1-evidence.json target/native512-boot2-evidence.json \
+            target/native512-repeat-summary.json
       - name: Preserve configuration and native guest evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -40,7 +46,11 @@ jobs:
           name: native-warden-pong-512m-one-vcpu
           path: |
             target/native512-profile.json
-            target/native512-evidence.json
-            target/native512-pong-serial.log
-            target/native512-pong-screen.ppm
+            target/native512-repeat-summary.json
+            target/native512-boot1-evidence.json
+            target/native512-boot2-evidence.json
+            target/native512-pong-boot1.log
+            target/native512-pong-boot2.log
+            target/native512-pong-boot1.ppm
+            target/native512-pong-boot2.ppm
           if-no-files-found: ignore

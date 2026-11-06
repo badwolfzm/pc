@@ -8,7 +8,7 @@ It rejects a memory budget that counts only game RSS: the 512 MiB goal includes
 kernel, runtime/personality, game, framebuffer, paging structures/buffers,
 graphics and other physical guest allocations. These exact component keys are
 required in every sample. Each sample includes its own sum and monotonic
-timestamp. The declared observed peak must equal the maximum sample total.
+timestamp. The declared **event high-water** must be at least the maximum sampled total and at most the configured physical capacity. A new required `peak_method` field must equal `physical_frame_event_high_water`; sampled maxima alone are rejected.
 The configured physical guest capacity must be <= 536870912 bytes, with one
 guest vCPU; host peak RSS is recorded separately, not added to guest memory.
 
@@ -25,9 +25,11 @@ behavior, not a real Warden game measurement.
 
 Important caveats:
 - Two or more samples alone **cannot prove a true transient high-water mark**;
-  sampling may miss peaks. The instrumentation owner must supply a reliable
-  allocator/page accounting high-water and exact capture interval, with
-  independent verification. This tool only validates declared evidence shape.
+  sampling may miss peaks. The report must declare continuous frame-event
+  accounting and a separately recorded high-water value (which can exceed
+  all sampled values). **This declaration is not cryptographic proof**: the
+  instrumentation owner must verify collection completeness, exclusivity,
+  and the exact capture interval. This tool only checks evidence consistency.
 - Identical physical pages mapped in multiple components must be attributed
   once, not double-counted. Producers must define exclusivity, memory overhead,
   and which buffers are attributed to each component.

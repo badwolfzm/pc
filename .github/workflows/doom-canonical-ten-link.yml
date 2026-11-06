@@ -1,0 +1,48 @@
+name: Pinned Doom canonical nonoverlapping ten-symbol freestanding link
+on:
+  push:
+    branches:
+      - agent/doom-canonical-ten-link-20261106
+  pull_request:
+    paths:
+      - 'tools/doom-canonical-ten-link/**'
+      - '.github/workflows/doom-canonical-ten-link.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canonical-real-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit-test import delta and duplicate strong-definition rules
+        run: python3 -m unittest discover -s tools/doom-canonical-ten-link -p 'test_*.py' -v
+      - name: Stage reviewed distinct CRT and bounded heap providers
+        run: |
+          # Two pure symbols already merged on main in PR #177.
+          test -f tools/doom-pure-crt-symbols/pure.c
+          git fetch --quiet --depth=1 origin 6d6237735fad9b0f01f5e7e0064656560df3fc31
+          test "$(git rev-parse FETCH_HEAD)" = 6d6237735fad9b0f01f5e7e0064656560df3fc31
+          git restore --source=FETCH_HEAD -- tools/doom-mini-crt/mini_extra.c
+          git fetch --quiet --depth=1 origin e0b20c35a73a6e590c0b8dbe62910342f3d07527
+          test "$(git rev-parse FETCH_HEAD)" = e0b20c35a73a6e590c0b8dbe62910342f3d07527
+          git restore --source=FETCH_HEAD -- tools/doom-native-heap-closure/heap_alias.c
+          git fetch --quiet --depth=1 origin 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
+          test "$(git rev-parse FETCH_HEAD)" = 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
+          git restore --source=FETCH_HEAD -- tools/doom-freestanding-arena/arena.c tools/doom-freestanding-arena/arena.h
+      - name: Fetch pinned genuine upstream Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doom-canonical
+          git -C /tmp/pinned-doom-canonical checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/pinned-doom-canonical rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile, check unique symbols and partial-link genuine Doom
+        run: |
+          python3 tools/doom-canonical-ten-link/check.py --source /tmp/pinned-doom-canonical/doomgeneric --output target/doom-canonical-ten-link
+      - name: Publish actual remaining-symbol diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-canonical-ten-link-report
+          path: target/doom-canonical-ten-link/report.json
+          if-no-files-found: warn

@@ -13,12 +13,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Stage pinned unmerged allocator dependencies without modifying owner branches
+      - name: Verify merged Warden bounded arena and heap-ABI closure
         run: |
-          git fetch --quiet --depth=1 origin 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
-          git restore --source=FETCH_HEAD -- tools/doom-freestanding-arena
-          git fetch --quiet --depth=1 origin e0b20c35a73a6e590c0b8dbe62910342f3d07527
-          git restore --source=FETCH_HEAD -- tools/doom-native-heap-closure
+          test -f tools/doom-freestanding-arena/arena.c
+          test -f tools/doom-native-heap-closure/close.py
       - name: Run regression and functional tests
         run: |
           python3 -m unittest discover -s tools/doom-native-strdup-closure -p 'test_*.py' -v

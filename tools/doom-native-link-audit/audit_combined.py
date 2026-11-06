@@ -7,6 +7,14 @@ import subprocess
 import sys
 from audit import sections, unresolved, evaluate, PIN
 
+# These imports must never silently inherit Linux host privileges when
+# linking into a Warden ring-3 guest. Replacements need capability policies.
+DANGEROUS_HOST_IMPORTS = frozenset({
+    'system', 'popen', 'fork', 'execve', 'dlopen', 'dlsym',
+    'fopen', 'freopen', 'remove', 'rename', 'mkdir', 'socket', 'connect',
+    'open', 'openat', 'unlink', 'chmod', 'chown',
+})
+
 def inspect(object_path):
     if not object_path.is_file() or object_path.stat().st_size > 128*1024*1024:
         raise ValueError("missing or oversized combined object")
@@ -24,6 +32,8 @@ def inspect(object_path):
     result["object_kind"] = "real x86_64 relocatable ET_REL engine + Warden adapters"
     result["native_warden_executable_built"] = False
     result["native_warden_boot_verified"] = False
+    result["host_privilege_imports_require_policy"] = sorted(set(result["upstream_engine_unresolved_symbols"]) & DANGEROUS_HOST_IMPORTS)
+    result["host_privilege_imports_policy_approved"] = False
     return result
 
 def main():
@@ -50,6 +60,7 @@ def main():
         result["combined_minus_engine_only_section_bytes"]=result["allocatable_section_bytes"]-engine["allocatable_section_bytes"]
         result["comparison_warning"]="Combined omits the upstream stdio WAD backend and adds five Warden units; subtraction is not strictly the five adapters' size. No final PT_LOAD alignment/placement, game heap, WAD, complete CRT, physical guest memory or runtime FPS."
         result["missing_imports"]=gate["unresolved_symbols"]
+        result["safe_to_bind_unrestricted_host_libc"] = False
         a.out.parent.mkdir(parents=True,exist_ok=True)
         a.out.write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
         print(json.dumps({k:result[k] for k in ("allocatable_section_bytes","allocatable_file_backed_bytes","allocatable_zero_fill_bytes","upstream_engine_unresolved_count","combined_minus_engine_only_section_bytes")},sort_keys=True))

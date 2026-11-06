@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Test strict source-callsite audit (positive and negative cases)
+        run: python3 -m unittest discover -s tools/doom-native-scanf -p 'test_*.py' -v
       - name: Differential tests under UBSan
         run: |
           cc -std=c11 -Wall -Wextra -Werror -Wpedantic -O2 -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all \

@@ -1,0 +1,16 @@
+{
+  "guest_ram_bytes": 536870912,
+  "reserved_bytes": {
+    "kernel": 33554432,
+    "runtime": 67108864,
+    "framebuffers": 16777216,
+    "cache": 33554432,
+    "metadata": 16777216
+  },
+  "events": [
+    {"ms":0,"page":100,"write":false},
+    {"ms":2,"page":101,"write":true},
+    {"ms":10,"page":100,"write":false},
+    {"ms":20,"page":102,"write":false}
+  ]
+}

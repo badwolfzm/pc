@@ -15,6 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Stage merged security fix on original regression branch
+        run: |
+          # This PR was originally based on the vulnerable main. Test the
+          # exact fixed bridge until the control lead rebases this branch.
+          git fetch --quiet --depth=1 origin fdb6c1f94c1f7af984d5b565a2c4406fb6c34e5a
+          test "$(git rev-parse FETCH_HEAD)" = fdb6c1f94c1f7af984d5b565a2c4406fb6c34e5a
+          git restore --source=FETCH_HEAD -- tools/doom-wad-class-bridge tools/doom-wad-stream
       - name: Compile independent regression with UBSan
         run: |
           cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \

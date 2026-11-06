@@ -27,13 +27,22 @@ def integer(value, name, min_value=0):
 
 def validate(report):
     require(type(report) is dict, "report must be an object")
-    require(set(report) == {
+    version = report.get("schema_version")
+    require(type(version) is int and version in (1, 2),
+            "snapshot schema must be 1 or 2")
+    fields = {
         "schema_version", "source", "complete", "vcpu_count",
         "guest_physical_capacity_bytes", "host_peak_rss_bytes",
         "peak_total_bytes", "peak_method", "samples"
-    }, "required report fields must be present with no unknown fields")
-    require(report["schema_version"] == 1 and type(report["schema_version"]) is int,
-            "schema_version must equal 1")
+    }
+    if version == 2:
+        fields.add("boot_id")
+        boot_id = report.get("boot_id")
+        require(type(boot_id) is str and len(boot_id) == 64 and
+                all(ch in "0123456789abcdef" for ch in boot_id),
+                "snapshot boot_id must be 64 lowercase hex characters")
+    require(set(report) == fields,
+            "required report fields must be present with no unknown fields")
     require(report["source"] == "warden_guest_physical",
             "source must identify guest physical memory, not process RSS or virtual space")
     require(report["complete"] is True, "report must explicitly claim complete accounting")

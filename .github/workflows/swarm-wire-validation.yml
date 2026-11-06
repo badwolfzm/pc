@@ -1,0 +1,24 @@
+name: Swarm wire envelope prototype
+
+on:
+  pull_request:
+    paths:
+      - 'tools/swarm-wire-validation/**'
+      - '.github/workflows/swarm-wire-validation.yml'
+  push:
+    paths:
+      - 'tools/swarm-wire-validation/**'
+      - '.github/workflows/swarm-wire-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run protocol unit tests
+        working-directory: tools/swarm-wire-validation
+        run: python3 -m unittest -v test_frame.py test_stream.py

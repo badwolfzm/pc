@@ -38,3 +38,21 @@ no edits committed to `tests/kernel/pong.sh` or kernel. Draft; independent
 review before merge. The Pong guest retains its own number of ring-3 threads
 and zero tolerance for failed hostile-display checks; *one guest vCPU* does
 not imply a single guest thread.
+
+## Repeat-boot acceptance upgrade
+
+This workflow now launches **two separate, sequential QEMU guest processes**
+under the exact same `-m 512M -smp 1` profile. Each must complete
+`tests/kernel/pong.sh` with exit 0, pass
+`tests/game/check_pong_guest.py`, and yield independent
+`native512-boot{1,2}-evidence.json` outputs parsed from its own serial log.
+The `compare.py` gate requires both valid reports and stores a
+`native512-repeat-summary.json` containing both measured frame rates,
+reported allocator frames and screen hashes. Frame hashes are **not required
+to match across runs** because input scheduling and game timing can vary.
+
+The tests assert report structure and arithmetic; they cannot independently
+authenticate serial logs. The kernel's 15 native checks are part of each
+run's evidence, not synthetic test cases. Repeating Pong does **not** demonstrate
+Doom/Albion or modern game support. The actual host/QEMU VM can have more than
+one host-side thread even though the guest has exactly one vCPU.

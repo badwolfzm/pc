@@ -10,7 +10,8 @@ int main(void) {
         assert((*pp)[c] == expected);
     }
     assert((*pp)[-1] == -1);  /* EOF */
-    for (int c = -128; c < -1; ++c) assert((*pp)[c] == c);
+    /* x86-64 glibc C locale extends negative signed-char indices to 8-bit bytes. */
+    for (int c = -128; c < -1; ++c) assert((*pp)[c] == c + 256);
     puts("PASS: 384-entry fixed C-locale table, all bytes and EOF");
     return 0;
 }

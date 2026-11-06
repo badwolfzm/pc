@@ -86,3 +86,29 @@ graphics allocations and other memory are captured. This checker does not
 apply page replacement policies, enforce the guest memory limit, collect
 QEMU data or run Doom/Albion. Coordinate with guest instrumentation issue
 #153 and consolidation issue #155 to avoid parallel runtime changes.
+
+## Cross-report reconciliation
+
+The snapshot validator and event-replay validator can individually accept two
+**contradictory** synthetic reports. `reconcile.py` provides an optional
+stronger gate that requires the *same* guest capacity in both reports,
+a snapshot high-water equal to the event-reconstructed peak, and exact
+per-category resident-frame byte totals at **each** sample time.
+Each sample with timestamp `time_ms` includes all frame events at or before
+`time_ms * 1,000,000` nanoseconds. The final sample must cover every event.
+A frame cannot simultaneously occupy two physical ownership categories.
+
+```sh
+python3 tools/ordinary-game-memory-gate/reconcile.py \
+  snapshots.json frame-events.json
+python3 -m unittest discover -s tools/ordinary-game-memory-gate -p 'test_*.py' -v
+```
+
+This mode requires **page-granular** exclusive category accounting in the
+snapshot (multiples of 4096 bytes), an event log beginning before any frame
+allocation, and a consistent monotonic clock between streams. Unlike the
+general sample gate, it deliberately rejects partially overlapping accounting
+or a trace that ends before its last unreported allocation. A valid synthetic
+report is still not proof that the native guest telemetry producer captured all
+kernel frames, hardware reservations or device memory. Provenance and
+physical-guest integrity remain an owner-reviewed integration task (#153).

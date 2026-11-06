@@ -1,0 +1,19 @@
+name: G512 offline page-trace model
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary-pc-512-trace/**'
+      - '.github/workflows/ordinary-pc-512-trace.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/ordinary-pc-512-trace -p 'test_*.py' -v
+      - name: Python syntax
+        run: python3 -m py_compile tools/ordinary-pc-512-trace/trace_model.py

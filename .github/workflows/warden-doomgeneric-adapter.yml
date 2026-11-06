@@ -1,0 +1,25 @@
+name: Doomgeneric Warden platform callback contract
+on:
+  pull_request:
+    paths:
+      - 'tools/doomgeneric-warden/**'
+      - '.github/workflows/warden-doomgeneric-adapter.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  adapter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict callback tests
+        run: make -C tools/doomgeneric-warden test
+      - name: Freestanding ring-3-compatible object compile
+        run: make -C tools/doomgeneric-warden freestanding
+      - name: Instrumented callback tests
+        run: |
+          cd tools/doomgeneric-warden
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -DWARDEN_DOOM_TEST -Itest -fsanitize=undefined \
+            doomgeneric_warden.c test/test_adapter.c -o /tmp/warden-doomgeneric-ubsan
+          /tmp/warden-doomgeneric-ubsan

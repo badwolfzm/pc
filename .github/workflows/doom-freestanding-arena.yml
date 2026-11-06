@@ -1,0 +1,42 @@
+name: Doom freestanding arena
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-freestanding-arena/**'
+      - '.github/workflows/doom-freestanding-arena.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: C11 allocator and UBSan tests
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic \
+            -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-freestanding-arena/arena.c \
+            tools/doom-freestanding-arena/test_arena.c -o arena-test
+          ./arena-test
+      - name: Freestanding object builds
+        run: |
+          cc -std=c11 -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -c tools/doom-freestanding-arena/arena.c -o arena.o
+          test -s arena.o
+
+      - name: Lower-memory arena profile (1 MiB)
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic \
+            -DDOOM_ARENA_BYTES=1048576 \
+            -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-freestanding-arena/arena.c \
+            tools/doom-freestanding-arena/test_arena.c -o arena-test-1m
+          ./arena-test-1m
+          cc -std=c11 -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -DDOOM_ARENA_BYTES=1048576 \
+            -c tools/doom-freestanding-arena/arena.c -o arena-1m.o
+          test -s arena-1m.o

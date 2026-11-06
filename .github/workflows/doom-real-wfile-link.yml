@@ -1,0 +1,27 @@
+name: Doom real upstream WAD file API linkage
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-real-wfile-link/**'
+      - '.github/workflows/doom-real-wfile-link.yml'
+      - 'tools/doom-wad-stream/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-file-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify merged Warden WAD class bridge from checkout
+        run: |
+          test -f tools/doom-wad-class-bridge/doom_wad_bridge.c
+          test -f tools/doom-wad-stream/wad_stream.c
+      - name: Clone exact upstream Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doomgeneric
+          git -C /tmp/pinned-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/pinned-doomgeneric rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Link and exercise REAL upstream W_OpenFile API through authorized Warden backend
+        run: bash tools/doom-real-wfile-link/run.sh /tmp/pinned-doomgeneric/doomgeneric

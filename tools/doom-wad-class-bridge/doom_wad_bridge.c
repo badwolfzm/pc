@@ -1,34 +1,40 @@
 #include "doom_wad_bridge.h"
 #include <string.h>
 
-/* Explicitly single-open; avoids heap, host file access and opaque handles.
-   A future multi-WAD port must use separately accounted slots. */
+/* At most one live open, but each successful open has a distinct address.
+ * Non-reusable slots prevent stale wad_file_t* values from acquiring a
+ * later grant's authority. Slot exhaustion is an explicit, safe failure.
+ */
 #define BRIDGE_PATH_MAX 128u
+#define BRIDGE_MAX_LIFETIME_OPENS 64u
 static struct {
     char path[BRIDGE_PATH_MAX];
     void *ctx;
     wad_read_at reader;
     uint32_t bytes;
-    uint32_t generation;
     unsigned int granted;
 } grant;
-static struct {
+typedef struct {
     wad_file_t file;
     wad_stream stream;
-    uint32_t generation;
     unsigned int active;
-} opened;
+} bridge_handle;
+static bridge_handle handles[BRIDGE_MAX_LIFETIME_OPENS];
+static bridge_handle *current;
+static unsigned int used_handles;
 
 void warden_doom_wad_revoke(void) {
-    /* Fail closed: no subsequent reads after revocation. */
+    /* Fail closed on revoke, retaining all previously used handle addresses. */
     grant.granted = 0;
     grant.ctx = NULL;
     grant.reader = NULL;
     grant.bytes = 0;
     memset(grant.path, 0, sizeof grant.path);
-    ++grant.generation;
-    opened.active = 0;
-    wad_close(&opened.stream);
+    if (current) {
+        current->active = 0;
+        wad_close(&current->stream);
+        current = NULL;
+    }
 }
 
 int warden_doom_wad_grant(const char *path, void *ctx, wad_read_at reader,
@@ -39,7 +45,6 @@ int warden_doom_wad_grant(const char *path, void *ctx, wad_read_at reader,
     size_t n = 0;
     while (n < BRIDGE_PATH_MAX && path[n] != '\0') ++n;
     if (n == 0 || n == BRIDGE_PATH_MAX) return 0;
-    /* Never grant dot, parent-relative or path traversal aliases. */
     if (path[0] == '/' || path[0] == '.' || strchr(path, '/') ||
         strchr(path, '\\')) return 0;
     memcpy(grant.path, path, n + 1);
@@ -51,33 +56,36 @@ int warden_doom_wad_grant(const char *path, void *ctx, wad_read_at reader,
 }
 
 static wad_file_t *bridge_open(char *path) {
-    if (!path || !grant.granted || opened.active ||
+    if (!path || !grant.granted || current ||
+        used_handles == BRIDGE_MAX_LIFETIME_OPENS ||
         strcmp(path, grant.path) != 0) return NULL;
-    if (!wad_open(&opened.stream, grant.ctx, grant.reader, grant.bytes))
+    bridge_handle *next = &handles[used_handles];
+    if (!wad_open(&next->stream, grant.ctx, grant.reader, grant.bytes))
         return NULL;
-    opened.file.file_class = &warden_doom_wad_class;
-    opened.file.mapped = NULL;
-    opened.file.length = grant.bytes;
-    opened.generation = grant.generation;
-    opened.active = 1;
-    return &opened.file;
+    next->file.file_class = &warden_doom_wad_class;
+    next->file.mapped = NULL;
+    next->file.length = grant.bytes;
+    next->active = 1;
+    current = next;
+    ++used_handles; /* Never rewind, not even across revoke/regrant. */
+    return &next->file;
 }
 
 static void bridge_close(wad_file_t *f) {
-    if (!opened.active || f != &opened.file) return;
-    opened.active = 0;
-    wad_close(&opened.stream);
+    if (!current || f != &current->file || !current->active) return;
+    current->active = 0;
+    wad_close(&current->stream);
+    current = NULL;
 }
 
 static size_t bridge_read(wad_file_t *f, unsigned int off, void *dst,
                           size_t len) {
-    if (!opened.active || f != &opened.file || !grant.granted ||
-        opened.generation != grant.generation || (!dst && len)) return 0;
-    if (len == 0) return 0;
-    if (off > opened.stream.size || len > opened.stream.size - off)
-        return 0;
-    if (!wad_seek(&opened.stream, off) || !wad_read(&opened.stream, dst, len))
-        return 0;
+    if (!current || f != &current->file || !current->active ||
+        !grant.granted || (!dst && len)) return 0;
+    if (len == 0 || off > current->stream.size ||
+        len > current->stream.size - off) return 0;
+    if (!wad_seek(&current->stream, off) ||
+        !wad_read(&current->stream, dst, len)) return 0;
     return len;
 }
 

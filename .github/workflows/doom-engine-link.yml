@@ -1,0 +1,32 @@
+name: Genuine pinned Doom whole-engine Warden host link gate
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-engine-link/**'
+      - '.github/workflows/doom-engine-link.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-full-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify already merged Warden platform and WAD dependencies
+        run: |
+          test -f tools/doomgeneric-warden/doomgeneric_warden.c
+          test -f tools/doom-real-wfile-link/bridge_backend.c
+          make -C tools/doomgeneric-warden test freestanding
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -DWARDEN_DOOM_TEST \
+            -Itools/doomgeneric-warden/test \
+            tools/doomgeneric-warden/doomgeneric_warden.c \
+            tests/doomgeneric-adapter-negative/test_negative.c -o /tmp/doom-negative
+          /tmp/doom-negative
+      - name: Fetch pinned real upstream Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/genuine-doomgeneric
+          git -C /tmp/genuine-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/genuine-doomgeneric rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Build and link all real Doom engine source modules with Warden adapters
+        run: bash tools/doom-engine-link/run.sh /tmp/genuine-doomgeneric/doomgeneric

@@ -1,0 +1,34 @@
+name: Genuine Doom freestanding object link closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-link-gate/**'
+      - '.github/workflows/doom-native-link-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  freestanding-closure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit test fail-closed linker evidence parser
+        run: python3 -m unittest discover -s tools/doom-native-link-gate -p 'test_*.py' -v
+      - name: Fetch exact, unmodified upstream Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric-pinned
+          git -C /tmp/doomgeneric-pinned checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomgeneric-pinned rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Build genuine freestanding engine objects and Warden adapters and report missing services
+        run: |
+          python3 tools/doom-native-link-gate/gate.py \
+            --source /tmp/doomgeneric-pinned/doomgeneric \
+            --output target/doom-native-link-gate
+      - name: Archive native linkage diagnostic only (not boot proof)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-freestanding-link-report
+          path: target/doom-native-link-gate/gate.json
+          if-no-files-found: ignore

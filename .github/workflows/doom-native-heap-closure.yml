@@ -1,0 +1,39 @@
+name: Genuine freestanding Doom heap ABI partial link closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-heap-closure/**'
+      - '.github/workflows/doom-native-heap-closure.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  heap-closure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify integrated arena from merged main
+        run: |
+          test -f tools/doom-freestanding-arena/arena.c
+          test -f tools/doom-freestanding-arena/arena.h
+      - name: Validate heap closure contract tests
+        run: python3 -m unittest discover -s tools/doom-native-heap-closure -p 'test_*.py' -v
+      - name: Fetch exact original Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doomgeneric
+          git -C /tmp/pinned-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/pinned-doomgeneric rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile and partially link real upstream engine with Warden and heap
+        run: |
+          python3 tools/doom-native-heap-closure/close.py \
+            --source /tmp/pinned-doomgeneric/doomgeneric \
+            --output target/doom-native-heap-closure \
+            --arena-bytes 1048576
+      - name: Archive real object-link evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-heap-link-closure
+          path: target/doom-native-heap-closure/heap-closure.json
+          if-no-files-found: ignore

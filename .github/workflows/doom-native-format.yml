@@ -1,0 +1,43 @@
+name: Doom native bounded snprintf/vsnprintf genuine-engine closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-format/**'
+      - '.github/workflows/doom-native-format.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host glibc differential and UBSan tests
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all -Dsnprintf=warden_snprintf -Dvsnprintf=warden_vsnprintf -c tools/doom-native-format/doom_format.c -o /tmp/warden-format.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-format/test_format.c /tmp/warden-format.o -o /tmp/test-warden-format
+          /tmp/test-warden-format
+      - name: Symbol verifier negative-case tests
+        run: python3 -m unittest discover -s tools/doom-native-format -p 'test_*.py' -v
+      - name: Build independent freestanding provider
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-format/doom_format.c -o /tmp/doom-native-format.o
+          nm -P -g /tmp/doom-native-format.o
+      - name: Clone exact pinned upstream engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Link real Doom/Warden engine object and enforce exact two imports closed
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-format
+          ld -r -o target/doom-format/with-format.o target/doom-format/all-objects.o /tmp/doom-native-format.o
+          python3 tools/doom-native-format/verify.py target/doom-format/all-objects.o target/doom-format/with-format.o /tmp/doom-native-format.o target/doom-format/closure.json
+      - name: Archive actual link evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-native-format-closure
+          path: target/doom-format/closure.json
+          if-no-files-found: ignore

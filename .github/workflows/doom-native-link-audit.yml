@@ -1,0 +1,44 @@
+name: Genuine upstream Doom freestanding ET_REL size audit
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-link-audit/**'
+      - '.github/workflows/doom-native-link-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tool unit tests
+        run: python3 -m unittest discover -s tools/doom-native-link-audit -p 'test_*.py' -v
+      - name: Fetch exact upstream Doomgeneric source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-native-source
+          git -C /tmp/doom-native-source checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-native-source rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Real freestanding compile and partial link size report
+        run: python3 tools/doom-native-link-audit/audit.py --source /tmp/doom-native-source/doomgeneric --out target/doom-native-link-audit
+      - name: Verify merged Doom native-link gate is present
+        run: test -f tools/doom-native-link-gate/gate.py
+      - name: Build actual engine plus Warden adapter relocatable object
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom-native-source/doomgeneric --output target/doom-native-link-gate
+          python3 tools/doom-native-link-audit/audit_combined.py \
+            --combined target/doom-native-link-gate/all-objects.o \
+            --engine-report target/doom-native-link-audit/report.json \
+            --gate-report target/doom-native-link-gate/gate.json \
+            --out target/doom-native-link-audit/combined.json
+      - name: Save link audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-doom-freestanding-elf-audit
+          path: |
+            target/doom-native-link-audit/report.json
+            target/doom-native-link-audit/combined.json
+            target/doom-native-link-gate/gate.json
+          if-no-files-found: warn

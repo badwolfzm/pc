@@ -107,14 +107,38 @@ impl FrameAlloc {
         Some(f)
     }
     /// `n` physically contiguous zeroed frames; the start address.
+    ///
+    /// Reserve a whole span from the *fresh* bump region before changing any
+    /// allocator state. Reusing arbitrary free-list frames via `alloc()` is
+    /// not transactional: a non-adjacent frame or mid-request exhaustion
+    /// previously leaked frames and inflated `used`.
+    ///
+    /// This conservative path may refuse a request when only reusable
+    /// free-list frames remain, even if a contiguous run exists there.
+    /// A future recycling path must check an entire run before removing it.
     pub fn alloc_contiguous(&mut self, n: u64) -> Option<u64> {
-        let first = self.alloc()?;
-        for i in 1..n {
-            let f = self.alloc()?;
-            if f != first + i * PAGE {
-                return None;
-            }
+        if n == 0 {
+            return None;
         }
+        let bytes = n.checked_mul(PAGE)?;
+        let mut first = self.next;
+        if first >= self.skip.0 && first < self.skip.1 {
+            first = self.skip.1;
+        }
+        let mut end = first.checked_add(bytes)?;
+        // A fresh span must never overlap reserved boot-module frames.
+        if first < self.skip.0 && end > self.skip.0 {
+            first = self.skip.1;
+            end = first.checked_add(bytes)?;
+        }
+        if end > self.end {
+            return None;
+        }
+        let used = self.used.checked_add(n)?;
+        // The entire span is available. Commit accounting only once.
+        self.next = end;
+        self.used = used;
+        unsafe { ptr::write_bytes(first as *mut u8, 0, bytes as usize) };
         Some(first)
     }
 }

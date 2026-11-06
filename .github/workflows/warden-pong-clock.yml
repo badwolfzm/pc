@@ -1,0 +1,38 @@
+name: Native Warden Pong fixed-step physics and host clock
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/guest/pong/pong.c'
+      - 'tools/warden-pong-clock/**'
+      - '.github/workflows/warden-pong-clock.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 nasm binutils build-essential
+      - name: Install Warden Rust target
+        run: rustup target add x86_64-unknown-none
+      - name: Validate host-clock checker independently
+        run: python3 -m unittest discover -s tools/warden-pong-clock -p 'test_*.py' -v
+      - name: Build and run REAL Warden guest with independent monotonic host clock
+        run: |
+          timeout 240 python3 tools/warden-pong-clock/host_clock.py --wall-tolerance .40
+          python3 tests/game/check_pong_guest.py target/pong-clock-serial.log
+      - name: Preserve evidence from guest and host
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: warden-pong-fixed-step-clock
+          path: |
+            target/pong-clock-serial.log
+            target/pong-clock-serial.runner.txt
+            target/pong-screen.ppm
+          if-no-files-found: ignore

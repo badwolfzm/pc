@@ -1,0 +1,44 @@
+name: Real Doom single-thread errno and strtol native import closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-errno/**'
+      - '.github/workflows/doom-native-errno.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  errno-closure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test errno storage without overriding glibc
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -D__errno_location=warden___errno_location -c tools/doom-native-errno/errno.c -o /tmp/errno-test.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-errno/test_errno.c /tmp/errno-test.o -o /tmp/test-errno
+          /tmp/test-errno
+      - name: Positive/negative binary closure tests
+        run: python3 -m unittest discover -s tools/doom-native-errno -p 'test_*.py' -v
+      - name: Freestanding providers
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-errno/errno.c -o /tmp/native-errno.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-strtol/strtol.c -o /tmp/native-strtol.o
+          test -z "$(nm -g -u /tmp/native-errno.o)"
+      - name: Fetch pinned actual Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Verify genuine Doom freestanding object integration
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-errno
+          ld -r -o target/doom-errno/with-errno-strtol.o target/doom-errno/all-objects.o /tmp/native-errno.o /tmp/native-strtol.o
+          python3 tools/doom-native-errno/verify.py target/doom-errno/all-objects.o target/doom-errno/with-errno-strtol.o /tmp/native-errno.o /tmp/native-strtol.o target/doom-errno/closure.json
+      - name: Archive genuine-engine closure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-errno-strtol-closure
+          path: target/doom-errno/closure.json
+          if-no-files-found: ignore

@@ -14,12 +14,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Stage EXACT pinned, unmerged WAD class bridge dependency from PR 110
+      - name: Verify merged Warden WAD class bridge from checkout
         run: |
-          git fetch --quiet --depth=1 origin 5b026137266e79f8a0b519a08bec91a0cfbb957b
-          test "$(git rev-parse FETCH_HEAD)" = "5b026137266e79f8a0b519a08bec91a0cfbb957b"
-          git restore --source=FETCH_HEAD -- tools/doom-wad-class-bridge
           test -f tools/doom-wad-class-bridge/doom_wad_bridge.c
+          test -f tools/doom-wad-stream/wad_stream.c
       - name: Clone exact upstream Doom source
         run: |
           git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doomgeneric

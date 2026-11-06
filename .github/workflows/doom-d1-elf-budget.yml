@@ -1,0 +1,19 @@
+name: Doom D1 ELF preflight unit tests
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-elf-budget/**'
+      - '.github/workflows/doom-d1-elf-budget.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python stdlib unit checks
+        run: python3 -m unittest discover -s tools/doom-elf-budget -p 'test_*.py' -v
+      - name: Python syntax
+        run: python3 -m py_compile tools/doom-elf-budget/check.py tools/doom-elf-budget/test_check.py

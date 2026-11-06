@@ -19,6 +19,9 @@ jobs:
       - name: Accepted synthetic fixture
         run: |
           python3 tools/ordinary-game-memory-gate/check.py tools/ordinary-game-memory-gate/sample.json
+      - name: Verify synthetic physical-frame event trace
+        run: |
+          python3 tools/ordinary-game-memory-gate/frame_events.py tools/ordinary-game-memory-gate/sample-frame-events.json
       - name: Reject tampered and incomplete report
         run: |
           python3 - <<'PY'

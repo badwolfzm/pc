@@ -1,0 +1,22 @@
+name: Doom freestanding libc memory primitives
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-libc-primitives/**'
+      - '.github/workflows/doom-libc-primitives.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  primitive-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict host tests and freestanding symbol export
+        run: make -C tools/doom-libc-primitives test freestanding
+      - name: Undefined behavior checks
+        run: |
+          cd tools/doom-libc-primitives
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fno-builtin -fsanitize=undefined doom_libc.c test_primitives.c -o /tmp/doom-libc-ubsan
+          /tmp/doom-libc-ubsan

@@ -68,6 +68,20 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn('"valid": false', output.getvalue().lower())
 
+    def test_entry_in_zero_filled_executable_tail_rejected(self):
+        # p_memsz is larger than p_filesz. The entry points beyond source bytes.
+        self.bad(elf(filesz=1, memsz=4096, entry=0x400001))
+
+    def test_entry_within_file_backed_executable_bytes_accepted(self):
+        report = self.ok(elf(filesz=3, memsz=4096, entry=0x400002))
+        self.assertEqual(report["entry"], 0x400002)
+
+    def test_zero_file_size_executable_rejected(self):
+        self.bad(elf(filesz=0, memsz=4096))
+
+    def test_entry_at_file_backed_end_rejected(self):
+        self.bad(elf(filesz=2, memsz=4096, entry=0x400002))
+
     def test_valid_static_exec(self):
         report = self.ok(elf())
         self.assertEqual(report["load_page_rounded_bytes"], 4096)

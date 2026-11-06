@@ -15,10 +15,26 @@ static unsigned int frame_count;
 static unsigned int startup_frames;
 static unsigned int game_started;
 static unsigned int key_press_sent, key_release_sent;
+static unsigned int key_press_consumed, key_release_consumed;
 static uint64_t ticks;
 static uint64_t first_hash, last_hash;
 static uint8_t *wad;
 static size_t wad_len;
+
+/* Linker --wrap intercepts real upstream I_GetEvent -> DG_GetKey calls,
+ * forwarding to the *unaltered* Warden adapter and verifying delivery.
+ * The upstream engine must consume both key transitions to pass.
+ */
+extern int __real_DG_GetKey(int *pressed, unsigned char *key);
+int __wrap_DG_GetKey(int *pressed, unsigned char *key) {
+    int result = __real_DG_GetKey(pressed, key);
+    if (result && pressed && key && *key == 0xad) {
+        if (*pressed) ++key_press_consumed;
+        else ++key_release_consumed;
+    }
+    return result;
+}
+
 
 static int read_at(void *ctx, uint32_t off, void *dst, size_t n) {
     (void)ctx;
@@ -102,12 +118,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "frame deadline exhausted: %u frames\n", frame_count);
         return 1;
     }
-    if (jumped != 1 || frame_count < 10 || !key_press_sent || !key_release_sent || first_hash == last_hash) {
-        fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u down=%u up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent);
+    if (jumped != 1 || frame_count < 10 || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
+        fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
         return 1;
     }
-    printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
-           startup_frames, frame_count, key_press_sent, key_release_sent, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
+           startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, (unsigned long long)first_hash, (unsigned long long)last_hash);
     warden_doom_wad_revoke();
     free(wad);
     return 0;

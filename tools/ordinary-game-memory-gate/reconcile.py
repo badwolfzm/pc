@@ -18,6 +18,14 @@ NANOSECONDS_PER_MILLISECOND = 1_000_000
 def reconcile(snapshot, trace):
     snap = validate(snapshot)
     events = replay(trace)
+    if trace["schema_version"] == 3:
+        require(snapshot["schema_version"] == 2,
+                "v3 frame trace requires boot-bound snapshot v2")
+        require(snapshot["boot_id"] == trace["boot_id"],
+                "snapshot and frame trace belong to different boot IDs")
+    else:
+        require(snapshot["schema_version"] == 1,
+                "legacy frame traces require legacy snapshot schema")
     require(snapshot["guest_physical_capacity_bytes"] ==
             trace["guest_physical_capacity_bytes"], "trace and snapshot capacities disagree")
     require(snapshot["peak_total_bytes"] ==

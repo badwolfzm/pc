@@ -1,0 +1,17 @@
+name: Secure syscall mirror reference
+on:
+  pull_request:
+    paths:
+      - 'tools/secure-syscall-mirror/**'
+      - '.github/workflows/secure-syscall-mirror.yml'
+  push:
+    paths:
+      - 'tools/secure-syscall-mirror/**'
+      - '.github/workflows/secure-syscall-mirror.yml'
+jobs:
+  reference-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run fail-closed mirror tests
+        run: python3 -m unittest discover -s tools/secure-syscall-mirror -p 'test_*.py' -v

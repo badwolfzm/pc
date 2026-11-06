@@ -29,13 +29,18 @@ it does **not** use `demo.js` or the rainbow generator.
 ```sh
 # Terminal: WSL Ubuntu, NOT Windows cmd.exe.
 cd ~/warden/pc-web-console
-bash tools/warden-web-console/run_with_qemu.sh \
-  "$HOME/warden/pc-game-test/target/warden-game.mb32"
+bash tools/warden-web-console/run_with_qemu.sh
 ```
 
-Enter a new password (12+ characters), then visit **http://localhost:8787/**
-from your PC browser. The launcher stops its server and QEMU children on exit;
-a preexisting process bound to port 8787 is reported rather than killed.
+Enter a new password (12+ characters), then open the **exact localhost URL printed**
+by the launcher. It automatically chooses the first unused local TCP port in
+8787–8816, so an old server on 8787 does not block the test; existing processes
+are never terminated. The port is also passed to the QMP bridge. Set
+\`WARDEN_WEB_PORT=8787\` to require a specific port; if unavailable, the launcher
+fails with a diagnostic instead of overriding the server. By default the image
+is \`~/warden/pc-game-test/target/warden-game.mb32\`; an absolute kernel image
+path may be passed as the first argument. The launcher stops its server and
+QEMU child processes on exit;
 Use Ctrl+C to stop. Do not concurrently run the old rainbow demo.
 If the kernel image is missing, first build the G0 game probe in its own
 worktree. Passing the G0 image launches a synthetic Warden graphics test,

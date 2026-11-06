@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import copy
+import json
 import unittest
-from check import Invalid, validate
+from check import Invalid, validate, unique_pairs, reject_constant
 
 BASE = {"schema": 1, "source": "synthetic", "boot_id": "a" * 64,
         "complete": True, "vcpu_count": 1,
@@ -41,6 +42,17 @@ class InventoryTests(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(mutation=mutations.index(mutation)):
                 self.reject(mutation)
+
+    def test_duplicate_key_rejected(self):
+        with self.assertRaises(Invalid):
+            json.loads('{"a":1,"a":2}', object_pairs_hook=unique_pairs)
+
+    def test_nonfinite_json_rejected(self):
+        with self.assertRaises(Invalid):
+            json.loads('{"value":NaN}', parse_constant=reject_constant)
+
+    def test_boolean_schema_rejected(self):
+        self.reject(lambda d: d.update(schema=True))
 
     def test_sequential_helper_allowed(self):
         doc = copy.deepcopy(BASE)

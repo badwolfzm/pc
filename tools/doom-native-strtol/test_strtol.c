@@ -26,7 +26,7 @@ int main(void){
     for(unsigned i=0;i<sizeof(samples)/sizeof(samples[0]);i++)
       for(unsigned j=0;j<sizeof(bases)/sizeof(bases[0]);j++)check(samples[i],bases[j]);
     char *end=NULL;
-    errno=0;assert(strtol("123",&end,1)==0&&errno==EINVAL&&end==(char*)"123"); /* next verify with array to avoid literal pooling */
+    char badbase[]="123"; errno=0;assert(strtol(badbase,&end,1)==0&&errno==EINVAL&&end==badbase);
     char invalid[]="x"; errno=0;assert(strtol(invalid,&end,37)==0&&errno==EINVAL&&end==invalid);
     puts("PASS strtol C-locale/base/overflow/endptr against host strtoll");
     return 0;

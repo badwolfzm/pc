@@ -40,6 +40,36 @@ class ReconcileTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             reconcile(snap, trace)
 
+    def test_v2_initial_kernel_reservation_matches_snapshots(self):
+        snap, trace = fixture()
+        trace["schema_version"] = 2
+        trace["capture_started_empty"] = False
+        trace["capture_start_ns"] = 0
+        trace["initial_frames"] = [{"frame_id": 10, "kind": "paging"}]
+        for sample in snap["samples"]:
+            sample["components"]["paging"] = 4096
+            sample["total_bytes"] += 4096
+        snap["peak_total_bytes"] += 4096
+        result = reconcile(snap, trace)
+        self.assertTrue(result["reports_consistent"])
+        self.assertEqual(result["peak_tracked_frame_bytes"], 4 * 4096)
+
+    def test_v2_unreported_reservation_fails(self):
+        snap, trace = fixture()
+        trace["schema_version"] = 2
+        trace["capture_started_empty"] = False
+        trace["capture_start_ns"] = 0
+        trace["initial_frames"] = [{"frame_id": 10, "kind": "paging"}]
+        self.bad(snap, trace)
+
+    def test_v2_sample_before_capture_start_fails(self):
+        snap, trace = fixture()
+        trace["schema_version"] = 2
+        trace["capture_started_empty"] = False
+        trace["capture_start_ns"] = 1
+        trace["initial_frames"] = [{"frame_id": 10, "kind": "paging"}]
+        self.bad(snap, trace)
+
     def test_valid_full_trace(self):
         snap, trace = fixture()
         result = reconcile(snap, trace)

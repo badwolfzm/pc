@@ -20,12 +20,12 @@ jobs:
           git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/warden-upstream-doom
           git -C /tmp/warden-upstream-doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
           test "$(git -C /tmp/warden-upstream-doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
-      - name: Stage exact pinned PR225 format implementation (not PR218)
+      - name: Stage pinned merged PR225 formatter from main history (not PR218)
         run: |
-          git fetch -q origin refs/heads/agent/doom-native-bounded-format-20261106
-          test "$(git rev-parse FETCH_HEAD)" = "a3529e43aff95423d0f7c12d78e33ab9e55e3fda"
+          git fetch -q origin main
+          git merge-base --is-ancestor 4246bde3e786f1c51e3b047292a592cb5c057bf1 FETCH_HEAD
           mkdir -p target/doom-runtime-bundle/staged
-          git show a3529e43aff95423d0f7c12d78e33ab9e55e3fda:tools/doom-native-format/doom_format.c > target/doom-runtime-bundle/staged/format.c
+          git show 4246bde3e786f1c51e3b047292a592cb5c057bf1:tools/doom-native-format/doom_format.c > target/doom-runtime-bundle/staged/format.c
       - name: Compile genuine Doom + all merged CRT providers and one pinned candidate
         run: |
           python3 tools/doom-native-runtime-bundle/compose.py \

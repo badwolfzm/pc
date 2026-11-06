@@ -24,13 +24,23 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(rows[0]["classification"], "dynamic-or-unparsed")
     def test_literal_precision_and_percent(self):
         rows = m.scan_source('fprintf(stderr, "%% %-5.2s %05d", s, i);', "a.c")
-        self.assertEqual(rows[0]["problems"], [])
+        self.assertEqual(rows[0]["problems"], ["unimplemented-stdio-function"])
     def test_trailing_percent(self):
         rows = m.scan_source('printf("bad%");', "a.c")
         self.assertIn("malformed-percent", rows[0]["problems"])
     def test_star_width_explicitly_unverified(self):
         rows = m.scan_source('printf("%*d", width, value);', "a.c")
         self.assertIn("dynamic-width-or-precision", rows[0]["problems"])
+    def test_missing_fprintf_runtime_flagged_even_with_supported_format(self):
+        rows = m.scan_source('fprintf(stderr, "%d", 3);', "a.c")
+        self.assertIn("unimplemented-stdio-function", rows[0]["problems"])
+        self.assertNotIn("unsupported-d", rows[0]["problems"])
+    def test_merged_printf_runtime_not_flagged_for_supported_format(self):
+        rows = m.scan_source('printf("%d", 3);', "a.c")
+        self.assertEqual(rows[0]["problems"], [])
+    def test_dynamic_vfprintf_reports_missing_abi_and_dynamic_expression(self):
+        rows = m.scan_source('vfprintf(stderr, fmt, ap);', "a.c")
+        self.assertEqual(set(rows[0]["problems"]), {"unimplemented-stdio-function", "manual-review-required"})
     def test_nested_nested_string_not_literal(self):
         rows = m.scan_source('printf((format), 10);', "a.c")
         self.assertEqual(rows[0]["classification"], "dynamic-or-unparsed")

@@ -1,0 +1,42 @@
+name: Real native Warden QEMU host RSS observation at 512MiB
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary512-qemu-host-rss/**'
+      - '.github/workflows/ordinary512-qemu-host-rss.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-qemu-host-rss:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native Warden QEMU build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 nasm binutils build-essential
+          rustup target add x86_64-unknown-none
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/ordinary512-qemu-host-rss -p 'test_*.py' -v
+      - name: Configure one-vCPU 512 MiB native Warden guest
+        run: python3 tools/ordinary512-native-qemu/prepare.py tests/kernel/pong.sh --manifest target/native512-profile.json
+      - name: Run real Warden Pong and sample QEMU host RSS
+        run: |
+          timeout 240 python3 tools/ordinary512-qemu-host-rss/measure.py --manifest target/native512-profile.json --log target/native512-host-rss-serial.log --report target/native512-host-rss.json
+          python3 tests/game/check_pong_guest.py target/native512-host-rss-serial.log
+          python3 tools/ordinary512-native-qemu/evidence.py target/native512-host-rss-serial.log target/native512-profile.json target/native512-guest-evidence.json
+          python3 -c 'import json; x=json.load(open("target/native512-host-rss.json")); assert x["samples"] >= 2 and x["qemu_host_peak_sampled_rss_bytes"] > 0 and x["child_exit_code"] == 0'
+      - name: Preserve real host and guest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-warden-qemu-host-rss
+          path: |
+            target/native512-profile.json
+            target/native512-host-rss-serial.log
+            target/native512-host-rss.json
+            target/native512-guest-evidence.json
+            target/qemu-rss-screen.ppm
+          if-no-files-found: ignore

@@ -117,6 +117,21 @@ class PreflightTests(unittest.TestCase):
         self.bad(elf(second=(0x6474e551, 7, 0, 0, 0, 0, 0, 0)))
     def test_overlap_rejected(self):
         self.bad(elf(second=(1, 4, 0x1000, 0x400800, 0x400800, 1, 4096, 1)))
+    def test_page_alias_rx_and_read_only_rejected(self):
+        # Disjoint byte ranges share one 4 KiB page, but the first wants RX
+        # and the second read-only; a single mapping cannot satisfy both.
+        second = (1, 4, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)
+        self.bad(elf(memsz=0x800, second=second))
+
+    def test_page_alias_read_only_and_writable_rejected(self):
+        second = (1, 6, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)
+        self.bad(elf(segflags=4, memsz=0x800, second=second))
+
+    def test_distinct_pages_with_distinct_permissions_allowed(self):
+        second = (1, 6, 0x1000, 0x600000, 0x600000, 1, 0x800, 0x1000)
+        report = self.ok(elf(memsz=0x800, second=second))
+        self.assertEqual(report["load_segments"], 2)
+
     def test_page_alias_wx_rejected(self):
         # No byte overlap; executable and writable mappings alias one 4 KiB frame.
         second = (1, 6, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)

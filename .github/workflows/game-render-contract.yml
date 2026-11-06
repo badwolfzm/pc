@@ -1,0 +1,21 @@
+name: Game render contract oracle
+on:
+  pull_request:
+    paths:
+      - 'tests/game-frame-contract/**'
+      - 'tools/game-frame-probe/render.c'
+      - 'tools/game-frame-probe/render.h'
+      - '.github/workflows/game-render-contract.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  renderer-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict host contract
+        run: make -C tests/game-frame-contract test
+      - name: ASan and UBSan
+        run: make -C tests/game-frame-contract sanitize

@@ -1,0 +1,22 @@
+name: Warden freestanding Doom WAD core
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-wad-core/**'
+      - '.github/workflows/warden-wad-core.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wad-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict host tests and freestanding compile
+        run: make -C tools/doom-wad-core test freestanding
+      - name: ASan and UBSan tests
+        run: |
+          cd tools/doom-wad-core
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined wad.c test_wad.c -o test-sanitized
+          ./test-sanitized

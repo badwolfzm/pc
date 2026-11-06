@@ -1,0 +1,29 @@
+name: Doom independent stale-handle regression
+on:
+  push:
+    branches:
+      - agent/doom-wad-stale-handle-regression-20261106
+  pull_request:
+    paths:
+      - 'tests/doom-wad-stale-handle/**'
+      - 'tools/doom-wad-class-bridge/**'
+      - 'tools/doom-wad-stream/**'
+      - '.github/workflows/doom-wad-stale-handle-independent.yml'
+  workflow_dispatch:
+jobs:
+  stale-handle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile independent regression with UBSan
+        run: |
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \
+            -Itools/doom-wad-class-bridge/test \
+            -Itools/doom-wad-class-bridge \
+            -Itools/doom-wad-stream \
+            tools/doom-wad-class-bridge/doom_wad_bridge.c \
+            tools/doom-wad-stream/wad_stream.c \
+            tests/doom-wad-stale-handle/test_stale.c \
+            -o /tmp/warden-stale-test
+      - name: Require old WAD handles cannot read or close new grants
+        run: /tmp/warden-stale-test

@@ -1,0 +1,22 @@
+name: One-core 512 MiB real Linux host process sampler
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary-pc-host-sampler/**'
+      - '.github/workflows/ordinary-pc-host-sampler.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sampler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host process parsing, real CPU pinning and RSS/timeout tests
+        run: python3 -m unittest discover -s tools/ordinary-pc-host-sampler -p 'test_*.py' -v
+      - name: Run reproducible host resource sample
+        run: |
+          CPU=$(python3 -c 'import os; print(min(os.sched_getaffinity(0)))')
+          python3 tools/ordinary-pc-host-sampler/sample.py --cpu "$CPU" --budget-mib 512 --timeout-sec 4 -- \
+            python3 -c 'import time; a=bytearray(32*1024*1024); time.sleep(.25)'

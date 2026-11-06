@@ -4,7 +4,9 @@ from join import EXPECTED, PROTECTED, symbols, verify, verify_runtime_report
 BASE = set(EXPECTED) | set(PROTECTED) | {'printf', 'doom_missing'}
 AFTER = BASE - EXPECTED
 EXTRAS = [('entry', {'_start'}, {'exit'}), ('exit', {'exit'}, set()),
-          ('file', set(EXPECTED - {'exit'}), set())]
+          ('file', {'fopen', 'fclose', 'fread', 'fseek', 'ftell'}, set()),
+          ('console', {'printf', 'puts'}, {'vsnprintf'}),
+          ('no_shell', {'system'}, {'__errno_location'})]
 
 
 class JoinTests(unittest.TestCase):
@@ -66,6 +68,10 @@ class JoinTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify_runtime_report(runtime, scanned)
 
+    def test_no_shell_is_exactly_one_provider(self):
+        with self.assertRaises(ValueError):
+            verify(BASE, AFTER | {'system'}, set(), EXTRAS)
+
     def test_nm_parse(self):
         self.assertEqual(symbols('_start T 0 12\nfopen U\n'), ({'_start'}, {'fopen'}))
 
@@ -78,7 +84,7 @@ class JoinTests(unittest.TestCase):
 
     def test_unsafe_host_api_closed(self):
         with self.assertRaises(ValueError):
-            verify(BASE, AFTER - {'system'}, set(), EXTRAS)
+            verify(BASE, AFTER - {'remove'}, set(), EXTRAS)
 
     def test_new_import(self):
         with self.assertRaises(ValueError):

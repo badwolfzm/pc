@@ -10,8 +10,8 @@ from pathlib import Path
 import subprocess
 
 FILE_APIS = frozenset({'fopen', 'fclose', 'fread', 'fseek', 'ftell'})
-EXPECTED = FILE_APIS | {'exit'}
-PROTECTED = frozenset({'system', 'fwrite', 'remove', 'rename'})
+EXPECTED = FILE_APIS | {'exit', 'printf', 'puts', 'system'}
+PROTECTED = frozenset({'fwrite', 'remove', 'rename'})
 REQUIRED_ARENA = 8 * 1024 * 1024
 REQUIRED_ZONE = 6 * 1024 * 1024
 
@@ -100,8 +100,11 @@ def call(cmd):
     return result.stdout
 
 
-def run(runtime, runtime_report, output, entry, exit_source, file_source, scanner_report=None):
-    for file in (runtime, entry, exit_source, file_source):
+def run(runtime, runtime_report, output, entry, exit_source, file_source, scanner_report=None,
+        console_source=None, no_shell_source=None):
+    if console_source is None or no_shell_source is None:
+        raise ValueError('missing canonical merged console and no-shell providers')
+    for file in (runtime, entry, exit_source, file_source, console_source, no_shell_source):
         if not file.is_file():
             raise ValueError('missing required input: ' + str(file))
     if not runtime_report.is_file():
@@ -119,7 +122,8 @@ def run(runtime, runtime_report, output, entry, exit_source, file_source, scanne
     objects = []
     flags = ['-std=c11', '-O2', '-ffreestanding', '-fno-builtin',
              '-fno-stack-protector', '-fno-pie', '-fno-pic']
-    for name, source in [('entry', entry), ('exit', exit_source), ('file', file_source)]:
+    for name, source in [('entry', entry), ('exit', exit_source), ('file', file_source),
+                         ('console', console_source), ('no_shell', no_shell_source)]:
         obj = output / (name + '.o')
         call(['cc', *flags, '-c', str(source), '-o', str(obj)])
         defs, missing = inspect(obj)
@@ -135,7 +139,8 @@ def run(runtime, runtime_report, output, entry, exit_source, file_source, scanne
         'kind': 'ET_REL diagnostic; NOT executable or Warden guest execution',
         'input_sha256': {name: hashlib.sha256(p.read_bytes()).hexdigest()
                          for name, p in [('runtime', runtime), ('entry', entry),
-                                         ('exit', exit_source), ('file', file_source)]},
+                                         ('exit', exit_source), ('file', file_source),
+                                         ('console', console_source), ('no_shell', no_shell_source)]},
         'combined_sha256': hashlib.sha256(combined.read_bytes()).hexdigest(),
         'removed_imports': closed,
         'remaining_imports': sorted(after),
@@ -156,11 +161,14 @@ if __name__ == '__main__':
     p.add_argument('--output', required=True, type=Path)
     p.add_argument('--entry', default='tools/doom-native-entry/entry.c', type=Path)
     p.add_argument('--exit-source', default='tools/doom-native-safe-exit/exit.c', type=Path)
+    p.add_argument('--console-source', default='tools/doom-native-console/console.c', type=Path)
+    p.add_argument('--no-shell-source', default='tools/doom-native-no-shell/no_shell.c', type=Path)
     p.add_argument('--file-source', required=True, type=Path,
                    help='exact source from reviewed PR #264; not a host FILE stub')
     args = p.parse_args()
     try:
         print(json.dumps(run(args.runtime_object, args.runtime_report, args.output, args.entry,
-                             args.exit_source, args.file_source, args.scanner_report), sort_keys=True))
+                             args.exit_source, args.file_source, args.scanner_report,
+                             args.console_source, args.no_shell_source), sort_keys=True))
     except (OSError, RuntimeError, ValueError) as exc:
         p.error(str(exc))

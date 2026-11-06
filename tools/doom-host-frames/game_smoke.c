@@ -15,6 +15,7 @@ static jmp_buf completed;
 static unsigned int frame_count;
 static unsigned int startup_frames;
 static unsigned int game_started;
+static int no_input_control;
 static unsigned int key_press_sent, key_release_sent;
 static unsigned int key_press_consumed, key_release_consumed;
 static unsigned int level_frames, level_player_frames;
@@ -59,6 +60,7 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
     case 60: return (uint64_t)320 | ((uint64_t)240 << 16);
     case 63: return ++ticks; /* monotonic 10ms clock, synthetic host-time */
     case 62:
+        if (no_input_control) return 0;
         /* PS/2 set-1 up-arrow press, then release. The actual Warden
          * DG_GetKey callback decodes these into Doom key semantics.
          */
@@ -105,7 +107,10 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
     }
 }
 int main(int argc, char **argv) {
-    if (argc != 2) { fprintf(stderr, "usage: %s DOOM1.WAD\n", argv[0]); return 2; }
+    if (argc != 2 && !(argc == 3 && strcmp(argv[2], "--no-input") == 0)) {
+        fprintf(stderr, "usage: %s DOOM1.WAD [--no-input]\n", argv[0]); return 2;
+    }
+    no_input_control = (argc == 3);
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror("fopen"); return 2; }
     if (fseek(f, 0, SEEK_END) || (long)(wad_len = (size_t)ftell(f)) < 12 ||
@@ -132,13 +137,31 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "DOOM host game-state diagnostic: gamestate=%d level_frames=%u player_frames=%u xy_start=(%d,%d) xy_end=(%d,%d)\n",
             (int)gamestate, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y);
-    if (jumped != 1 || frame_count < 10 || gamestate != GS_LEVEL || level_frames < 10 || level_player_frames < 10 ||
-        (level_initial_x == level_last_x && level_initial_y == level_last_y) || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
-        fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
+    const int moved = level_initial_x != level_last_x || level_initial_y != level_last_y;
+    const int common_ok = jumped == 1 && frame_count == 10 && gamestate == GS_LEVEL
+        && level_frames == 10 && level_player_frames == 10;
+    if (!common_ok) {
+        fprintf(stderr, "FAIL actual-level gate: exit=%d gameplay=%u level_frames=%u player_frames=%u\n",
+                jumped, frame_count, level_frames, level_player_frames);
         return 1;
     }
-    printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u level_frames=%u player_moved=1 first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
-           startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, level_frames, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    if (no_input_control) {
+        if (moved || key_press_sent || key_release_sent || key_press_consumed || key_release_consumed) {
+            fprintf(stderr, "FAIL no-input control: player moved=%d, input sent/consumed=%u,%u,%u,%u\n",
+                    moved, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
+            return 1;
+        }
+        printf("PASS real Doom no-input control frames=%u player_stationary=1 position=(%d,%d) first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
+               frame_count, level_initial_x, level_initial_y, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    } else {
+        if (!moved || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
+            fprintf(stderr, "FAIL gameplay input/movement gate: moved=%d sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n",
+                    moved, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
+            return 1;
+        }
+        printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u level_frames=%u player_moved=1 first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
+               startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, level_frames, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    }
     warden_doom_wad_revoke();
     free(wad);
     return 0;

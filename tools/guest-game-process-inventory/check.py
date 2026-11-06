@@ -64,6 +64,17 @@ def validate(doc):
             "game_pid": next(iter(game_pids)), "events_checked": len(events),
             "limitations": "self-reported inventory; not independently authenticated guest telemetry or FPS/RAM measurement"}
 
+def unique_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise Invalid(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+def reject_constant(value):
+    raise Invalid(f"nonfinite JSON number: {value}")
+
 def main(argv):
     if len(argv) != 2:
         print("usage: check.py REPORT.json", file=sys.stderr)
@@ -73,11 +84,11 @@ def main(argv):
         with path.open("rb") as f:
             raw = f.read(LIMIT + 1)
         require(len(raw) <= LIMIT, "report exceeds 1 MiB")
-        doc = json.loads(raw)
+        doc = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
         result = validate(doc)
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (Invalid, OSError, ValueError, UnicodeError) as e:
+    except (Invalid, OSError, ValueError, UnicodeError, RecursionError) as e:
         print(json.dumps({"status": "fail", "reason": str(e)}), file=sys.stderr)
         return 1
 

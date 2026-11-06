@@ -27,6 +27,18 @@ class Frames(unittest.TestCase):
         with self.assertRaises(FrameError):
             decode(len(raw).to_bytes(4, "big") + raw)
 
+    def test_invalid_unicode_payload(self):
+        with self.assertRaises(FrameError):
+            encode("offer", "n", "j", "\\ud800")
+
+    def test_invalid_kind_type(self):
+        with self.assertRaises(FrameError):
+            encode([], "n", "j", "")
+
+    def test_payload_type(self):
+        with self.assertRaises(FrameError):
+            encode("offer", "n", "j", {"unexpected": "object"})
+
     def test_invalid_ids(self):
         for node in ("", "../x", "a" * 65, "with space"):
             with self.assertRaises(FrameError):

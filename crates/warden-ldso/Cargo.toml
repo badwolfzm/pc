@@ -1,0 +1,8 @@
+[package]
+name = "warden-ldso"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "Bounded read-only x86-64 ELF dynamic metadata parser for Warden"
+
+[workspace]

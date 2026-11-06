@@ -1,0 +1,17 @@
+name: Ordinary PC 512 MiB total memory evidence contract
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary512-envelope/**'
+      - '.github/workflows/ordinary512-envelope.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run total physical memory budget contract tests
+        run: python3 -m unittest discover -s tools/ordinary512-envelope -p 'test_*.py' -v

@@ -70,6 +70,44 @@ class ReconcileTests(unittest.TestCase):
         trace["initial_frames"] = [{"frame_id": 10, "kind": "paging"}]
         self.bad(snap, trace)
 
+    def test_v3_same_boot_and_sequenced_trace(self):
+        snap, trace = fixture()
+        boot_id = "c" * 64
+        snap["schema_version"] = 2
+        snap["boot_id"] = boot_id
+        trace["schema_version"] = 3
+        trace["boot_id"] = boot_id
+        trace["capture_started_empty"] = False
+        trace["capture_start_ns"] = 0
+        trace["initial_frames"] = []
+        for i, event in enumerate(trace["events"]):
+            event["sequence"] = i
+        self.assertTrue(reconcile(snap, trace)["reports_consistent"])
+
+    def test_v3_cross_boot_rejected(self):
+        snap, trace = fixture()
+        snap["schema_version"] = 2
+        snap["boot_id"] = "c" * 64
+        trace["schema_version"] = 3
+        trace["boot_id"] = "d" * 64
+        trace["capture_started_empty"] = False
+        trace["capture_start_ns"] = 0
+        trace["initial_frames"] = []
+        for i, event in enumerate(trace["events"]):
+            event["sequence"] = i
+        self.bad(snap, trace)
+
+    def test_v3_legacy_snapshot_rejected(self):
+        snap, trace = fixture()
+        trace["schema_version"] = 3
+        trace["boot_id"] = "e" * 64
+        trace["capture_started_empty"] = False
+        trace["capture_start_ns"] = 0
+        trace["initial_frames"] = []
+        for i, event in enumerate(trace["events"]):
+            event["sequence"] = i
+        self.bad(snap, trace)
+
     def test_valid_full_trace(self):
         snap, trace = fixture()
         result = reconcile(snap, trace)

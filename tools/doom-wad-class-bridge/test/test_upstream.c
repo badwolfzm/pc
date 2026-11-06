@@ -34,8 +34,20 @@ int main(void) {
     assert(W_Read(f, 0, output, 1) == 0);
     f = W_OpenFile(allowed);
     assert(f != NULL);
+    wad_file_t *stale = f;
     warden_doom_wad_revoke();
-    assert(W_Read(f, 0, output, 1) == 0);
-    puts("PASS: genuine upstream Doomgeneric w_file.c links to bounded Warden read backend");
+    assert(W_Read(stale, 0, output, 1) == 0);
+    /* Exercise the genuine upstream W_OpenFile/W_Read/W_CloseFile dispatch
+       after revocation: an old pointer must not alias a new live grant. */
+    assert(warden_doom_wad_grant(allowed, NULL, read_at, sizeof wad));
+    wad_file_t *fresh = W_OpenFile(allowed);
+    assert(fresh != NULL && fresh != stale);
+    assert(W_Read(stale, 0, output, 1) == 0);
+    W_CloseFile(stale);
+    assert(W_Read(fresh, 0, output, 12) == 12);
+    assert(memcmp(output, wad, 12) == 0);
+    W_CloseFile(fresh);
+    assert(W_Read(fresh, 0, output, 1) == 0);
+    puts("PASS: genuine upstream Doomgeneric W_OpenFile preserves stale-handle isolation");
     return 0;
 }

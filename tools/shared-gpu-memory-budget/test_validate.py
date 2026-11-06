@@ -47,6 +47,12 @@ class BudgetTests(unittest.TestCase):
     def test_nonfinite(self):
         self.assert_reject(game_mib=float("nan"))
 
+    def test_huge_finite_value(self):
+        self.assert_reject(game_mib=1e308)
+
+    def test_huge_integer_value(self):
+        self.assert_reject(game_mib=10**400)
+
     def test_booleans(self):
         self.assert_reject(vcpus=True)
 

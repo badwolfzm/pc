@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed dual-run Doom host test evidence gate.
+"""Fail-closed controlled-direction Doom host test evidence gate.
 
 Only host-side mocked Warden syscalls; does not authenticate its log producer.
 """
@@ -56,7 +56,7 @@ def extract(log, expected_mode):
         raise Rejected("negative input event count")
     return values
 
-def compare(control_log, input_log):
+def compare(control_log, input_log, reverse_log=None):
     a, b = extract(control_log, "control"), extract(input_log, "intervention")
     for key in ("start_x", "start_y", "first_hash"):
         if a[key] != b[key]:
@@ -70,8 +70,22 @@ def compare(control_log, input_log):
         raise Rejected("input did not produce player displacement")
     if b["first_hash"] == b["last_hash"]:
         raise Rejected("intervention did not alter framebuffer")
-    return {
-        "schema": "doom-host-controlled-input-v1",
+    reverse = extract(reverse_log, "reverse") if reverse_log is not None else None
+    if reverse is not None:
+        for key in ("start_x", "start_y", "first_hash"):
+            if a[key] != reverse[key]:
+                raise Rejected("reverse differs from control starting conditions: " + key)
+        for key in ("pressed", "released", "consumed_down", "consumed_up"):
+            if reverse[key] != 1:
+                raise Rejected("reverse input not consumed: " + key)
+        forward_dx = b["end_x"] - b["start_x"]
+        reverse_dx = reverse["end_x"] - reverse["start_x"]
+        if forward_dx <= 0 or reverse_dx >= 0:
+            raise Rejected("forward/reverse movement lacks opposite X directions")
+        if reverse["first_hash"] == reverse["last_hash"]:
+            raise Rejected("reverse input did not alter framebuffer")
+    result = {
+        "schema": "doom-host-controlled-directions-v2" if reverse else "doom-host-controlled-input-v1",
         "scope": "actual upstream Doom/Freedoom running on Linux host with Warden callback mock; NOT Warden guest or FPS",
         "control": a, "intervention": b,
         "player_displacement_fixed_units": {
@@ -82,20 +96,30 @@ def compare(control_log, input_log):
         "both_runs_in_level": True,
         "input_consumed_by_upstream": True
     }
+    if reverse:
+        result["reverse"] = reverse
+        result["reverse_displacement_fixed_units"] = {
+            "dx": reverse["end_x"] - reverse["start_x"],
+            "dy": reverse["end_y"] - reverse["start_y"],
+        }
+        result["opposite_direction_control_verified"] = True
+    return result
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("control", type=Path)
     p.add_argument("intervention", type=Path)
     p.add_argument("output", type=Path)
+    p.add_argument("reverse", type=Path, nargs="?")
     a = p.parse_args(argv)
-    if a.control.resolve() == a.intervention.resolve():
+    if len({x.resolve() for x in (a.control, a.intervention, a.reverse) if x is not None}) != (3 if a.reverse else 2):
         print("DOOM EVIDENCE REJECTED: same file twice", file=sys.stderr)
         return 1
     try:
-        if a.control.stat().st_size > MAX_LOG or a.intervention.stat().st_size > MAX_LOG:
+        if any(x.stat().st_size > MAX_LOG for x in (a.control, a.intervention, a.reverse) if x is not None):
             raise Rejected("input log too large")
-        result = compare(a.control.read_text(), a.intervention.read_text())
+        result = compare(a.control.read_text(), a.intervention.read_text(),
+                         a.reverse.read_text() if a.reverse else None)
         a.output.parent.mkdir(parents=True, exist_ok=True)
         a.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         print("PASS verified controlled native-engine host input/movement evidence; NOT Warden guest")

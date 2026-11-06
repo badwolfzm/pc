@@ -15,23 +15,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Unit tests for duplicate definitions and import boundary
         run: python3 -m unittest discover -s tools/doom-unique-provider-gate -p 'test_*.py' -v
-      - name: Pin merged PR 177 actual two-function source
+      - name: Verify four canonical runtime providers from merged main
         run: |
-          git fetch --quiet --depth=1 origin 254b941d4c76e7dd91fb21354b1679f9291a74ab
-          test "$(git rev-parse FETCH_HEAD)" = 254b941d4c76e7dd91fb21354b1679f9291a74ab
-          git show FETCH_HEAD:tools/doom-pure-crt-symbols/pure.c > /tmp/pure-merged.c
-          cmp -s /tmp/pure-merged.c tools/doom-pure-crt-symbols/pure.c
-      - name: Stage exact unmerged candidate components only in temporary CI checkout
-        run: |
-          git fetch --quiet --depth=1 origin 6d6237735fad9b0f01f5e7e0064656560df3fc31
-          test "$(git rev-parse FETCH_HEAD)" = 6d6237735fad9b0f01f5e7e0064656560df3fc31
-          git restore --source=FETCH_HEAD -- tools/doom-mini-crt/mini_extra.c
-          git fetch --quiet --depth=1 origin e0b20c35a73a6e590c0b8dbe62910342f3d07527
-          test "$(git rev-parse FETCH_HEAD)" = e0b20c35a73a6e590c0b8dbe62910342f3d07527
-          git restore --source=FETCH_HEAD -- tools/doom-native-heap-closure/heap_alias.c
-          git fetch --quiet --depth=1 origin 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
-          test "$(git rev-parse FETCH_HEAD)" = 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
-          git restore --source=FETCH_HEAD -- tools/doom-freestanding-arena/arena.c tools/doom-freestanding-arena/arena.h
+          test -f tools/doom-pure-crt-symbols/pure.c
+          test -f tools/doom-mini-crt/mini_extra.c
+          test -f tools/doom-native-heap-closure/heap_alias.c
+          test -f tools/doom-freestanding-arena/arena.c
+          test -f tools/doom-freestanding-arena/arena.h
       - name: Fetch exactly pinned upstream Doom engine
         run: |
           git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-unique-upstream

@@ -46,7 +46,7 @@ def validate(report):
 
 
 def classify(sym):
-    if sym in HOST or sym.startswith(("__libc_", "__*_chk")):
+    if sym in HOST or (sym.startswith("__libc_") or (sym.startswith("__") and sym.endswith("_chk"))):
         return "privileged_host_boundary", "Require reviewed Warden capability mediation or safe removal; no host passthrough"
     if sym in ALLOC:
         return "bounded_memory", "Use independently reviewed bounded guest heap with real memory accounting"

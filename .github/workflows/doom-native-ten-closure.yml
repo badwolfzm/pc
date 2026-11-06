@@ -1,0 +1,42 @@
+name: Genuine Doom ten-symbol freestanding partial linker integration
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-ten-closure/**'
+      - '.github/workflows/doom-native-ten-closure.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  combined-closure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit-test exact-symbol closure and security-sensitive import preservation
+        run: python3 -m unittest discover -s tools/doom-native-ten-closure -p 'test_*.py' -v
+      - name: Stage exact reviewed component snapshots in disposable checkout
+        run: |
+          git fetch --quiet --depth=1 origin 23c4282a6ffaab5c8782fd1230a991b574132dfb
+          test "$(git rev-parse FETCH_HEAD)" = 23c4282a6ffaab5c8782fd1230a991b574132dfb
+          git restore --source=FETCH_HEAD -- tools/doom-pure-crt-symbols/pure.c
+          git fetch --quiet --depth=1 origin e0b20c35a73a6e590c0b8dbe62910342f3d07527
+          test "$(git rev-parse FETCH_HEAD)" = e0b20c35a73a6e590c0b8dbe62910342f3d07527
+          git restore --source=FETCH_HEAD -- tools/doom-native-heap-closure/heap_alias.c
+          git fetch --quiet --depth=1 origin 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
+          test "$(git rev-parse FETCH_HEAD)" = 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
+          git restore --source=FETCH_HEAD -- tools/doom-freestanding-arena/arena.c tools/doom-freestanding-arena/arena.h
+      - name: Fetch exact unmodified upstream Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric-ten-pin
+          git -C /tmp/doomgeneric-ten-pin checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomgeneric-ten-pin rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Actual combined freestanding object link and imported-symbol assertion
+        run: python3 tools/doom-native-ten-closure/check.py --source /tmp/doomgeneric-ten-pin/doomgeneric --output target/doom-native-ten-closure
+      - name: Preserve machine-readable real source integration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-ten-import-closure
+          path: target/doom-native-ten-closure/report.json
+          if-no-files-found: warn

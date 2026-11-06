@@ -57,15 +57,34 @@ def verify(before, after, existing_defs, extras):
 
 
 
-def verify_runtime_report(report, runtime_digest):
+def verify_runtime_report(report, runtime_digest, scanner_report=None):
     if not isinstance(report, dict):
         raise ValueError('invalid runtime report type')
     if report.get('arena_bytes_reserved_in_BSS') != REQUIRED_ARENA:
         raise ValueError('runtime arena must be exactly the reviewed 8 MiB')
     if report.get('pinned_default_doom_zone_bytes') != REQUIRED_ZONE:
         raise ValueError('6 MiB genuine Doom startup-zone evidence missing')
-    if report.get('candidate_object_sha256') != runtime_digest:
-        raise ValueError('runtime report does not match actual linked object')
+    base_digest = report.get('candidate_object_sha256')
+    if not isinstance(base_digest, str) or len(base_digest) != 64:
+        raise ValueError('missing original runtime SHA256')
+    if scanner_report is None:
+        if base_digest != runtime_digest:
+            raise ValueError('runtime report does not match actual linked object')
+    else:
+        if not isinstance(scanner_report, dict):
+            raise ValueError('invalid scanner integration report')
+        if scanner_report.get('original_bundle_object_sha256') != base_digest:
+            raise ValueError('scanner input not bound to 8 MiB runtime report')
+        if scanner_report.get('combined_object_sha256') != runtime_digest:
+            raise ValueError('scanner report not bound to actual 17-provider object')
+        if scanner_report.get('resolved_only') != ['__isoc99_sscanf']:
+            raise ValueError('scanner may close only one genuine imported symbol')
+        if scanner_report.get('scanner_exact_commit') != '62dc9f73bee7753bd81d889a0e44ee8e95ce2220':
+            raise ValueError('scanner must come from pinned reviewed candidate')
+        if scanner_report.get('real_engine_upstream_commit') != report.get('upstream_commit'):
+            raise ValueError('scanner upstream provenance mismatch')
+        if scanner_report.get('final_executable_built') is not False:
+            raise ValueError('scanner report misrepresents ELF execution status')
     metrics = report.get('static_elf_allocatable_section_metrics')
     if not isinstance(metrics, dict) or metrics.get('allocatable_nobits_bytes', 0) < REQUIRED_ARENA:
         raise ValueError('8 MiB NOBITS reservation not demonstrated in actual ELF')
@@ -81,14 +100,17 @@ def call(cmd):
     return result.stdout
 
 
-def run(runtime, runtime_report, output, entry, exit_source, file_source):
+def run(runtime, runtime_report, output, entry, exit_source, file_source, scanner_report=None):
     for file in (runtime, entry, exit_source, file_source):
         if not file.is_file():
             raise ValueError('missing required input: ' + str(file))
     if not runtime_report.is_file():
         raise ValueError('missing canonical runtime report')
+    if scanner_report is not None and not scanner_report.is_file():
+        raise ValueError('missing scanner integration report')
+    scanner_data = json.loads(scanner_report.read_text()) if scanner_report else None
     verify_runtime_report(json.loads(runtime_report.read_text()),
-                          hashlib.sha256(runtime.read_bytes()).hexdigest())
+                          hashlib.sha256(runtime.read_bytes()).hexdigest(), scanner_data)
     output.mkdir(parents=True, exist_ok=True)
     def inspect(obj):
         return symbols(call(['nm', '-P', '-g', str(obj)]))
@@ -130,6 +152,7 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--runtime-object', required=True, type=Path)
     p.add_argument('--runtime-report', required=True, type=Path)
+    p.add_argument('--scanner-report', type=Path)
     p.add_argument('--output', required=True, type=Path)
     p.add_argument('--entry', default='tools/doom-native-entry/entry.c', type=Path)
     p.add_argument('--exit-source', default='tools/doom-native-safe-exit/exit.c', type=Path)
@@ -138,6 +161,6 @@ if __name__ == '__main__':
     args = p.parse_args()
     try:
         print(json.dumps(run(args.runtime_object, args.runtime_report, args.output, args.entry,
-                             args.exit_source, args.file_source), sort_keys=True))
+                             args.exit_source, args.file_source, args.scanner_report), sort_keys=True))
     except (OSError, RuntimeError, ValueError) as exc:
         p.error(str(exc))

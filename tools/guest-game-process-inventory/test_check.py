@@ -2,6 +2,9 @@
 import copy
 import json
 import unittest
+import tempfile
+from pathlib import Path
+from check import main
 from check import Invalid, validate, unique_pairs, reject_constant
 
 BASE = {"schema": 1, "source": "synthetic", "boot_id": "a" * 64,
@@ -53,6 +56,36 @@ class InventoryTests(unittest.TestCase):
 
     def test_boolean_schema_rejected(self):
         self.reject(lambda d: d.update(schema=True))
+
+    def test_strict_single_pid_accepts_one_game(self):
+        result = validate(copy.deepcopy(BASE), strict_single_pid=True)
+        self.assertTrue(result["strict_single_pid"])
+        self.assertEqual(result["peak_guest_userspace_processes"], 1)
+
+    def test_strict_single_pid_rejects_sequential_helper(self):
+        doc = copy.deepcopy(BASE)
+        doc["events"] = [
+            {"seq":0,"event":"boot"},
+            {"seq":1,"event":"spawn","pid":2,"role":"helper"},
+            {"seq":2,"event":"exit","pid":2,"role":"helper"},
+            {"seq":3,"event":"spawn","pid":5,"role":"game"},
+            {"seq":4,"event":"exit","pid":5,"role":"game"},
+            {"seq":5,"event":"end"}]
+        self.assertEqual(validate(doc)["peak_guest_userspace_processes"], 1)
+        with self.assertRaises(Invalid):
+            validate(doc, strict_single_pid=True)
+
+    def test_strict_flag_must_be_bool(self):
+        with self.assertRaises(Invalid):
+            validate(copy.deepcopy(BASE), strict_single_pid=1)
+
+    def test_cli_strict_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.json"
+            path.write_text(json.dumps(BASE), encoding="utf-8")
+            self.assertEqual(main(["check.py", str(path), "--strict-single-pid"]), 0)
+            self.assertEqual(main(["check.py", str(path), "--unexpected"]), 2)
+            self.assertEqual(main(["check.py", str(path), "--strict-single-pid", "--unexpected"]), 2)
 
     def test_sequential_helper_allowed(self):
         doc = copy.deepcopy(BASE)

@@ -34,7 +34,10 @@ jobs:
                   b=src.read(1024*1024)
                   if not b:break
                   dst.write(b)
-          print("Freedoom IWAD bytes",p.stat().st_size,"sha256",hashlib.sha256(p.read_bytes()).hexdigest())
+          digest=hashlib.sha256(p.read_bytes()).hexdigest()
+          print("Freedoom IWAD bytes",p.stat().st_size,"sha256",digest)
+          if digest != "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d":
+              raise SystemExit("Freedoom v0.13.0 WAD SHA-256 mismatch")
           PY
       - name: Actually initialize and tick real Doom with Freedoom game data
         run: bash tools/doom-real-freedoom-host/run.sh /tmp/pinned-doomgeneric/doomgeneric /tmp/freedoom1.wad

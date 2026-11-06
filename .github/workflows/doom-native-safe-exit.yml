@@ -1,0 +1,44 @@
+name: Genuine Doom safe thread exit syscall 6 native closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-safe-exit/**'
+      - '.github/workflows/doom-native-safe-exit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-exit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify native exit syscall ABI with independent host libc
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -DWARDEN_DOOM_EXIT_TEST -Dexit=warden_doom_exit -c tools/doom-native-safe-exit/exit.c -o /tmp/doom-test-exit.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-safe-exit/test_exit.c /tmp/doom-test-exit.o -o /tmp/doom-test-exit
+          /tmp/doom-test-exit
+      - name: Positive/negative real-object link checks
+        run: python3 -m unittest discover -s tools/doom-native-safe-exit -p 'test_*.py' -v
+      - name: Build Warden-native isolated exit without host imports
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -c tools/doom-native-safe-exit/exit.c -o /tmp/doom-native-exit.o
+          test -z "$(nm -g -u /tmp/doom-native-exit.o)"
+          test "$(nm -P -g --defined-only /tmp/doom-native-exit.o | awk '{print $1}')" = "exit"
+      - name: Clone pinned real Doom upstream source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Real freestanding Doom native exit import closure
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-safe-exit
+          ld -r -o target/doom-safe-exit/with-exit.o target/doom-safe-exit/all-objects.o /tmp/doom-native-exit.o
+          python3 tools/doom-native-safe-exit/verify.py target/doom-safe-exit/all-objects.o target/doom-safe-exit/with-exit.o /tmp/doom-native-exit.o target/doom-safe-exit/closure.json
+      - name: Preserve actual pinned upstream closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-safe-exit-closure
+          path: target/doom-safe-exit/closure.json
+          if-no-files-found: ignore

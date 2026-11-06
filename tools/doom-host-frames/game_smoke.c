@@ -132,12 +132,12 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "DOOM host game-state diagnostic: gamestate=%d level_frames=%u player_frames=%u xy_start=(%d,%d) xy_end=(%d,%d)\\n",
             (int)gamestate, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y);
-    if (jumped != 1 || frame_count < 10 || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
+    if (jumped != 1 || frame_count < 10 || gamestate != GS_LEVEL || level_frames < 10 || level_player_frames < 10 ||\n        (level_initial_x == level_last_x && level_initial_y == level_last_y) || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
         fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
         return 1;
     }
-    printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
-           startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u level_frames=%u player_moved=1 first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
+           startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, level_frames, (unsigned long long)first_hash, (unsigned long long)last_hash);
     warden_doom_wad_revoke();
     free(wad);
     return 0;

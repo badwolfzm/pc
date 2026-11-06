@@ -1,0 +1,38 @@
+name: Doom read-only granted FILE prototype
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-readonly-file-crt/**'
+      - '.github/workflows/doom-readonly-file-crt.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real C host negative and UBSan tests
+        run: python3 tools/doom-readonly-file-crt/run.py
+      - name: Freestanding exports and undefined imports
+        run: |
+          cc -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -c tools/doom-readonly-file-crt/file.c -o /tmp/doom-file.o
+          nm -P -g /tmp/doom-file.o
+          test -z "$(nm -g -u /tmp/doom-file.o)"
+      - name: Pinned real Doom freestanding engine and merged runtime
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doom-file
+          git -C /tmp/pinned-doom-file checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/pinned-doom-file rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+          python3 tools/doom-native-runtime-bundle/compose.py --source /tmp/pinned-doom-file/doomgeneric --format-source tools/doom-native-format/doom_format.c --output target/doom-file-real
+          cc -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -c tools/doom-readonly-file-crt/file.c -o target/doom-file-real/provider.o
+          ld -r -o target/doom-file-real/combined.o target/doom-file-real/genuine-doom-with-native-runtime.o target/doom-file-real/provider.o
+          python3 tools/doom-readonly-file-crt/verify.py target/doom-file-real/genuine-doom-with-native-runtime.o target/doom-file-real/combined.o target/doom-file-real/provider.o target/doom-file-real/file-closure.json
+      - name: Archive real symbol provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-readonly-file-five-imports
+          path: target/doom-file-real/file-closure.json
+          if-no-files-found: ignore

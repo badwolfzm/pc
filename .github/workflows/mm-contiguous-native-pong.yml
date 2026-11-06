@@ -1,0 +1,53 @@
+name: Atomic allocator native Warden Pong regression
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/mm.rs'
+      - 'tools/mm-contiguous-atomic-check/**'
+      - '.github/workflows/mm-contiguous-native-pong.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-pong-512:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native kernel and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 nasm binutils build-essential
+          rustup target add x86_64-unknown-none
+      - name: Strict current-source allocator accounting
+        run: |
+          python3 tools/mm-contiguous-source-repro/run.py --strict
+          python3 tools/mm-contiguous-atomic-check/check.py
+      - name: Configure ephemeral one-core 512 MiB Pong profile
+        run: python3 tools/ordinary512-native-qemu/prepare.py tests/kernel/pong.sh --manifest target/mm-atomic-pong-profile.json
+      - name: Two real native Warden QEMU boots and hostile-capability checks
+        run: |
+          set -euo pipefail
+          for n in 1 2; do
+            export LOG="target/mm-atomic-pong-${n}.log"
+            export SCREENSHOT="target/mm-atomic-pong-${n}.ppm"
+            timeout 240 bash tests/kernel/pong.sh
+            python3 tests/game/check_pong_guest.py "$LOG"
+            python3 tools/ordinary512-native-qemu/evidence.py "$LOG" \
+              target/mm-atomic-pong-profile.json "target/mm-atomic-pong-${n}.json"
+          done
+          python3 tools/ordinary512-native-qemu/compare.py \
+            target/mm-atomic-pong-1.json target/mm-atomic-pong-2.json \
+            target/mm-atomic-pong-repeat.json
+      - name: Save real guest allocator and isolation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mm-atomic-pong-real-qemu
+          path: |
+            target/mm-atomic-pong-profile.json
+            target/mm-atomic-pong-repeat.json
+            target/mm-atomic-pong-?.log
+            target/mm-atomic-pong-?.json
+            target/mm-atomic-pong-?.ppm
+          if-no-files-found: ignore

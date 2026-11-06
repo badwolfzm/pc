@@ -93,12 +93,12 @@ def closure(before, after):
                          repr(sorted(EXPECTED - before)))
     if not PROTECTED.issubset(before):
         raise ValueError("protected host call missing from original")
+    if not PROTECTED.issubset(after):
+        raise ValueError("protected host API unexpectedly resolved")
     if after != before - EXPECTED:
         raise ValueError("unresolved imports not exactly the expected 16-symbol closure; added=" +
                          repr(sorted(after - before)) + " still-unresolved=" +
                          repr(sorted(after & EXPECTED)))
-    if not PROTECTED.issubset(after):
-        raise ValueError("protected host API unexpectedly resolved")
     return sorted(before - after)
 
 

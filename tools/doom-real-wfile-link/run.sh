@@ -15,7 +15,7 @@ done
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 COMMON=(
-  -std=gnu11 -O2 -g -Wall -Wextra -Werror
+  -std=gnu11 -O2 -g -Wall -Wextra -Werror -Wno-error=sign-compare
   -I"$UP" -I"$ROOT/tools/doom-wad-class-bridge" -I"$ROOT/tools/doom-wad-stream"
   "$UP/w_file.c"
   "$ROOT/tools/doom-wad-class-bridge/doom_wad_bridge.c"

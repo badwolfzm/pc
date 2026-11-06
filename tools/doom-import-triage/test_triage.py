@@ -62,6 +62,39 @@ class TriageTests(unittest.TestCase):
         r["unresolved_symbol_provenance"] = {"unrecognized": ["x.o"]}
         self.assertEqual(mod.triage(r)["ranked_imports"][0]["category"], "unclassified")
 
+    def test_critical_host_services_are_capability_gated(self):
+        for name in ("fopen", "fopen64", "openat", "mmap", "mprotect",
+                     "system", "posix_spawn", "socket", "dlopen", "fgets",
+                     "vfprintf", "__libc_start_main"):
+            with self.subTest(name=name):
+                category, _ = mod.classify(name)
+                self.assertEqual(category, "privileged_host_boundary")
+
+    def test_bounded_formatting_not_host_privilege(self):
+        for name in ("snprintf", "vsnprintf"):
+            with self.subTest(name=name):
+                category, description = mod.classify(name)
+                self.assertEqual(category, "bounded_formatting")
+                self.assertIn("no host I/O", description)
+        for name in ("sprintf", "vsprintf"):
+            self.assertEqual(mod.classify(name)[0], "unsafe_formatting")
+
+    def test_fortified_checked_helpers_need_bounds(self):
+        for name in ("__memcpy_chk", "__sprintf_chk", "__strcpy_chk"):
+            with self.subTest(name=name):
+                category, description = mod.classify(name)
+                self.assertEqual(category, "checked_runtime")
+                self.assertIn("bounds checks", description)
+
+    def test_priority_differentiates_host_and_format(self):
+        r = report()
+        r["unresolved_symbols"] = ["snprintf", "system", "__memcpy_chk", "sprintf"]
+        r["unresolved_symbol_count"] = 4
+        r["unresolved_symbol_provenance"] = {n: ["game.o"] for n in r["unresolved_symbols"]}
+        result = mod.triage(r)
+        self.assertEqual([x["symbol"] for x in result["ranked_imports"]],
+                         ["system", "sprintf", "__memcpy_chk", "snprintf"])
+
     def test_reject_path_traversal_in_source_name(self):
         r = report()
         r["unresolved_symbol_provenance"]["sqrt"] = ["../../x.o"]

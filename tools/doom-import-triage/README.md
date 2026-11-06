@@ -17,3 +17,9 @@ Handoff: base main `4f05f4421b2602d5e7884770b90c440733a14cbc`. Docs/analysis-onl
 ## CI genuine-source gate
 
 The dedicated `.github/workflows/doom-import-triage.yml` workflow fetches and verifies the exact upstream `e257a09527062bfb986b6e5e0780839b6cbd5b71` commit, runs both parser suites, builds the 79 actual freestanding translation units and current merged Warden bridge objects using the existing linker gate, invokes this triage, checks exact symbol/provenance coverage and uploads both JSON reports. This is an **ET_REL link analysis only**; no guest executable, game frames or resource usage is asserted. Until a green run is observed, treat CI validation as pending.
+
+## Security classification revision (#226)
+
+Triaging genuine unresolved imports does not mean linking against host libc. This revision treats file/process/network/memory-management imports as **privileged host boundaries** requiring Warden-mediated services; `snprintf`/`vsnprintf` are **bounded formatting** functions and do not themselves grant host I/O, whereas `sprintf`/`vsprintf` require unbounded-output review. Fortified `__*_chk` helpers require real guest-side bounds checks; substituting unchecked copies violates the contract. A symbol classification is not evidence a safe implementation exists. The classification is intentionally conservative, incomplete and subject to review of each actual source call site. In particular, do not bypass kernel capability enforcement to close imports.
+
+Acceptance: Python regression tests plus the existing pinned genuine Doom linker triage workflow, with exact symbol coverage. No binary linking or native Warden/QEMU boot is claimed by this revision.

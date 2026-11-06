@@ -19,7 +19,7 @@ if not files or len(files) < 70: raise SystemExit("incomplete genuine upstream o
 pathlib.Path(sys.argv[2]).write_text("\n".join(files)+"\n")
 PY
 mapfile -t OBJECTS < "$OUT/objects.txt"
-COMMON=(-std=gnu11 -O2 -Wall -Wextra -Wno-error=sign-compare
+COMMON=(-std=gnu11 -O2 -Wall -Wextra -Wno-error=sign-compare\n    -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
     -I"$UP" -I"$ROOT/tools/doom-wad-stream"
     -I"$ROOT/tools/doom-wad-class-bridge")
 cc "${COMMON[@]}" -c "$ROOT/tools/doom-wad-stream/wad_stream.c" -o "$OUT/stream.o"

@@ -21,6 +21,8 @@ jobs:
           node --check tools/warden-web-console/server.js
           node --check tools/warden-web-console/demo.js
           node --check tools/warden-web-console/test.js
+      - name: Local QEMU launcher shell syntax
+        run: bash -n tools/warden-web-console/run_with_qemu.sh
       - name: Authentication and protocol smoke test
         run: node tools/warden-web-console/test.js
       - name: QMP screenshot decoder and input allowlist tests

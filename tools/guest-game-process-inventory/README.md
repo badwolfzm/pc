@@ -32,3 +32,7 @@ measurements are performed. The RAM/VRAM accounting work is owned separately
 or guest ABI files are changed. Independent review needed before merge.
 
 The CLI rejects duplicate JSON object keys, non-finite JSON constants, and excessively recursive input rather than silently accepting ambiguous evidence. Tests exercise both malformed JSON decoding and lifecycle invariants.
+
+## Optional strict single-PID profile
+
+Run `python3 tools/guest-game-process-inventory/check.py report.json --strict-single-pid` to require that the **only userspace PID observed anywhere during the boot** is the game PID. This rejects sequential helper processes which the default mode permits. The strict result includes `strict_single_pid: true`; the default result includes `false`. Guest kernel processes, QEMU host threads, and concurrent threads sharing the game PID are not counted by this event schema. The option still validates **self-reported** records; it does not verify the reporting guest or enforce isolation. It is not a promise that today's native Doom/Albion runtime works in this profile.

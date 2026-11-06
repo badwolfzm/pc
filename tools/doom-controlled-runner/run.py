@@ -115,18 +115,21 @@ def run(qemu, qemu_hash, kernel, kernel_hash, accel, timeout, log_path, report_p
         raise ValueError('output files must differ from each other and from input binaries')
     if any(not p.parent.is_dir() for p in (log_path, report_path)):
         raise ValueError('output parent directory does not exist')
-    result = capture_command(argv, timeout)
-    log_path.write_bytes(result['log'])
-    report = {
-        'profile': config, 'qemu_sha256': actual_qemu_hash,
-        'kernel_sha256': actual_kernel_hash,
-        'serial_log_sha256': hashlib.sha256(result['log']).hexdigest(),
-        'serial_log_bytes': len(result['log']), 'returncode': result['returncode'],
-        'timed_out': result['timed_out'], 'log_overflow': result['log_overflow'],
-        'guest_boot_verified': False, 'doom_executed_verified': False,
-        'note': 'raw host execution only; serial logs need independent guest evidence validation',
-    }
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    # Open exclusively before running QEMU. Existing files and symlinks refuse
+    # the run; retained handles avoid re-opening the pathname after execution.
+    with log_path.open('xb') as log_handle, report_path.open('xb') as report_handle:
+        result = capture_command(argv, timeout)
+        log_handle.write(result['log'])
+        report = {
+            'profile': config, 'qemu_sha256': actual_qemu_hash,
+            'kernel_sha256': actual_kernel_hash,
+            'serial_log_sha256': hashlib.sha256(result['log']).hexdigest(),
+            'serial_log_bytes': len(result['log']), 'returncode': result['returncode'],
+            'timed_out': result['timed_out'], 'log_overflow': result['log_overflow'],
+            'guest_boot_verified': False, 'doom_executed_verified': False,
+            'note': 'raw host execution only; serial logs need independent guest evidence validation',
+        }
+        report_handle.write((json.dumps(report, indent=2, sort_keys=True) + '\n').encode('utf-8'))
     return 0 if result['returncode'] == 0 and not result['timed_out'] and not result['log_overflow'] else 1
 
 

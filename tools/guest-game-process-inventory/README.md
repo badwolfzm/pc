@@ -30,3 +30,5 @@ real process isolation. No RAM, shared VRAM, timing, FPS or native gameplay
 measurements are performed. The RAM/VRAM accounting work is owned separately
 (#190), and memory validators (#141/#142/#146) are not replaced. No kernel
 or guest ABI files are changed. Independent review needed before merge.
+
+The CLI rejects duplicate JSON object keys, non-finite JSON constants, and excessively recursive input rather than silently accepting ambiguous evidence. Tests exercise both malformed JSON decoding and lifecycle invariants.

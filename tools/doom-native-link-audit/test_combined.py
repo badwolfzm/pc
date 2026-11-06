@@ -2,7 +2,7 @@ import pathlib
 import tempfile
 import subprocess
 import unittest
-from audit_combined import inspect
+from audit_combined import inspect, DANGEROUS_HOST_IMPORTS
 
 class CombinedTests(unittest.TestCase):
     def test_genuine_et_rel_inspection(self):
@@ -17,6 +17,11 @@ class CombinedTests(unittest.TestCase):
             self.assertGreater(report["allocatable_zero_fill_bytes"],0)
             self.assertGreater(report["executable_section_bytes"],0)
             self.assertFalse(report["native_warden_executable_built"])
+            self.assertEqual(report["host_privilege_imports_require_policy"], [])
+            self.assertFalse(report["host_privilege_imports_policy_approved"])
+    def test_explicit_host_authority_is_not_silent(self):
+        self.assertTrue({"system", "fopen", "rename", "mkdir"}.issubset(DANGEROUS_HOST_IMPORTS))
+        self.assertNotIn("strlen", DANGEROUS_HOST_IMPORTS)
     def test_deny_missing(self):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(ValueError):

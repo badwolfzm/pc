@@ -24,6 +24,34 @@ def initial_inventory(doc):
                 "unexpected or missing v1 frame-event fields")
         require(doc["capture_started_empty"] is True, "v1 must start empty")
         return {}, 0
+    if type(version) is int and version == 3:
+        require(set(doc) == {"schema_version", "source", "capture_started_empty",
+                            "capture_start_ns", "initial_frames", "page_bytes",
+                            "guest_physical_capacity_bytes", "events", "boot_id"},
+                "unexpected or missing v3 frame-event fields")
+        boot_id = doc["boot_id"]
+        require(type(boot_id) is str and len(boot_id) == 64 and
+                all(ch in "0123456789abcdef" for ch in boot_id),
+                "v3 boot_id must be a 64-character lowercase hex identifier")
+        require(doc["capture_started_empty"] is False,
+                "v3 requires declared inventory at capture start")
+        start = integer(doc["capture_start_ns"], "capture_start_ns")
+        capacity = integer(doc["guest_physical_capacity_bytes"], "guest capacity", 1)
+        frames = doc["initial_frames"]
+        require(type(frames) is list and len(frames) <= capacity // PAGE_BYTES,
+                "invalid v3 initial frame inventory size")
+        live = {}
+        for i, item in enumerate(frames):
+            require(type(item) is dict and set(item) == {"frame_id", "kind"},
+                    f"initial frame {i}: invalid shape")
+            frame = integer(item["frame_id"], f"initial frame {i} id")
+            require(frame < capacity // PAGE_BYTES, f"initial frame {i}: outside guest RAM")
+            kind = item["kind"]
+            require(type(kind) is str and kind in KINDS,
+                    f"initial frame {i}: invalid category")
+            require(frame not in live, f"initial frame {i}: duplicate")
+            live[frame] = kind
+        return live, start
     require(type(version) is int and version == 2, "unsupported schema version")
     require(set(doc) == {"schema_version", "source", "capture_started_empty",
                         "capture_start_ns", "initial_frames", "page_bytes",
@@ -66,8 +94,14 @@ def replay(doc):
     last_time = start_ns
     allocations = releases = 0
     for index, ev in enumerate(events):
-        require(type(ev) is dict and set(ev) == {"time_ns", "op", "frame_id", "kind"},
+        expected_keys = {"time_ns", "op", "frame_id", "kind"}
+        if doc["schema_version"] == 3:
+            expected_keys.add("sequence")
+        require(type(ev) is dict and set(ev) == expected_keys,
                 f"event {index}: invalid shape")
+        if doc["schema_version"] == 3:
+            require(integer(ev["sequence"], f"event {index} sequence") == index,
+                    f"event {index}: missing/reordered/duplicate sequence")
         t = integer(ev["time_ns"], f"event {index} time_ns")
         require(t >= last_time, f"event {index}: timestamp reversal")
         last_time = t
@@ -96,6 +130,7 @@ def replay(doc):
         "event_count": len(events),
         "initial_frame_count": len(initial),
         "capture_start_ns": start_ns,
+        "boot_id": doc.get("boot_id"),
         "note": "consistency of submitted trace only; no proof events came from Warden or include all guest RAM"
     }
 

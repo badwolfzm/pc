@@ -1,0 +1,40 @@
+name: Doom genuine freestanding bounded format
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-format/**'
+      - '.github/workflows/doom-native-format.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  formatter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute C format behavior tests
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-format/format.c tools/doom-native-format/test_format.c -o /tmp/test-doom-format
+          /tmp/test-doom-format
+      - name: Build freestanding provider
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-format/format.c -o /tmp/doom-native-format.o
+          test -z "$(nm -g -u /tmp/doom-native-format.o)"
+      - name: Fetch pinned original Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Link genuine engine plus Warden adapters
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-native-format
+          ld -r -o target/doom-native-format/with-format.o target/doom-native-format/all-objects.o /tmp/doom-native-format.o
+          python3 tools/doom-native-format/verify.py target/doom-native-format/all-objects.o target/doom-native-format/with-format.o target/doom-native-format/closure.json
+      - name: Upload provenance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-format-closure
+          path: target/doom-native-format/closure.json
+          if-no-files-found: ignore

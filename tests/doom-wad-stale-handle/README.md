@@ -1,12 +1,16 @@
-# Stale WAD handle security regression (issue #118)
+# Independent Doom WAD stale-handle regression (issue #118)
 
-A standalone **negative** test for the merged Doom WAD class bridge. This test
-is expected to **FAIL on current main** (commit c6ab36f) because the bridge
-returns the same static `wad_file_t *` for every opening. It is not a CI gate
-until the WAD owner has fixed or explicitly narrowed the handle-lifecycle
-contract.
+This test was introduced against the original bridge at main `c6ab36f`,
+which reused one static `wad_file_t *` and was vulnerable to stale-handle
+aliasing across revoke/regrant. Security fix PR #126 was subsequently merged
+as `fdb6c1f94c1f7af984d5b565a2c4406fb6c34e5a`, adding a bounded
+64-slot non-reusable handle pool.
 
-Run from repo root:
+**Expected result:** FAIL on the original vulnerable revision; PASS on
+the corrected bridge. GitHub Actions runs the exact test on the PR head.
+The independent fixture complements the bridge owner's own regression.
+
+From repo root:
 
 ```sh
 cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \
@@ -19,12 +23,8 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \
   -o /tmp/warden-stale-test && /tmp/warden-stale-test
 ```
 
-No external dependencies, WAD assets, hardware, kernel modifications, or file
-ownership overlap. Scenario: old handle A -> close/revoke -> regrant/open B;
-old read and close must not access or destroy B while fresh handle still works.
-
-This is a reproduction **source artifact**; the author has not executed this
-exact integrated compile in Warden or GitHub CI. A test failure on main is
-expected and should not be misreported as a newly introduced regression.
-Kernel/game owner should design a bounded, generation-safe API or prove a
-trusted non-escaping handle contract; only then include in required CI.
+The test opens A, closes and revokes it, then opens B and verifies that the
+previously issued pointer cannot read B or close B. No proprietary WAD assets,
+kernel edits, host filesystem privileges or real Doom execution are involved.
+The compile and run checks are host-only and do not establish guest/QEMU
+security or playable Doom.

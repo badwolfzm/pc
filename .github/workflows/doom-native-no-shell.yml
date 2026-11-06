@@ -1,0 +1,44 @@
+name: Real Doom optional error dialog no-shell import
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-no-shell/**'
+      - '.github/workflows/doom-native-no-shell.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  no-shell:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify no-shell unit contracts
+        run: |
+          python3 -m unittest discover -s tools/doom-native-no-shell -p 'test_*.py' -v
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -Dsystem=warden_no_shell_system -D__errno_location=warden_test_errno_loc -c tools/doom-native-no-shell/no_shell.c -o /tmp/no-shell-test.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -D__errno_location=warden_test_errno_loc -c tools/doom-native-errno/errno.c -o /tmp/errno-test.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-no-shell/test_no_shell.c /tmp/no-shell-test.o /tmp/errno-test.o -o /tmp/test-no-shell
+          /tmp/test-no-shell
+      - name: Build pure freestanding no-shell and errno providers
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-no-shell/no_shell.c -o /tmp/no-shell.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-errno/errno.c -o /tmp/errno.o
+          test "$(nm -P -g --defined-only /tmp/no-shell.o | awk '{print $1}')" = "system"
+      - name: Fetch exact pinned genuine Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile and verify actual Doom source and freestanding link
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-no-shell
+          ld -r -o target/doom-no-shell/with-system.o target/doom-no-shell/all-objects.o /tmp/no-shell.o
+          python3 tools/doom-native-no-shell/verify.py /tmp/doom/doomgeneric target/doom-no-shell/all-objects.o target/doom-no-shell/with-system.o /tmp/no-shell.o /tmp/errno.o target/doom-no-shell/closure.json
+      - name: Archive source-provenance and ELF link evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-no-shell-source-and-link
+          path: target/doom-no-shell/closure.json
+          if-no-files-found: ignore

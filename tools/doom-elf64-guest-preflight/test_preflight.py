@@ -68,6 +68,20 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn('"valid": false', output.getvalue().lower())
 
+    def test_entry_in_zero_filled_executable_tail_rejected(self):
+        # p_memsz is larger than p_filesz. The entry points beyond source bytes.
+        self.bad(elf(filesz=1, memsz=4096, entry=0x400001))
+
+    def test_entry_within_file_backed_executable_bytes_accepted(self):
+        report = self.ok(elf(filesz=3, memsz=4096, entry=0x400002))
+        self.assertEqual(report["entry"], 0x400002)
+
+    def test_zero_file_size_executable_rejected(self):
+        self.bad(elf(filesz=0, memsz=4096))
+
+    def test_entry_at_file_backed_end_rejected(self):
+        self.bad(elf(filesz=2, memsz=4096, entry=0x400002))
+
     def test_valid_static_exec(self):
         report = self.ok(elf())
         self.assertEqual(report["load_page_rounded_bytes"], 4096)
@@ -97,12 +111,41 @@ class PreflightTests(unittest.TestCase):
         self.bad(elf(filesz=0x3000)[:0x2000])
     def test_no_interp(self):
         self.bad(elf(ph_type=3))
+    def test_no_elf_tls_program_header(self):
+        # PT_TLS may require a thread pointer and initialized TLS image,
+        # neither supplied by the current narrow freestanding Doom profile.
+        self.bad(elf(second=(7, 4, 0x1000, 0x600000, 0x600000, 4, 16, 1)))
+
+    def test_no_zero_length_tls_header(self):
+        # A formally empty TLS header must not accidentally bypass the gate.
+        self.bad(elf(second=(7, 4, 0, 0, 0, 0, 0, 1)))
+
+    def test_unknown_nonload_header_does_not_trigger_tls_gate(self):
+        # PT_NOTE is allowed by the narrow preflight and isn't PT_TLS.
+        report = self.ok(elf(second=(4, 4, 0, 0, 0, 0, 0, 1)))
+        self.assertEqual(report["load_segments"], 1)
+
     def test_no_dynamic_segment(self):
         self.bad(elf(ph_type=2))
     def test_executable_stack_rejected(self):
         self.bad(elf(second=(0x6474e551, 7, 0, 0, 0, 0, 0, 0)))
     def test_overlap_rejected(self):
         self.bad(elf(second=(1, 4, 0x1000, 0x400800, 0x400800, 1, 4096, 1)))
+    def test_page_alias_rx_and_read_only_rejected(self):
+        # Disjoint byte ranges share one 4 KiB page, but the first wants RX
+        # and the second read-only; a single mapping cannot satisfy both.
+        second = (1, 4, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)
+        self.bad(elf(memsz=0x800, second=second))
+
+    def test_page_alias_read_only_and_writable_rejected(self):
+        second = (1, 6, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)
+        self.bad(elf(segflags=4, memsz=0x800, second=second))
+
+    def test_distinct_pages_with_distinct_permissions_allowed(self):
+        second = (1, 6, 0x1000, 0x600000, 0x600000, 1, 0x800, 0x1000)
+        report = self.ok(elf(memsz=0x800, second=second))
+        self.assertEqual(report["load_segments"], 2)
+
     def test_page_alias_wx_rejected(self):
         # No byte overlap; executable and writable mappings alias one 4 KiB frame.
         second = (1, 6, 0x1800, 0x400800, 0x400800, 1, 0x800, 1)

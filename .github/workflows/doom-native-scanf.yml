@@ -1,0 +1,57 @@
+name: Genuine Doom integer sscanf freestanding import closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-scanf/**'
+      - '.github/workflows/doom-native-scanf.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test strict source-callsite audit (positive and negative cases)
+        run: python3 -m unittest discover -s tools/doom-native-scanf -p 'test_*.py' -v
+      - name: Differential tests under UBSan
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Wpedantic -O2 -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all \
+            -D__isoc99_sscanf=warden_scanf -c tools/doom-native-scanf/doom_scanf.c -o /tmp/doom-scanf-test.o
+          cc -std=c11 -Wall -Wextra -Werror -Wpedantic -O2 -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-native-scanf/test_scanf.c /tmp/doom-scanf-test.o -o /tmp/test-doom-scanf
+          /tmp/test-doom-scanf
+          cc -std=c11 -Wall -Wextra -Werror -Wpedantic -O2 -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-native-scanf/test_scanf_differential.c /tmp/doom-scanf-test.o -o /tmp/test-doom-scanf-differential
+          /tmp/test-doom-scanf-differential
+      - name: Compile provider as freestanding with no external imports
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie \
+            -c tools/doom-native-scanf/doom_scanf.c -o /tmp/doom-native-scanf.o
+          test -z "$(nm -g -u /tmp/doom-native-scanf.o)"
+      - name: Fetch exact genuine Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric-pinned
+          git -C /tmp/doomgeneric-pinned checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomgeneric-pinned rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile genuine engine and check exact one-symbol closure
+        run: |
+          python3 tools/doom-native-link-gate/gate.py \
+            --source /tmp/doomgeneric-pinned/doomgeneric --output target/doom-native-scanf
+          python3 tools/doom-native-scanf/audit_callsites.py \
+            --source /tmp/doomgeneric-pinned/doomgeneric \
+            --gate target/doom-native-scanf/gate.json
+          ld -r -o target/doom-native-scanf/with-scanf.o \
+            target/doom-native-scanf/all-objects.o /tmp/doom-native-scanf.o
+          python3 tools/doom-native-scanf/check.py \
+            --original target/doom-native-scanf/all-objects.o \
+            --provider /tmp/doom-native-scanf.o \
+            --combined target/doom-native-scanf/with-scanf.o
+      - name: Archive actual link diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-scanf-link-report
+          path: target/doom-native-scanf/gate.json
+          if-no-files-found: ignore

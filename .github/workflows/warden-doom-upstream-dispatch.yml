@@ -1,0 +1,22 @@
+name: Genuine upstream Doom WAD dispatch integration
+on:
+  pull_request:
+    paths:
+      - 'tests/doom-wad-upstream-dispatch/**'
+      - 'tools/doom-wad-class-bridge/**'
+      - '.github/workflows/warden-doom-upstream-dispatch.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Obtain pinned genuine GPL Doomgeneric source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric
+          git -C /tmp/doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Test genuine upstream W_OpenFile dispatch via Warden class
+        run: bash tests/doom-wad-upstream-dispatch/run.sh /tmp/doomgeneric/doomgeneric

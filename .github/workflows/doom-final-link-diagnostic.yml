@@ -1,0 +1,44 @@
+name: Genuine Doom final ELF executable link blocker diagnostic
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-final-link-diagnostic/**'
+      - '.github/workflows/doom-final-link-diagnostic.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  final-link-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify diagnostic refusal unit cases
+        run: python3 -m unittest discover -s tools/doom-final-link-diagnostic -p 'test_*.py' -v
+      - name: Pin genuine upstream Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-original
+          git -C /tmp/doom-original checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-original rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Stage exact tested 16-provider integration candidate
+        run: |
+          git fetch --no-tags origin 2c3535b02fde0809d87204480e877d22304032d8
+          test "$(git rev-parse FETCH_HEAD)" = 2c3535b02fde0809d87204480e877d22304032d8
+          mkdir -p tools/doom-native-runtime-bundle
+          git show 2c3535b02fde0809d87204480e877d22304032d8:tools/doom-native-runtime-bundle/compose.py > tools/doom-native-runtime-bundle/compose.py
+      - name: Build real upstream engine and all 16 provider candidates
+        run: |
+          python3 tools/doom-native-runtime-bundle/compose.py --source /tmp/doom-original/doomgeneric --output target/final-link-candidate --format-source tools/doom-native-format/doom_format.c
+      - name: Attempt actual ET_EXEC link without fake file/process providers
+        run: |
+          python3 tools/doom-final-link-diagnostic/diagnose.py target/final-link-candidate/genuine-doom-with-native-runtime.o --output target/final-link-candidate/doom.elf --report target/final-link-candidate/final-blockers.json
+          test ! -e target/final-link-candidate/doom.elf
+      - name: Archive real unresolved import evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-final-link-blockers
+          path: |
+            target/final-link-candidate/final-blockers.json
+            target/final-link-candidate/report.json
+          if-no-files-found: ignore

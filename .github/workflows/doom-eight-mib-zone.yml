@@ -1,0 +1,39 @@
+name: Real Doom six-megabyte zone in bounded eight-megabyte native arena
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-eight-mib-zone/**'
+      - '.github/workflows/doom-eight-mib-zone.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  genuine-zone-capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail-closed profile source transformation unit tests
+        run: python3 -m unittest discover -s tools/doom-eight-mib-zone -p 'test_*.py' -v
+      - name: Test real arena allocations at 8 MiB under UBSan
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -DDOOM_ARENA_BYTES=8388608 -fsanitize=undefined -fno-sanitize-recover=all -I tools/doom-freestanding-arena tools/doom-freestanding-arena/arena.c tools/doom-eight-mib-zone/test_zone.c -o /tmp/doom-test-real-zone
+          /tmp/doom-test-real-zone
+      - name: Fetch exactly pinned genuine Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Verify genuine Doom's source-derived default zone
+        run: |
+          python3 tools/doom-zone-capacity-gate/gate.py --source /tmp/doom/doomgeneric/i_system.c --commit e257a09527062bfb986b6e5e0780839b6cbd5b71 --arena-bytes 8388608
+      - name: Compose real 16-provider Doom object with 8 MiB zone-capable arena
+        run: |
+          python3 tools/doom-eight-mib-zone/profile.py --upstream /tmp/doom/doomgeneric --format-source tools/doom-native-format/doom_format.c --output target/doom-eight-mib
+      - name: Archive real zone-capacity and ELF static memory report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-eight-mib-zone-candidate
+          path: target/doom-eight-mib/report.json
+          if-no-files-found: ignore

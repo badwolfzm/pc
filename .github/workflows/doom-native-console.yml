@@ -1,0 +1,61 @@
+name: Genuine Doom native capability-gated console and two-import link closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-console/**'
+      - '.github/workflows/doom-native-console.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  console:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test real bounded formatter plus console with UBSan and permission mock
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all \
+            -Dsnprintf=warden_test_snprintf -Dvsnprintf=warden_test_vsnprintf \
+            -c tools/doom-native-format/doom_format.c -o /tmp/warden-test-format.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all \
+            -DWARDEN_DOOM_CONSOLE_TEST -Dprintf=warden_test_printf -Dputs=warden_test_puts -Dvsnprintf=warden_test_vsnprintf \
+            -c tools/doom-native-console/console.c -o /tmp/warden-test-console.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-native-console/test_console.c /tmp/warden-test-format.o /tmp/warden-test-console.o -o /tmp/test-doom-console
+          /tmp/test-doom-console
+      - name: Run negative symbol-closure tests
+        run: python3 -m unittest discover -s tools/doom-native-console -p 'test_*.py' -v
+      - name: Verify exact original upstream Doomgeneric revision
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/warden-original-doom
+          git -C /tmp/warden-original-doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/warden-original-doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Reproduce genuine engine plus 16 merged native providers
+        run: |
+          python3 tools/doom-native-runtime-bundle/compose.py \
+            --source /tmp/warden-original-doom/doomgeneric \
+            --format-source tools/doom-native-format/doom_format.c \
+            --output target/doom-native-console/baseline
+      - name: Compile freestanding console provider and require exactly two imports closed
+        run: |
+          cc -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only \
+            -c tools/doom-native-console/console.c -o target/doom-native-console/console.o
+          nm -P -g target/doom-native-console/console.o
+          ld -r -o target/doom-native-console/with-console.o \
+            target/doom-native-console/baseline/genuine-doom-with-native-runtime.o \
+            target/doom-native-console/console.o
+          python3 tools/doom-native-console/verify.py \
+            target/doom-native-console/baseline/genuine-doom-with-native-runtime.o \
+            target/doom-native-console/with-console.o \
+            target/doom-native-console/console.o \
+            target/doom-native-console/console-closure.json
+      - name: Archive genuine engine console closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-native-console-closure
+          path: |
+            target/doom-native-console/console-closure.json
+            target/doom-native-console/baseline/report.json
+          if-no-files-found: ignore

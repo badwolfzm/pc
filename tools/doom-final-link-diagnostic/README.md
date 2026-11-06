@@ -1,0 +1,11 @@
+# Actual final native Doom ELF link attempt (diagnostic only)
+
+Task #242. Previous successful tests produce ELF **ET_REL** objects, not a bootable executable. This host tool takes the genuine upstream Doomgeneric + merged Warden adapters and the 16-provider partial-link candidate from exact-pinned PR #238, then **actually invokes the final static ELF64 executable linker** using `ld -nostdlib -static --no-undefined -e doomgeneric_Create -Ttext 0x800000`.
+
+The diagnostic only considers an expected failure useful if the original object has the real Doom entry symbol, retains protected `fopen`, `system` and other host I/O/process imports, the linker produces an actual undefined-reference error, and no output executable exists. A successful link is **not** treated as a passing result because that would change the nature and security scope of this negative-test gate. No fake host service symbols, printf, libc, Linux kernel, WAD or elevated capabilities are linked. Exact pinned upstream and native bundle revisions are enforced by CI.
+
+Output `final-blockers.json` lists observed unresolved imports from the actual genuine combined object, input SHA-256, linker status and capped diagnostic excerpt. Fail-closed adversarial unit tests refuse missing entry, disappeared sensitive calls, fake successful link, no undefined-reference evidence or wrong object SHA-256. Integration owners must reconcile actual missing services using reviewed capabilities and genuine guest runtime semantics rather than stubbing security-sensitive calls.
+
+This is **not** a production ELF linker, proof of a fully linked Doom executable, or a replacement for Warden's own ELF-loader restrictions. The fixed entry/address is a diagnostic assumption and not a kernel ownership ruling. The result is not a QEMU boot, WAD gameplay, FPS, 512 MiB resident usage or Albion Online support. No Warden kernel, ABI, loader, CRT provider, graphics, WAD adapter or other agent-owned source is edited.
+
+CI pulls pinned original Doomgeneric `e257a09527062bfb986b6e5e0780839b6cbd5b71` and PR #238 bundle composition script at `2c3535b02fde0809d87204480e877d22304032d8` as a **test-only**, exact-SHA candidate. Only new `tools/doom-final-link-diagnostic/**` and `.github/workflows/doom-final-link-diagnostic.yml` are owned. Require lead/integration/security review before merge.

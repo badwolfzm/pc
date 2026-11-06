@@ -16,6 +16,7 @@ static unsigned int frame_count;
 static unsigned int startup_frames;
 static unsigned int game_started;
 static int no_input_control;
+static int reverse_input;
 static unsigned int key_press_sent, key_release_sent;
 static unsigned int key_press_consumed, key_release_consumed;
 static unsigned int level_frames, level_player_frames;
@@ -32,7 +33,7 @@ static size_t wad_len;
 extern int __real_DG_GetKey(int *pressed, unsigned char *key);
 int __wrap_DG_GetKey(int *pressed, unsigned char *key) {
     int result = __real_DG_GetKey(pressed, key);
-    if (result && pressed && key && *key == 0xad) {
+    if (result && pressed && key && *key == (reverse_input ? 0xaf : 0xad)) {
         if (*pressed) ++key_press_consumed;
         else ++key_release_consumed;
     }
@@ -66,11 +67,11 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
          */
         if (game_started && frame_count >= 2 && !key_press_sent) {
             key_press_sent = 1;
-            return 0x48;
+            return reverse_input ? 0x50 : 0x48;
         }
         if (game_started && frame_count >= 6 && !key_release_sent) {
             key_release_sent = 1;
-            return 0xc8;
+            return reverse_input ? 0xd0 : 0xc8;
         }
         return 0;
     case 5: return 0;        /* yield */
@@ -107,10 +108,11 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
     }
 }
 int main(int argc, char **argv) {
-    if (argc != 2 && !(argc == 3 && strcmp(argv[2], "--no-input") == 0)) {
-        fprintf(stderr, "usage: %s DOOM1.WAD [--no-input]\n", argv[0]); return 2;
+    if (argc != 2 && !(argc == 3 && (strcmp(argv[2], "--no-input") == 0 || strcmp(argv[2], "--reverse-input") == 0))) {
+        fprintf(stderr, "usage: %s DOOM1.WAD [--no-input|--reverse-input]\n", argv[0]); return 2;
     }
-    no_input_control = (argc == 3);
+    no_input_control = (argc == 3 && strcmp(argv[2], "--no-input") == 0);
+    reverse_input = (argc == 3 && strcmp(argv[2], "--reverse-input") == 0);
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror("fopen"); return 2; }
     if (fseek(f, 0, SEEK_END) || (long)(wad_len = (size_t)ftell(f)) < 12 ||
@@ -165,8 +167,8 @@ int main(int argc, char **argv) {
         }
         printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u level_frames=%u player_moved=1 first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
                startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, level_frames, (unsigned long long)first_hash, (unsigned long long)last_hash);
-        printf("DOOM_EVIDENCE_V1 mode=intervention frames=%u level_frames=%u player_frames=%u start_x=%d start_y=%d end_x=%d end_y=%d pressed=%u released=%u consumed_down=%u consumed_up=%u first_hash=%016llx last_hash=%016llx\n",
-               frame_count, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y,
+        printf("DOOM_EVIDENCE_V1 mode=%s frames=%u level_frames=%u player_frames=%u start_x=%d start_y=%d end_x=%d end_y=%d pressed=%u released=%u consumed_down=%u consumed_up=%u first_hash=%016llx last_hash=%016llx\n",
+               reverse_input ? "reverse" : "intervention", frame_count, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y,
                key_press_sent, key_release_sent, key_press_consumed, key_release_consumed,
                (unsigned long long)first_hash, (unsigned long long)last_hash);
     }

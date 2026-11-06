@@ -1,0 +1,43 @@
+name: Genuine Doom bounded printf sink import closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-printf-sink/**'
+      - '.github/workflows/doom-native-printf-sink.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  printf-sink:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test guest callback behavior against merged formatting provider
+        run: |
+          cc -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-format/doom_format.c tools/doom-native-printf-sink/printf.c tools/doom-native-printf-sink/test_printf.c -o /tmp/doom-test-printf
+          /tmp/doom-test-printf
+      - name: Pin original genuine Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-original
+          git -C /tmp/doom-original checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-original rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Obtain exact 16-provider candidate composition (test-only)
+        run: |
+          git fetch --no-tags origin 2c3535b02fde0809d87204480e877d22304032d8
+          test "$(git rev-parse FETCH_HEAD)" = 2c3535b02fde0809d87204480e877d22304032d8
+          mkdir -p tools/doom-native-runtime-bundle
+          git show 2c3535b02fde0809d87204480e877d22304032d8:tools/doom-native-runtime-bundle/compose.py > tools/doom-native-runtime-bundle/compose.py
+      - name: Real 79-unit Doom engine and Warden 16-provider link
+        run: |
+          python3 tools/doom-native-runtime-bundle/compose.py --source /tmp/doom-original/doomgeneric --output target/doom-printf-sink --format-source tools/doom-native-format/doom_format.c
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-printf-sink/printf.c -o target/doom-printf-sink/printf.o
+          ld -r -o target/doom-printf-sink/with-printf.o target/doom-printf-sink/genuine-doom-with-native-runtime.o target/doom-printf-sink/printf.o
+          python3 tools/doom-native-printf-sink/verify.py target/doom-printf-sink/genuine-doom-with-native-runtime.o target/doom-printf-sink/with-printf.o target/doom-printf-sink/printf.o target/doom-printf-sink/closure.json
+      - name: Archive verified real-link report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-printf-sink-closure
+          path: target/doom-printf-sink/closure.json
+          if-no-files-found: ignore

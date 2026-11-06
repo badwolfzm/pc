@@ -1,0 +1,48 @@
+name: Lifecycle ABI source audit
+on:
+  pull_request:
+    paths:
+      - 'docs/process-lifecycle-contract/**'
+      - '.github/workflows/lifecycle-abi-audit.yml'
+      - 'abi/warden-abi.json'
+      - 'crates/warden-kernel/src/linux.rs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lifecycle auditor unit tests
+        run: python3 -m unittest discover -s docs/process-lifecycle-contract -p 'test_*.py' -v
+      - name: Inventory current source-level lifecycle gaps
+        run: python3 docs/process-lifecycle-contract/audit.py > "$RUNNER_TEMP/lifecycle-abi-audit.json"
+      - name: Publish inventory summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/lifecycle-abi-audit.json" ]; then
+            python3 - "$RUNNER_TEMP/lifecycle-abi-audit.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1], encoding="utf-8"))
+          summary = result["summary"]
+          print("### Lifecycle ABI source inventory")
+          print(f"Known registered syscalls inspected: {summary['inspected']}")
+          print(f"Literal unconditional zero-result arms: {summary['silent_success']}")
+          print(f"Names missing from ABI inventory: {summary['missing_abi_entries']}")
+          print("This inventory is not a security proof or Warden runtime test.")
+          PY
+          else
+            echo "Audit did not produce a report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload source inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-abi-audit
+          path: ${{ runner.temp }}/lifecycle-abi-audit.json
+          if-no-files-found: ignore

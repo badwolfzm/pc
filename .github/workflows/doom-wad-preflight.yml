@@ -1,0 +1,19 @@
+name: Doom WAD asset preflight
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-wad-preflight/**'
+      - '.github/workflows/doom-wad-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wad-metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Doom IWAD/PWAD metadata parser
+        run: python3 -m unittest discover -s tools/doom-wad-preflight -p 'test_*.py' -v
+      - name: Static Python syntax check
+        run: python3 -m py_compile tools/doom-wad-preflight/*.py

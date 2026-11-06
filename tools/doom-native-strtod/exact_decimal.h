@@ -119,12 +119,34 @@ static int wb_cmp_mid(const struct warden_big *num, const struct warden_big *den
     }
     return 1;
 }
+/* Compare exact positive rational num*2^E/den to finite binary64.
+ * Success is 1; 0 means bounded integer capacity prevented comparison.
+ * Inexact results are not errors by themselves. */
+static int wb_compare_double(const struct warden_big *num,
+                             const struct warden_big *den,
+                             int E, uint64_t bits, int *cmp) {
+    if (bits >= 0x7ff0000000000000ULL) return 0;
+    uint64_t m;
+    int exp;
+    wb_double_parts(bits, &m, &exp);
+    struct warden_big rhs, shifted;
+    if (!wb_mul_u64(&rhs, den, m)) return 0;
+    if (E >= exp) {
+        if ((long)E - exp > 12000 || !wb_shift(&shifted, num, (unsigned)(E-exp))) return 0;
+        *cmp = wb_cmp(&shifted, &rhs);
+    } else {
+        if ((long)exp - E > 12000 || !wb_shift(&shifted, &rhs, (unsigned)(exp-E))) return 0;
+        *cmp = wb_cmp(num, &shifted);
+    }
+    return 1;
+}
+
 /* Return 1 with a binary64 output if all exact operations fit. Return 0
  * without a value if budgets are exceeded. Mode: nearest, ties-to-even;
  * ignores current fenv intentionally and is not production libc.
  */
 static int wb_exact_decimal(const char *number_start, const char *number_end,
-                            const char *parsed_end, double *result) {
+                            const char *parsed_end, double *result, int *inexact, int *tiny) {
     struct warden_big digits, numerator, denominator;
     wb_set(&digits, 0);
     unsigned total_digits = 0;
@@ -140,7 +162,7 @@ static int wb_exact_decimal(const char *number_start, const char *number_end,
         if (++total_digits > WARDEN_MAX_DIGITS) return 0;
         if (!wb_mul_small(&digits, 10) || !wb_add_digit(&digits, (uint32_t)d)) return 0;
     }
-    if (!digits.n) { *result = 0.0; return 1; }
+    if (!digits.n) { *result = 0.0; *inexact = 0; *tiny = 0; return 1; }
     long ee = -(long)fractional;
     if (parsed_end != number_end) {
         const char *ep = number_end+1;
@@ -149,8 +171,8 @@ static int wb_exact_decimal(const char *number_start, const char *number_end,
         ee = plus_sat(ee, parsed);
     }
     long magnitude = plus_sat((long)total_digits, ee);
-    if (magnitude >= 310) { *result = __builtin_inf(); return 1; }
-    if (magnitude <= -325) { *result = 0.0; return 1; }
+    if (magnitude >= 310) { *result = __builtin_inf(); *inexact = 1; *tiny = 0; return 1; }
+    if (magnitude <= -325) { *result = 0.0; *inexact = 1; *tiny = 1; return 1; }
     if (ee > 5000 || ee < -5000) return 0;
     int E = (int)ee;
     numerator = digits;
@@ -174,6 +196,19 @@ static int wb_exact_decimal(const char *number_start, const char *number_end,
     }
     union { uint64_t bits; double d; } final;
     final.bits = left;
+    int cmp;
+    if (final.bits == 0x7ff0000000000000ULL) { *inexact = 1; *tiny = 0; }
+    else {
+        if (!wb_compare_double(&numerator, &denominator, E, final.bits, &cmp)) return 0;
+        *inexact = cmp != 0;
+        if (final.bits < 0x0010000000000000ULL) *tiny = 1;
+        else if (final.bits > 0x0010000000000000ULL) *tiny = 0;
+        else {
+            if (!wb_compare_double(&numerator, &denominator, E,
+                                   0x0010000000000000ULL, &cmp)) return 0;
+            *tiny = cmp < 0;
+        }
+    }
     *result = final.d;
     return 1;
 }

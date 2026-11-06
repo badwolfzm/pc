@@ -48,3 +48,11 @@ LC_ALL=C /tmp/strtod-hexstress 100000
 ```
 
 The math, ABI/locale/errno and time bounds still need independent review before any merge or production use. The explicit `ready_for_runtime_integration:false` result is intentionally unchanged.
+
+## Range-error correctness regression (2026-11-06)
+
+The original exact-rounding prototype set `errno=ERANGE` unconditionally for all nonzero subnormal binary64 outputs (incorrect for exactly representable values such as `0x1p-1074`) and sometimes omitted `ERANGE` for inexact decimal underflows such as `5e-324`. This change adds a bounded exact rational-versus-double comparison to recover **inexactness**, and compares against `DBL_MIN` when an inexact result rounds to the smallest normal double. It changes **only the experimental, owned `strtod` files**; freestanding symbol dependencies still include only existing `__errno_location`.
+
+Executed locally (Debian x86-64, GCC 14.2, glibc 2.41): 21 selected C-locale `errno`/result/endptr fixtures passed, 394 representative strings passed, 15 decimal rounding boundaries passed, 28 hex boundary cases passed, 100,000 hex strings had zero binary-output/endptr mismatches. Compiled with `-fsanitize=undefined` and freestanding `-ffreestanding -fno-builtin`; `nm -P -g -u` still showed only `__errno_location`. The host freestanding object grew to approximately 8,089 bytes text and no data/BSS in this local GCC configuration—**not actual guest RAM usage**.
+
+**Known limitations, do not erase:** There are at least two remaining glibc 2.41 `errno` differences for positive inputs near `DBL_MIN` that round upward: `0x1.fffffffffffff8p-1023` and `2.2250738585072012e-308` (details of the host library's underflow signaling depend on its internal conversion path). They are deliberately excluded from the 21-case narrow acceptance gate. Alternate IEEE rounding modes, long-input fallback, locale, hostile workloads and TLS behavior still require review. This PR is **not** a conforming libc and must stay draft until independent review.

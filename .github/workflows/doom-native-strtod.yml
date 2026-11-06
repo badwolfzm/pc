@@ -22,6 +22,8 @@ jobs:
           LC_ALL=C /tmp/test-strtod-rounding
           cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_hex.c -lm -o /tmp/test-strtod-hex
           LC_ALL=C /tmp/test-strtod-hex
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_errno_semantics.c -lm -o /tmp/test-strtod-errno
+          LC_ALL=C /tmp/test-strtod-errno
           cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/hexstress.c -lm -o /tmp/hexstress-strtod
           LC_ALL=C /tmp/hexstress-strtod 100000
           cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/stress.c -lm -o /tmp/stress-strtod

@@ -165,17 +165,18 @@ double strtod(const char *restrict nptr, char **restrict endptr) {
     if (!significand) return negative ? -0.0 : 0.0;
     if (is_hex) {
         double exact;
-        if (wb_exact_hex(number_start + 2, number_end, p, &exact)) {
-            if (exact == __builtin_inf() || exact == 0.0 ||
-                (exact > 0.0 && exact < DBL_MIN)) errno = ERANGE;
+        int inexact, tiny;
+        if (wb_exact_hex(number_start + 2, number_end, p, &exact, &inexact, &tiny)) {
+            /* Overflow or nonzero, tiny, inexact result; not exact subnormal. */
+            if (exact == __builtin_inf() || (inexact && tiny)) errno = ERANGE;
             return negative ? -exact : exact;
         }
     }
     if (!is_hex) {
         double exact;
-        if (wb_exact_decimal(number_start, number_end, p, &exact)) {
-            if (exact == __builtin_inf() || exact == 0.0 ||
-                (exact > 0.0 && exact < DBL_MIN)) errno = ERANGE;
+        int inexact, tiny;
+        if (wb_exact_decimal(number_start, number_end, p, &exact, &inexact, &tiny)) {
+            if (exact == __builtin_inf() || (inexact && tiny)) errno = ERANGE;
             return negative ? -exact : exact;
         }
     }

@@ -34,6 +34,9 @@ jobs:
         run: |
           python3 tools/doom-native-link-gate/gate.py \
             --source /tmp/doomgeneric-pinned/doomgeneric --output target/doom-native-scanf
+          python3 tools/doom-native-scanf/audit_callsites.py \
+            --source /tmp/doomgeneric-pinned/doomgeneric \
+            --gate target/doom-native-scanf/gate.json
           ld -r -o target/doom-native-scanf/with-scanf.o \
             target/doom-native-scanf/all-objects.o /tmp/doom-native-scanf.o
           python3 tools/doom-native-scanf/check.py \

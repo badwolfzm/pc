@@ -69,8 +69,26 @@ fn main() {
         assert_eq!(fragmented.used, before + 2);
         assert_eq!(start % 4096, 0);
     }
-    println!("{{\"source\":\"actual FrameAlloc from mm.rs\",\"normal_contiguous_ok\":true,\"zero_count_has_side_effect\":{},\"noncontiguous_failure_leaks_used\":{},\"before_used\":{},\"after_used\":{},\"zero_after_used\":{}}}",
-        zero_side_effect, leak, before, fragmented.used, zero.used);
+    // The reserved boot-module region may bisect the would-be run.
+    let mut reserved = backing.fa();
+    let base = backing.ptr as u64;
+    reserved.reserve(base + 2 * PAGE, base + 4 * PAGE);
+    let reserve_before = reserved.used;
+    let reserve_result = reserved.alloc_contiguous(3);
+    let reserve_leak = reserve_result.is_none() && reserved.used != reserve_before;
+    if let Some(start) = reserve_result {
+        assert!(start >= base + 4 * PAGE);
+        assert_eq!(reserved.used, reserve_before + 3);
+    }
+
+    let mut exhausted = backing.fa();
+    let exhaustion_before = exhausted.used;
+    let exhaustion_result = exhausted.alloc_contiguous(9);
+    let exhaustion_leak = exhaustion_result.is_none() && exhausted.used != exhaustion_before;
+    assert!(exhaustion_result.is_none());
+
+    println!("{{\"source\":\"actual FrameAlloc from mm.rs\",\"normal_contiguous_ok\":true,\"zero_count_has_side_effect\":{},\"noncontiguous_failure_leaks_used\":{},\"reserved_overlap_failure_leaks_used\":{},\"exhaustion_failure_leaks_used\":{},\"before_used\":{},\"after_used\":{},\"zero_after_used\":{}}}",
+        zero_side_effect, leak, reserve_leak, exhaustion_leak, before, fragmented.used, zero.used);
 }
 """
 
@@ -100,7 +118,9 @@ def run(strict=False, proposed_fix=False):
     report["implementation"] = "proposed_unmerged_patch" if proposed_fix else "repository_baseline"
     print(json.dumps(report, sort_keys=True))
     return 1 if strict and (report["zero_count_has_side_effect"] or
-                            report["noncontiguous_failure_leaks_used"]) else 0
+                            report["noncontiguous_failure_leaks_used"] or
+                            report["reserved_overlap_failure_leaks_used"] or
+                            report["exhaustion_failure_leaks_used"]) else 0
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

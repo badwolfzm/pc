@@ -1,0 +1,29 @@
+name: Doom freestanding memory
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-freestanding-memory/**'
+      - '.github/workflows/doom-freestanding-memory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: C11 UBSan differential tests
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin \
+            -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-freestanding-memory/memory.c \
+            tools/doom-freestanding-memory/test_memory.c -o doom-memory-test
+          ./doom-memory-test
+      - name: Check freestanding object has no external dependencies
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin \
+            -c tools/doom-freestanding-memory/memory.c -o doom-memory.o
+          test -z "$(nm -u doom-memory.o)"

@@ -12,6 +12,8 @@
 
 static jmp_buf completed;
 static unsigned int frame_count;
+static unsigned int startup_frames;
+static unsigned int game_started;
 static unsigned int key_press_sent, key_release_sent;
 static uint64_t ticks;
 static uint64_t first_hash, last_hash;
@@ -41,11 +43,11 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
         /* PS/2 set-1 up-arrow press, then release. The actual Warden
          * DG_GetKey callback decodes these into Doom key semantics.
          */
-        if (frame_count >= 2 && !key_press_sent) {
+        if (game_started && frame_count >= 2 && !key_press_sent) {
             key_press_sent = 1;
             return 0x48;
         }
-        if (frame_count >= 6 && !key_release_sent) {
+        if (game_started && frame_count >= 6 && !key_release_sent) {
             key_release_sent = 1;
             return 0xc8;
         }
@@ -57,6 +59,11 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
     case 61: {
         if (b == 0) return UINT64_MAX;
         const uint32_t *pixels = (const uint32_t *)(uintptr_t)b;
+        if (!game_started) {
+            ++startup_frames;
+            if (startup_frames > 200) longjmp(completed, 3);
+            return 0;
+        }
         uint64_t hash = hash_pixels(pixels, 320U * 200U);
         if (frame_count == 0) first_hash = hash;
         last_hash = hash;
@@ -90,16 +97,17 @@ int main(int argc, char **argv) {
     int jumped = setjmp(completed);
     if (jumped == 0) {
         doomgeneric_Create(10, args);
+        game_started = 1;
         for (unsigned int n = 0; n < 3000; ++n) doomgeneric_Tick();
         fprintf(stderr, "frame deadline exhausted: %u frames\n", frame_count);
         return 1;
     }
     if (jumped != 1 || frame_count < 10 || !key_press_sent || !key_release_sent || first_hash == last_hash) {
-        fprintf(stderr, "frame/input/hash gate failed: frames=%u down=%u up=%u\n", frame_count, key_press_sent, key_release_sent);
+        fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u down=%u up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent);
         return 1;
     }
-    printf("PASS real upstream Doom engine frames=%u keyboard_down=%u keyboard_up=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
-           frame_count, key_press_sent, key_release_sent, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
+           startup_frames, frame_count, key_press_sent, key_release_sent, (unsigned long long)first_hash, (unsigned long long)last_hash);
     warden_doom_wad_revoke();
     free(wad);
     return 0;

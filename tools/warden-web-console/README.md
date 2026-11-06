@@ -19,6 +19,30 @@ Open **http://localhost:8787/** in the same machine's browser and enter the conf
 
 For phone/tablet access, keep the server bound to loopback and place it behind a TLS reverse proxy or a secured VPN tunnel. Set `WARDEN_WEB_ORIGIN` to the exact public HTTPS origin of that proxy (including port if nonstandard). Use WSS over the public connection. Do **not** bind this prototype directly to the public internet. Authentication/session limits are deliberately modest and have not received an independent security audit.
 
+## One-terminal WSL test of a real QEMU framebuffer
+
+Instead of managing separate server passwords, ingest tokens, QMP sockets and
+three concurrent terminals, use the optional launcher. It generates one shared
+ephemeral token and a private temporary QMP socket for the two child processes;
+it does **not** use `demo.js` or the rainbow generator.
+
+```sh
+# Terminal: WSL Ubuntu, NOT Windows cmd.exe.
+cd ~/warden/pc-web-console
+bash tools/warden-web-console/run_with_qemu.sh \
+  "$HOME/warden/pc-game-test/target/warden-game.mb32"
+```
+
+Enter a new password (12+ characters), then visit **http://localhost:8787/**
+from your PC browser. The launcher stops its server and QEMU children on exit;
+a preexisting process bound to port 8787 is reported rather than killed.
+Use Ctrl+C to stop. Do not concurrently run the old rainbow demo.
+If the kernel image is missing, first build the G0 game probe in its own
+worktree. Passing the G0 image launches a synthetic Warden graphics test,
+**not actual Doom**; the probe finishes after 60 frames, so display may
+become static or QEMU may exit quickly. This command has not been tested
+end-to-end with a Warden guest on the user's computer.
+
 ## Optional live QEMU screen relay (experimental)
 
 The host-side `qmp_bridge.py` can screenshot an **existing** QEMU VM through a **user-owned local UNIX QMP socket** and push frames into the browser console; it relays an allow-list of keyboard keys back through QMP. No Warden kernel modifications or untrusted access to QMP are required. Example:

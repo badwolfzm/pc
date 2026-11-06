@@ -1,0 +1,52 @@
+name: Genuine Doom plus Freedoom actual one-core host RSS baseline
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary-pc-doom-measured-host/**'
+      - '.github/workflows/ordinary-pc-doom-measured-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measured-host-game:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage pinned sampler dependency from unmerged PR 156
+        run: |
+          git fetch --quiet --depth=1 origin c188ef548f6bc926633223602da60f2549a7fceb
+          test "$(git rev-parse FETCH_HEAD)" = "c188ef548f6bc926633223602da60f2549a7fceb"
+          git restore --source=FETCH_HEAD -- tools/ordinary-pc-host-sampler
+          test -f tools/ordinary-pc-host-sampler/sample.py
+      - name: Unit tests for provenance and fail-closed inputs
+        run: python3 -m unittest discover -s tools/ordinary-pc-doom-measured-host -p 'test_*.py' -v
+      - name: Fetch original pinned Doom engine source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/upstream-doomgeneric
+          git -C /tmp/upstream-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/upstream-doomgeneric rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Fetch original released Freedoom Phase 1 test asset
+        run: |
+          curl --fail --location --retry 3 --max-time 90 \
+            https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip \
+            -o /tmp/freedoom.zip
+          python3 - <<'PY'
+          import pathlib,zipfile,hashlib
+          with zipfile.ZipFile("/tmp/freedoom.zip") as z:
+              items=[x for x in z.infolist() if x.filename.endswith("/freedoom1.wad") and not x.is_dir()]
+              if len(items)!=1 or items[0].file_size>67108864: raise SystemExit("unexpected WAD archive")
+              with z.open(items[0]) as source,open("/tmp/freedoom1.wad","wb") as output:
+                  while True:
+                      block=source.read(1048576)
+                      if not block: break
+                      output.write(block)
+          actual=hashlib.sha256(pathlib.Path("/tmp/freedoom1.wad").read_bytes()).hexdigest()
+          if actual != "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d":
+              raise SystemExit("invalid Freedoom v0.13.0 phase-1 WAD SHA256")
+          print("Pinned Freedoom SHA-256:",actual)
+          PY
+      - name: Execute real 60-frame Doom workload on one allowed host CPU and observe memory
+        run: |
+          python3 tools/ordinary-pc-doom-measured-host/measure.py \
+            --source /tmp/upstream-doomgeneric/doomgeneric --wad /tmp/freedoom1.wad --timeout 25

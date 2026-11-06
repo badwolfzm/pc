@@ -33,6 +33,7 @@ jobs:
           unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$'
           file="$(unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$' | head -n1)"
           unzip -p /tmp/freedoom.zip "$file" > DOOM1.WAD
-          test "$(head -c4 DOOM1.WAD)" = IWAD\n          echo "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  DOOM1.WAD" | sha256sum --check
+          test "$(head -c4 DOOM1.WAD)" = IWAD
+          echo "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  DOOM1.WAD" | sha256sum --check
       - name: Start genuine Doom and verify ten gameplay frames plus consumed keyboard transitions (host only)
         run: bash tools/doom-host-frames/run.sh /tmp/genuine-doomgeneric/doomgeneric DOOM1.WAD

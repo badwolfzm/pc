@@ -13,3 +13,7 @@ python3 -m unittest discover -s tools/doom-import-triage -p 'test_*.py' -v
 This tool does **not** build an executable, implement missing symbols, grant permissions, download Doom, launch a guest, prove RAM fitting or measure FPS. Symbol labels are advisory and must not be used to silently substitute host libc/file/system calls. Unknown imports require manual provenance review. The original link report is an input, never rewritten. Verify caller paths and exact upstream source revision with the underlying gate. All tests are synthetic; a real linker report still requires the separately pinned source and environment.
 
 Handoff: base main `4f05f4421b2602d5e7884770b90c440733a14cbc`. Docs/analysis-only contribution. Independent reviewer requested. Integrate when useful for actual #95 runtime ownership, not as evidence of a native Doom boot.
+
+## CI genuine-source gate
+
+The dedicated `.github/workflows/doom-import-triage.yml` workflow fetches and verifies the exact upstream `e257a09527062bfb986b6e5e0780839b6cbd5b71` commit, runs both parser suites, builds the 79 actual freestanding translation units and current merged Warden bridge objects using the existing linker gate, invokes this triage, checks exact symbol/provenance coverage and uploads both JSON reports. This is an **ET_REL link analysis only**; no guest executable, game frames or resource usage is asserted. Until a green run is observed, treat CI validation as pending.

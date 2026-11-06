@@ -26,7 +26,7 @@ def simulate(doc):
     for key, size in overhead.items():
         if type(key) is not str or not key or len(key) > 80:
             raise ValueError("invalid overhead component name")
-        total += number(size, key)
+        total += number(size, key, minimum=1)
         if total >= CAP:
             raise ValueError("no game memory remains under 512 MiB cap")
     capacity = (CAP - total) // PAGE

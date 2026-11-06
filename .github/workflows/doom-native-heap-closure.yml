@@ -13,11 +13,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Stage immutable draft arena dependency #113 without changing its branch
+      - name: Verify integrated arena from merged main
         run: |
-          git fetch --quiet --depth=1 origin 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
-          test "$(git rev-parse FETCH_HEAD)" = 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
-          git restore --source=FETCH_HEAD -- tools/doom-freestanding-arena
+          test -f tools/doom-freestanding-arena/arena.c
+          test -f tools/doom-freestanding-arena/arena.h
       - name: Validate heap closure contract tests
         run: python3 -m unittest discover -s tools/doom-native-heap-closure -p 'test_*.py' -v
       - name: Fetch exact original Doom source

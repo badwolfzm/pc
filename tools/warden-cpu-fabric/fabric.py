@@ -298,6 +298,33 @@ class BoundedServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     request_queue_size = 16
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._admission = threading.BoundedSemaphore(32)
+
+    def process_request(self, request, client_address):
+        # Never start unbounded HTTP handler threads when a peer floods us.
+        if not self._admission.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._admission.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            request.settimeout(3)
+            try:
+                secure = self.tls_context.wrap_socket(request, server_side=True)
+            except (ssl.SSLError, OSError):
+                self.shutdown_request(request)
+                return
+            super().process_request_thread(secure, client_address)
+        finally:
+            self._admission.release()
+
 
 class RejectRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -358,8 +385,7 @@ def coordinate(opener, nodes: list[str], digest: str, jobs: int,
     parallel = min(max_parallel, len(targets), jobs)
     prefix = uuid.uuid4().hex[:16]
 
-    def execute(index):
-        url = targets[index % len(targets)]
+    def execute(index, url):
         job_id = prefix + "-" + str(index)
         try:
             # If the response is lost, never reassign this job to another
@@ -394,22 +420,25 @@ def coordinate(opener, nodes: list[str], digest: str, jobs: int,
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
         pending = {}
         next_index = 0
-        while next_index < jobs and len(pending) < parallel:
-            f = executor.submit(execute, next_index)
-            pending[f] = next_index
+        # Every in-flight controller future owns a specific remote worker
+        # slot. Rescheduling onto the *same* slot after completion prevents
+        # racing a busy worker and receiving spurious 429 responses.
+        for url in targets[:parallel]:
+            f = executor.submit(execute, next_index, url)
+            pending[f] = url
             next_index += 1
         while pending:
             finished, _ = concurrent.futures.wait(
                 pending, return_when=concurrent.futures.FIRST_COMPLETED)
             for future in finished:
-                pending.pop(future)
+                url = pending.pop(future)
                 result = future.result()
                 print(json.dumps(result, sort_keys=True), flush=True)
                 done += 1
                 good += bool(result.get("ok"))
                 if next_index < jobs:
-                    f = executor.submit(execute, next_index)
-                    pending[f] = next_index
+                    f = executor.submit(execute, next_index, url)
+                    pending[f] = url
                     next_index += 1
     print("FABRIC SUMMARY: " + str(good) + "/" + str(done) + " passed")
     return good == jobs
@@ -458,7 +487,10 @@ def main(argv=None):
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_verify_locations(cafile=args.tls_ca)
         context.load_cert_chain(certfile=args.tls_cert, keyfile=args.tls_key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        # TLS handshakes must not block the single accept loop indefinitely.
+        # Wrap each accepted socket in its handler thread instead.
+        server.tls_context = context
+        server.socket.settimeout(1.0)
         print("Warden CPU Fabric worker listening on " +
               args.listen + ":" + str(server.server_port) +
               " slots=" + str(args.slots), flush=True)

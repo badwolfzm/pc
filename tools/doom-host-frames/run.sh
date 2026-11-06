@@ -26,4 +26,7 @@ cc "${FLAGS[@]}" -DWARDEN_DOOM_TEST -c "$ROOT/tools/doomgeneric-warden/doomgener
 cc "${FLAGS[@]}" -c "$ROOT/tools/doom-host-frames/game_smoke.c" -o "$OUT/game.o"
 cc "${OBJECTS[@]}" "$OUT/stream.o" "$OUT/bridge.o" "$OUT/backend.o" "$OUT/display.o" "$OUT/game.o" -lm -Wl,--wrap=DG_GetKey -o "$OUT/doom-host-frames"
 # Last resort timeout as Doom may hang during initialization; no QEMU involved.
+echo "Doom host control: zero input, genuine level simulation"
+timeout 30s "$OUT/doom-host-frames" "$WAD" --no-input
+echo "Doom host intervention: up-arrow press/release through merged Warden adapter"
 timeout 30s "$OUT/doom-host-frames" "$WAD"

@@ -33,6 +33,39 @@ class JoinTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify_runtime_report(None, 'abc')
 
+    def test_scanner_report_is_exactly_bound_to_eight_mib_runtime(self):
+        base = 'a' * 64
+        scanned = 'b' * 64
+        runtime = {
+            'arena_bytes_reserved_in_BSS': 8388608,
+            'pinned_default_doom_zone_bytes': 6291456,
+            'candidate_object_sha256': base,
+            'upstream_commit': 'e257a09527062bfb986b6e5e0780839b6cbd5b71',
+            'static_elf_allocatable_section_metrics': {
+                'allocatable_nobits_bytes': 8388608,
+                'allocatable_total_section_bytes': 9000000}}
+        scanner = {
+            'original_bundle_object_sha256': base,
+            'combined_object_sha256': scanned,
+            'resolved_only': ['__isoc99_sscanf'],
+            'scanner_exact_commit': '62dc9f73bee7753bd81d889a0e44ee8e95ce2220',
+            'real_engine_upstream_commit': runtime['upstream_commit'],
+            'final_executable_built': False}
+        self.assertTrue(verify_runtime_report(runtime, scanned, scanner))
+        for name, invalid in (
+            ('original_bundle_object_sha256', 'wrong'),
+            ('combined_object_sha256', 'wrong'),
+            ('resolved_only', ['system']),
+            ('scanner_exact_commit', 'wrong'),
+            ('real_engine_upstream_commit', 'wrong'),
+            ('final_executable_built', True)):
+            with self.subTest(name=name):
+                tampered = dict(scanner, **{name: invalid})
+                with self.assertRaises(ValueError):
+                    verify_runtime_report(runtime, scanned, tampered)
+        with self.assertRaises(ValueError):
+            verify_runtime_report(runtime, scanned)
+
     def test_nm_parse(self):
         self.assertEqual(symbols('_start T 0 12\nfopen U\n'), ({'_start'}, {'fopen'}))
 

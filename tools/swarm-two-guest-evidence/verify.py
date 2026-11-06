@@ -9,11 +9,19 @@ from pathlib import Path
 REQUIRED = {"node_id","job_id","vcpu","ram_mib","kernel_sha256","serial_path","serial_sha256","guest_exit_code","elapsed_ms"}
 MAX_BYTES = 1048576
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
 def verify(manifest: Path):
     try:
         if manifest.is_symlink() or manifest.stat().st_size > MAX_BYTES:
             return ["manifest is symlink or oversized"]
-        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
     except (OSError, UnicodeError, ValueError) as exc:
         return [f"invalid manifest: {exc}"]
     if not isinstance(data, dict) or set(data) != {"runs"} or not isinstance(data["runs"], list) or len(data["runs"]) != 2:

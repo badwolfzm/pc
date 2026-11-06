@@ -42,6 +42,7 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
     if checked_end(phoff, phnum * phentsize, "program headers") > len(data):
         raise InvalidELF("program headers outside file")
     ranges = []
+    page_permissions = []
     executable = []
     file_bytes = 0
     for i in range(phnum):
@@ -67,6 +68,7 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
         if vaddr < 0x1000 or end > (1 << 47):
             raise InvalidELF("load address outside conservative user range")
         ranges.append((vaddr, end))
+        page_permissions.append(((vaddr // 4096) * 4096, ((end + 4095) // 4096) * 4096, pflags))
         if pflags & PF_X:
             executable.append((vaddr, end))
         file_bytes += filesz
@@ -76,6 +78,10 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
     for left, right in zip(ranges, ranges[1:]):
         if left[1] > right[0]:
             raise InvalidELF("overlapping load virtual ranges")
+    for i, (lo, hi, flags) in enumerate(page_permissions):
+        for other_lo, other_hi, other_flags in page_permissions[i + 1:]:
+            if lo < other_hi and other_lo < hi and ((flags | other_flags) & (PF_X | PF_W)) == (PF_X | PF_W):
+                raise InvalidELF("load segments would share a writable+executable page")
     if not any(lo <= entry < hi for lo, hi in executable):
         raise InvalidELF("entry point not in executable load segment")
     # This is an upper bound on direct loaded-image bytes, NOT real peak RSS:

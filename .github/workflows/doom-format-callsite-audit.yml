@@ -24,6 +24,18 @@ jobs:
         run: |
           python3 tools/doom-format-callsite-audit/audit.py --source /tmp/doom-original/doomgeneric --output target/doom-format-callsite-audit/report.json
           python3 -c 'import json; p=json.load(open("target/doom-format-callsite-audit/report.json")); assert p["real_engine_translation_units"] == 79 and p["source_scanner_not_full_c_parser"] and not p["native_guest_boot_verified"]'
+      - name: Print bounded manual-review findings from genuine source
+        run: |
+          python3 - <<'PY'
+          import json
+          report = json.load(open("target/doom-format-callsite-audit/report.json"))
+          flagged = [x for x in report["callsites"] if x["problems"]]
+          if len(flagged) > 100:
+              raise SystemExit("too many flagged callsites for bounded CI review")
+          for row in flagged:
+              print(json.dumps(row, sort_keys=True))
+          print("MANUAL_REVIEW_TOTAL", len(flagged))
+          PY
       - name: Upload actual-source callsite evidence
         if: always()
         uses: actions/upload-artifact@v4

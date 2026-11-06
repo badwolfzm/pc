@@ -1,0 +1,30 @@
+name: Genuine pinned Doom whole-engine Warden host link gate
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-engine-link/**'
+      - '.github/workflows/doom-engine-link.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-full-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage exact upstream Warden platform callback and WAD dispatch dependencies
+        run: |
+          git fetch --quiet --depth=1 origin c60e37f85a1f704290234ec95a1aae60622fbb51
+          test "$(git rev-parse FETCH_HEAD)" = c60e37f85a1f704290234ec95a1aae60622fbb51
+          git restore --source=FETCH_HEAD -- tools/doomgeneric-warden
+          git fetch --quiet --depth=1 origin 41d9274938cec540a8bef62933e6acc2d8f84b59
+          test "$(git rev-parse FETCH_HEAD)" = 41d9274938cec540a8bef62933e6acc2d8f84b59
+          git restore --source=FETCH_HEAD -- tools/doom-real-wfile-link/bridge_backend.c
+      - name: Fetch pinned real upstream Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/genuine-doomgeneric
+          git -C /tmp/genuine-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/genuine-doomgeneric rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Build and link all real Doom engine source modules with Warden adapters
+        run: bash tools/doom-engine-link/run.sh /tmp/genuine-doomgeneric/doomgeneric

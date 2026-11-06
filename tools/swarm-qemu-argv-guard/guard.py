@@ -15,11 +15,11 @@ class PolicyError(ValueError):
 
 
 def validate(candidate: list[str], approved: list[str]) -> None:
-    if not approved or not all(isinstance(x, str) and x for x in approved):
+    if not isinstance(approved, list) or not isinstance(candidate, list) or not approved or not all(isinstance(x, str) and x for x in approved):
         raise PolicyError("approved argv must contain nonempty strings")
-    if candidate != approved:
+    if not all(isinstance(x, str) and x for x in candidate) or candidate != approved:
         raise PolicyError("argv differs from operator-approved immutable template")
-    if not approved[0].endswith(("qemu-system-x86_64", "qemu-system-x86_64.exe")):
+    if Path(approved[0]).name not in ("qemu-system-x86_64", "qemu-system-x86_64.exe"):
         raise PolicyError("approved executable must be qemu-system-x86_64")
     if approved.count("-smp") != 1 or approved.count("-m") != 1:
         raise PolicyError("require exactly one -smp and -m option")
@@ -30,7 +30,7 @@ def validate(candidate: list[str], approved: list[str]) -> None:
         raise PolicyError("missing QEMU option value") from exc
     if smp != "1":
         raise PolicyError("exactly one vCPU required")
-    if memory not in ("512", "512M", "512m", "512MiB"):
+    if memory != "512M":
         raise PolicyError("require 512 MiB QEMU guest RAM")
     # Exact argv equality is the primary safeguard. These flags remain
     # disallowed even when mistakenly added to an operator-approved template.

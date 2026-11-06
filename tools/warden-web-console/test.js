@@ -56,6 +56,16 @@ const pause=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
   assert.match(home.body.toString(),/<canvas/);
   const noOrigin=await req('POST','/api/login',JSON.stringify({password:PASSWORD}),{'Content-Type':'application/json'});
   assert.equal(noOrigin.code,403);
+  const alternate = 'http://127.0.0.1:'+PORT;
+  const alternateLogin=await req('POST','/api/login',JSON.stringify({password:PASSWORD}),{'Origin':alternate});
+  assert.equal(alternateLogin.code,200);
+  const alternateToken=JSON.parse(alternateLogin.body.toString()).token;
+  const alternateWs=await upgrade(alternateToken,alternate);
+  assert.match(alternateWs.response,/101 Switching Protocols/);
+  alternateWs.sock.destroy();
+  const foreign=await req('POST','/api/login',JSON.stringify({password:PASSWORD}),
+    {'Origin':'https://attacker.invalid'});
+  assert.equal(foreign.code,403);
   const bad=await req('POST','/api/login',JSON.stringify({password:'wrong'}),{'Origin':ORIGIN});
   assert.equal(bad.code,401);
   const good=await req('POST','/api/login',JSON.stringify({password:PASSWORD}),{'Origin':ORIGIN});
@@ -83,7 +93,7 @@ const pause=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
   assert.match(invalid.response,/403 Forbidden/);invalid.sock.destroy();
   const input=await req('GET','/api/input',null,{'X-Warden-Ingest-Token':INGEST});
   assert.equal(input.code,200);assert.deepEqual(JSON.parse(input.body.toString()).events,[]);
-  console.log('PASS: login/origin, token one-use, framebuffer size, ingest auth, WebSocket upgrade, masked key input filtering and polling');
+  console.log('PASS: local loopback aliases and foreign origin blocked, login/origin, token one-use, framebuffer size, ingest auth, WebSocket upgrade, masked key input filtering and polling');
  }catch(e){console.error('FAIL:',e);process.exitCode=1;}
  finally{server.kill('SIGTERM');}
 })();

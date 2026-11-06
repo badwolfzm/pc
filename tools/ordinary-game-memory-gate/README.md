@@ -70,8 +70,12 @@ python3 -m unittest discover -s tools/ordinary-game-memory-gate -p 'test_*.py' -
 
 It fails on double allocation, stale/unknown free, mismatched category, invalid
 frame index, missing origin, reversed timestamps, malformed shapes, negative
-counts, and more than 100,000 events. JSON input remains capped at 4 MiB and
-duplicate keys are rejected by the shared parser.
+counts, and more than 300,000 events. Memory snapshot reports retain the
+4 MiB JSON limit; physical-frame event reports instead use a separate 32 MiB
+limit so a full 512 MiB / 4 KiB = 131,072-frame allocation and release
+lifecycle (262,144 events) can be represented. Duplicate object keys remain
+rejected in both formats. The full-population test uses synthetic allocations
+and releases; it is **not** evidence of a 512 MiB Warden guest high-water mark.
 
 **Crucial:** the field `capture_started_empty=true` is a self-reported
 assertion, not evidence that instrumentation captured every allocation since

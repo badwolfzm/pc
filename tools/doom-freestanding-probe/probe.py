@@ -10,7 +10,7 @@ import sys
 PIN = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
 REQUIRED = {"doomgeneric.o", "d_main.o", "g_game.o", "w_wad.o", "z_zone.o"}
 FLAGS = ("-std=gnu11", "-O2", "-ffreestanding", "-fno-builtin",
-         "-fno-stack-protector", "-fno-pie", "-mgeneral-regs-only",
+         "-fno-stack-protector", "-fno-pie",
          "-DDOOMGENERIC_RESX=320", "-DDOOMGENERIC_RESY=200")
 
 def source_names(makefile):
@@ -38,6 +38,7 @@ def main(argv=None):
     p.add_argument("--upstream", required=True, type=pathlib.Path)
     p.add_argument("--out", required=True, type=pathlib.Path)
     p.add_argument("--compiler", default="cc")
+    p.add_argument("--register-policy", choices=("general-only", "systemv"), default="general-only")
     p.add_argument("--strict-compile", action="store_true",
                    help="Exit nonzero if any genuine upstream unit fails compilation")
     args = p.parse_args(argv)
@@ -51,12 +52,13 @@ def main(argv=None):
         args.out.mkdir(parents=True, exist_ok=True)
         records = []
         objects = []
+        flags = [*FLAGS, *(["-mgeneral-regs-only"] if args.register_policy == "general-only" else [])]
         for name in names:
             path = src / name
             if not path.is_file() or path.is_symlink():
                 raise ValueError("missing or symlinked upstream source: " + name)
             obj = args.out / (name[:-2] + ".o")
-            command = [args.compiler, *FLAGS, "-c", str(path), "-o", str(obj)]
+            command = [args.compiler, *flags, "-c", str(path), "-o", str(obj)]
             try:
                 result = subprocess.run(command, capture_output=True, text=True, timeout=30)
                 entry = {"source": name, "success": result.returncode == 0,
@@ -70,17 +72,19 @@ def main(argv=None):
                 objects.append(str(obj))
         externals = []
         if objects:
-            nm = subprocess.run(["nm", "-P", "-g", "--undefined-only", *objects],
+            nm = subprocess.run(["nm", "-P", "-g", *objects],
                                 capture_output=True, text=True, timeout=30)
             if nm.returncode:
                 raise ValueError("nm failed: " + nm.stderr[:500])
-            externals = parse_undefined(nm.stdout)
+            defined = {parts[0] for line in nm.stdout.splitlines() if (parts := line.split()) and len(parts) >= 2 and parts[1].upper() in ("T", "D", "B", "R", "A", "C", "W", "V")}
+            externals = sorted(set(parse_undefined(nm.stdout)) - defined)
         failed = [x["source"] for x in records if not x["success"]]
         report = {"source": "ozkl/doomgeneric", "pinned_commit": PIN,
                   "scope": "freestanding compiler probe only; not a native ELF link, Warden boot or playable Doom",
-                  "compile_flags": list(FLAGS), "total": len(names),
+                  "compile_flags": flags, "register_policy": args.register_policy, "total": len(names),
                   "compiled": len(objects), "failed": len(failed),
-                  "failed_sources": failed, "unresolved_symbols": externals,
+                  "failed_sources": failed, "unresolved_symbols_from_compiled_subset": externals,
+                  "external_symbols_partial": bool(failed),
                   "results": records}
         (args.out / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         print(f"Upstream freestanding compile: {len(objects)}/{len(names)} files; {len(externals)} distinct external names; report={args.out / 'report.json'}")

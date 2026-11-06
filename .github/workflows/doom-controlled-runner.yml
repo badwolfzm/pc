@@ -1,4 +1,4 @@
-name: Controlled Doom QEMU runner host tests
+name: Controlled Doom QEMU runner host and real-QEMU fixture tests
 on:
   pull_request:
     paths:
@@ -10,8 +10,14 @@ permissions:
 jobs:
   runner:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: Run bounded subprocess tests (no QEMU)
+      - name: Run bounded subprocess unit and CLI fixture tests
         run: python3 -m unittest discover -s tools/doom-controlled-runner -p 'test_*.py' -v
+      - name: Install actual QEMU for independently built Multiboot fixture
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 binutils
+      - name: Launch real QEMU twice against non-Warden non-Doom Multiboot fixture
+        run: python3 tools/doom-controlled-runner/smoke_real_qemu.py

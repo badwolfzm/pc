@@ -37,5 +37,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: real-doom-freestanding-elf-audit
-          path: |\n            target/doom-native-link-audit/report.json\n            target/doom-native-link-audit/combined.json\n            target/doom-native-link-gate/gate.json
+          path: |
+            target/doom-native-link-audit/report.json
+            target/doom-native-link-audit/combined.json
+            target/doom-native-link-gate/gate.json
           if-no-files-found: warn

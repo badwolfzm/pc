@@ -49,7 +49,7 @@ def verify(manifest: Path):
         try:
             target = root / relative
             resolved = target.resolve(strict=True)
-            if not resolved.is_relative_to(root) or not resolved.is_file() or target.is_symlink():
+            if not resolved.is_relative_to(root) or not resolved.is_file() or target.is_symlink() or any(p.is_symlink() for p in [root / Path(*Path(relative).parts[:j]) for j in range(1,len(Path(relative).parts)+1)]):
                 raise ValueError("unsafe evidence target")
             if resolved in paths:
                 raise ValueError("reused evidence target")

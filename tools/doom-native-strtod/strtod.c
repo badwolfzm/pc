@@ -78,8 +78,8 @@ static long double scale2(long double x, long exponent) {
         0x1p32L, 0x1p64L, 0x1p128L, 0x1p256L, 0x1p512L,
         0x1p1024L, 0x1p2048L, 0x1p4096L, 0x1p8192L
     };
-    if (exponent > 16384) return __builtin_infl();
-    if (exponent < -16384) return 0.0L;
+    if (exponent >= 16384) return __builtin_infl();
+    if (exponent <= -16384) return 0.0L;
     unsigned long magnitude = exponent < 0 ? (unsigned long)(-exponent) : (unsigned long)exponent;
     for (unsigned i = 0; magnitude != 0; ++i, magnitude >>= 1) {
         if (magnitude & 1UL) {

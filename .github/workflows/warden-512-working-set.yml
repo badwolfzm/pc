@@ -1,0 +1,17 @@
+name: Ordinary PC 512 MiB working-set offline trace tests
+on:
+  pull_request:
+    paths:
+      - 'tools/warden-512-working-set/**'
+      - '.github/workflows/warden-512-working-set.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  trace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python stdlib offline trace boundary tests
+        run: python3 -m unittest discover -s tools/warden-512-working-set -p 'test_*.py' -v

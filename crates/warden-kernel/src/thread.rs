@@ -53,6 +53,9 @@ pub struct Endpoint {
     senders: Vec<usize>,
     receivers: Vec<usize>,
     capacity: usize,
+    /// Boot-granted console authority, never set for ordinary IPC endpoints.
+    /// Access also requires the caller's live WRITE capability to this object.
+    console: bool,
     /// Deepest the sender queue ever got; checked against `capacity` at the end.
     pub peak_senders: usize,
     /// Sends and recvs refused because the queue was at its capacity.
@@ -61,7 +64,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn with_capacity(capacity: usize) -> Self {
-        Endpoint { senders: Vec::with_capacity(capacity), receivers: Vec::with_capacity(capacity), capacity, peak_senders: 0, refused: 0 }
+        Endpoint { senders: Vec::with_capacity(capacity), receivers: Vec::with_capacity(capacity), capacity, console: false, peak_senders: 0, refused: 0 }
     }
     pub fn capacity(&self) -> usize {
         self.capacity
@@ -440,19 +443,28 @@ fn syscall(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
     }
     let r = match f.rax {
         SYS_LOG => {
-            // Even logging needs a capability: the console endpoint with WRITE.
-            k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE).map_err(err).map(|_| {
-                k.threads[cur].logs += 1;
-                crate::tests::judge(k, b, c);
-                0
-            })
+            // Do not let a writable IPC endpoint impersonate the boot-time
+            // console authority for the in-guest test reporting channel.
+            match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
+                Err(e) => Err(err(e)),
+                Ok(r) if r.kind != ObjectKind::Endpoint
+                    || !k.endpoints.get(&r.object.0).map_or(false, |ep| ep.console) =>
+                        Err(err(CapError::WrongKind)),
+                Ok(_) => {
+                    k.threads[cur].logs += 1;
+                    crate::tests::judge(k, b, c);
+                    Ok(0)
+                }
+            }
         }
         SYS_CONSOLE_WRITE => {
             // Raw bytes to the serial console, through the caller's own page
             // table. Needs WRITE on the console endpoint, like SYS_LOG.
             match k.caps.invoke(&k.threads[cur].cspace, a as usize, Rights::WRITE) {
                 Err(e) => Err(err(e)),
-                Ok(r) if r.kind != ObjectKind::Endpoint => Err(err(CapError::WrongKind)),
+                Ok(r) if r.kind != ObjectKind::Endpoint
+                    || !k.endpoints.get(&r.object.0).map_or(false, |ep| ep.console) =>
+                        Err(err(CapError::WrongKind)),
                 Ok(_) => {
                     let n = core::cmp::min(c as usize, CONSOLE_WRITE_MAX);
                     let mut buf = [0u8; CONSOLE_WRITE_MAX];
@@ -764,7 +776,9 @@ pub fn root_cap(k: &mut Kernel, thread: usize, slot: usize, kind: ObjectKind, ri
 /// nobody is charged. Endpoints a thread owns go through `create_endpoint`.
 pub fn root_endpoint(k: &mut Kernel, thread: usize, slot: usize, rights: Rights, capacity: usize) -> ObjectId {
     let id = root_cap(k, thread, slot, ObjectKind::Endpoint, rights, 0);
-    k.endpoints.insert(id.0, Endpoint::with_capacity(capacity));
+    let mut ep = Endpoint::with_capacity(capacity);
+    ep.console = true; // only boot-time root_endpoint creates console authority
+    k.endpoints.insert(id.0, ep);
     id
 }
 

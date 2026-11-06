@@ -62,6 +62,22 @@ class TriageTests(unittest.TestCase):
         r["unresolved_symbol_provenance"] = {"unrecognized": ["x.o"]}
         self.assertEqual(mod.triage(r)["ranked_imports"][0]["category"], "unclassified")
 
+    def test_sensitive_host_libc_imports_are_not_misclassified(self):
+        dangerous = ["fopen64", "fgets", "snprintf", "vfprintf", "openat",
+                     "mprotect", "dlopen", "posix_spawn", "sendto",
+                     "__isoc99_sscanf", "__isoc23_strtol", "__memcpy_chk"]
+        for name in dangerous:
+            with self.subTest(symbol=name):
+                category, action = mod.classify(name)
+                self.assertEqual(category, "privileged_host_boundary")
+                self.assertIn("capability", action)
+
+    def test_pure_runtime_remains_distinct(self):
+        self.assertEqual(mod.classify("sqrt")[0], "numerical_runtime")
+        self.assertEqual(mod.classify("malloc")[0], "bounded_memory")
+        self.assertEqual(mod.classify("__errno_location")[0], "guest_runtime_state")
+        self.assertEqual(mod.classify("unknown_custom_symbol")[0], "unclassified")
+
     def test_reject_path_traversal_in_source_name(self):
         r = report()
         r["unresolved_symbol_provenance"]["sqrt"] = ["../../x.o"]

@@ -1,0 +1,31 @@
+name: Warden fail-closed Linux randomness
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/linux.rs'
+      - 'tests/security/test_linux_failclosed_entropy.py'
+      - '.github/workflows/warden-failclosed-entropy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-entropy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regression guard
+        run: python3 -m unittest discover -s tests/security -p 'test_linux_failclosed_entropy.py' -v
+      - name: Install QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install Rust bare-metal target
+        run: rustup target add x86_64-unknown-none
+      - name: Rust unit checks
+        run: cargo test --workspace --exclude warden-kernel
+      - name: Boot Warden and run guest checks
+        run: bash tests/kernel/run.sh

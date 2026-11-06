@@ -148,7 +148,6 @@ pub struct Proc {
     mmap_next: u64,
     pub pending: Pending,
     sleep_until: Option<u64>,
-    rng: u64,
     /// The server has been told this process is gone.
     pub exited: bool,
     /// Refusals logged so far; a flood of bad syscalls is reported once.
@@ -164,7 +163,7 @@ impl Proc {
     pub const fn new() -> Self {
         Proc {
             badge: 0, buf: 0, brk_start: 0, brk: 0, mmap_next: MMAP_TOP, pending: Pending::None, sleep_until: None,
-            rng: 0x9E37_79B9_7F4A_7C15, exited: false, noise: 0,
+            exited: false, noise: 0,
             expect_out: None, out_pos: 0, out_ok: true, check: 0,
         }
     }
@@ -196,7 +195,7 @@ pub fn setup(k: &mut Kernel, boot: &mut CSpace, srv: usize) {
         for p in 0..BUF_SIZE / PAGE {
             k.threads[srv].aspace.map_frame(buf + p * PAGE, SRV_BUF_BASE + ci as u64 * BUF_SIZE + p * PAGE, Perm::Rw).expect("server view of buffer");
         }
-        let sp = init_stack(&a, app.argv, &placed, k.ticks).expect("initial stack");
+        let sp = init_stack(&a, app.argv, &placed).expect("initial stack");
         let t = k.spawn(app.name, placed.entry, sp, 50, app.expect, a);
         k.threads[t].personality = Personality::Linux;
         k.threads[t].linux = Proc { badge, buf, brk_start: placed.end, brk: placed.end, expect_out: app.stdout, check: app.check, ..Proc::new() };
@@ -215,19 +214,13 @@ pub fn setup(k: &mut Kernel, boot: &mut CSpace, srv: usize) {
     }
 }
 
-/// Build the Linux initial stack: argc, argv, envp (empty), auxv, AT_RANDOM
-/// bytes. At most 8 arguments.
-fn init_stack(a: &crate::mm::AddressSpace, argv: &[&str], placed: &loader::Placed, ticks: u64) -> Option<u64> {
+/// Build the Linux initial stack: argc, argv, envp (empty), and auxv.
+/// Do not advertise AT_RANDOM until a trusted seeded entropy provider exists.
+/// Its absence may cause libc startup failure or an insecure libc fallback;
+/// this does NOT make arbitrary third-party guests safe to execute.
+/// At most 8 arguments.
+fn init_stack(a: &crate::mm::AddressSpace, argv: &[&str], placed: &loader::Placed) -> Option<u64> {
     let mut sp = STACK_TOP;
-    sp -= 16;
-    let random_at = sp;
-    let mut rnd = [0u8; 16];
-    for (i, b) in rnd.iter_mut().enumerate() {
-        *b = (ticks as u8).wrapping_mul(31).wrapping_add(i as u8 * 7).wrapping_add(argv.len() as u8);
-    }
-    if !a.copy_to_user(random_at, &rnd) {
-        return None;
-    }
     let mut argv_at = [0u64; 8];
     for (i, s) in argv.iter().enumerate().take(8) {
         sp -= (s.len() + 1 + 15) as u64 & !15;
@@ -237,7 +230,7 @@ fn init_stack(a: &crate::mm::AddressSpace, argv: &[&str], placed: &loader::Place
         }
     }
     let argc = argv.len().min(8);
-    let aux: [(u64, u64); 10] = [
+    let aux: [(u64, u64); 9] = [
         (3, placed.phdr),  // AT_PHDR
         (4, 56),           // AT_PHENT
         (5, placed.phnum), // AT_PHNUM
@@ -246,7 +239,6 @@ fn init_stack(a: &crate::mm::AddressSpace, argv: &[&str], placed: &loader::Place
         (11, 1000),        // AT_UID
         (12, 1000),        // AT_EUID
         (23, 0),           // AT_SECURE
-        (25, random_at),   // AT_RANDOM
         (0, 0),            // AT_NULL
     ];
     // argc, argv[..], NULL, envp NULL, auxv.
@@ -805,24 +797,12 @@ fn uname(k: &mut Kernel, cur: usize, buf: u64) -> Result<u64, i64> {
     if k.threads[cur].aspace.copy_to_user(buf, &b) { Ok(0) } else { Err(EFAULT) }
 }
 
-fn getrandom(k: &mut Kernel, cur: usize, buf: u64, n: u64) -> Result<u64, i64> {
-    // xorshift64*, seeded per thread. Not a cryptographic source; the real
-    // entropy service and the `random` permission come with the policy
-    // service in Phase 3.
-    let n = n.min(256) as usize;
-    let mut out = [0u8; 256];
-    let p = &mut k.threads[cur].linux;
-    p.rng ^= k.ticks.wrapping_mul(0x2545_F491_4F6C_DD1D) | 1;
-    for chunk in out[..n].chunks_mut(8) {
-        let mut x = p.rng;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        p.rng = x;
-        let v = x.wrapping_mul(0x2545_F491_4F6C_DD1D).to_le_bytes();
-        chunk.copy_from_slice(&v[..chunk.len()]);
-    }
-    if k.threads[cur].aspace.copy_to_user(buf, &out[..n]) { Ok(n as u64) } else { Err(EFAULT) }
+/// No cryptographically trusted entropy has been wired to the guest yet.
+/// Never return predictable PRNG bytes under Linux's getrandom contract.
+/// Zero-length requests retain the Linux success convention; all requests
+/// for actual random bytes fail closed until a reviewed provider is available.
+fn getrandom(_k: &mut Kernel, _cur: usize, _buf: u64, n: u64) -> Result<u64, i64> {
+    if n == 0 { Ok(0) } else { Err(ENOSYS) }
 }
 
 fn clock_gettime(k: &mut Kernel, cur: usize, ts: u64, micro: bool) -> Result<u64, i64> {

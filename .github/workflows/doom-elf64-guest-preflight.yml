@@ -1,0 +1,19 @@
+name: Doom final ELF64 guest preflight
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-elf64-guest-preflight/**'
+      - '.github/workflows/doom-elf64-guest-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ELF64 parser adversarial tests
+        run: python3 -m unittest discover -s tools/doom-elf64-guest-preflight -p 'test_*.py' -v
+      - name: Syntax check
+        run: python3 -m py_compile tools/doom-elf64-guest-preflight/preflight.py tools/doom-elf64-guest-preflight/test_preflight.py

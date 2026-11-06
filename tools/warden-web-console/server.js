@@ -46,7 +46,15 @@ function body(req, max) {
     req.on('error', reject);
   });
 }
-function allowedOrigin(req) { return req.headers.origin === ORIGIN; }
+// When bound to loopback, browsers may use localhost or 127.0.0.1 for the
+// same local console. Do not broaden the allowlist for proxy/public deployments.
+const localOrigin = /^http:\/\/(?:localhost|127\.0\.0\.1):[0-9]+$/.test(ORIGIN);
+const origins = new Set([ORIGIN]);
+if (HOST === '127.0.0.1' && localOrigin) {
+  origins.add(`http://localhost:${PORT}`);
+  origins.add(`http://127.0.0.1:${PORT}`);
+}
+function allowedOrigin(req) { return origins.has(req.headers.origin); }
 function validIngest(req) { return same(req.headers['x-warden-ingest-token'] || '', INGEST); }
 function websocketSend(socket, opcode, data) {
   if (!socket.writable || socket.writableLength > 1024 * 1024) { socket.destroy(); return; }

@@ -7,7 +7,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
-#include <stdio.h>
+/* Signature imported from the selected freestanding formatter, not host stdio. */
+extern int vsnprintf(char *restrict, size_t, const char *restrict, va_list);
 
 enum {
     DOOM_WARDEN_CONSOLE_WRITE = 13,

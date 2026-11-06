@@ -19,7 +19,9 @@ jobs:
         run: python3 -m py_compile tools/doom-elf64-guest-preflight/preflight.py tools/doom-elf64-guest-preflight/test_preflight.py
       - name: Build and inspect a real x86-64 freestanding ELF64 ET_EXEC
         run: |
-          printf '.global _start\\n_start:\\n  jmp _start\\n' > /tmp/warden-preflight-tiny.s
+          echo '.global _start' > /tmp/warden-preflight-tiny.s
+          echo '_start:' >> /tmp/warden-preflight-tiny.s
+          echo '  jmp _start' >> /tmp/warden-preflight-tiny.s
           cc -nostdlib -static -no-pie -Wl,--build-id=none -Wl,-e,_start /tmp/warden-preflight-tiny.s -o /tmp/warden-preflight-tiny.elf
           python3 tools/doom-elf64-guest-preflight/preflight.py /tmp/warden-preflight-tiny.elf --guest-mib 512 --reserved-mib 128 > /tmp/warden-preflight-real.json
           python3 -c 'import json; r=json.load(open("/tmp/warden-preflight-real.json")); assert r["valid"] and r["elf_type"] == "ET_EXEC" and r["load_segments"] >= 1 and not r["guest_boot_verified"]'

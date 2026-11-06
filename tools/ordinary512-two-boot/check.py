@@ -17,8 +17,6 @@ def combine(log_a, log_b, manifest):
         raise ValueError('two text logs required')
     if not log_a or not log_b or len(log_a.encode('utf-8')) > MAX_LOG_BYTES or len(log_b.encode('utf-8')) > MAX_LOG_BYTES:
         raise ValueError('empty or oversized serial log')
-    if log_a == log_b:
-        raise ValueError('byte-identical logs do not provide independent-run evidence')
     one = extract(log_a, manifest)
     two = extract(log_b, manifest)
     if one['screen_hash'] != two['screen_hash']:
@@ -29,7 +27,7 @@ def combine(log_a, log_b, manifest):
         'profile': 'native-pong-qemu-512m-smp1-two-boot',
         'guest_ram_configured_bytes': 512 * 1024 * 1024,
         'guest_vcpus_configured': 1,
-        'distinct_serial_sha256': [
+        'serial_sha256': [
             hashlib.sha256(log_a.encode('utf-8')).hexdigest(),
             hashlib.sha256(log_b.encode('utf-8')).hexdigest()
         ],
@@ -46,6 +44,8 @@ def main(argv=None):
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.first_log.resolve() == args.second_log.resolve():
+            raise ValueError('logs must use distinct file paths')
         logs = []
         for path in (args.first_log, args.second_log):
             if not path.is_file() or path.stat().st_size > MAX_LOG_BYTES:

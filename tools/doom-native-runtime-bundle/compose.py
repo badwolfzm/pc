@@ -13,7 +13,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE_PATH = ROOT / "tools/doom-native-link-gate/gate.py"
-CANDIDATE_COMMIT = "a3529e43aff95423d0f7c12d78e33ab9e55e3fda"
+FORMAT_MERGED_COMMIT = "4246bde3e786f1c51e3b047292a592cb5c057bf1"
 EXPECTED = {
     "abs", "fabs",
     "strcasecmp", "strncasecmp", "strncpy", "strstr",
@@ -137,7 +137,7 @@ def run(source, output, staged_format):
         objs.append(obj)
         manifests.append({
             "name": name,
-            "source": relpath or "pinned external PR #225",
+            "source": relpath or "pinned merged PR #225",
             "sha256": hashlib.sha256(code.read_bytes()).hexdigest(),
             "symbols_exported": sorted(defined),
             "external_symbol_imports": sorted(missing),
@@ -157,8 +157,8 @@ def run(source, output, staged_format):
         "original_engine_translation_units": base_report["real_upstream_source_count"],
         "warden_components": base_report["warden_component_count"],
         "format_candidate_pr": 225,
-        "format_candidate_exact_commit": CANDIDATE_COMMIT,
-        "format_candidate_not_yet_merged": True,
+        "format_candidate_exact_merged_commit": FORMAT_MERGED_COMMIT,
+        "format_candidate_not_yet_merged": False,
         "arena_bytes_reserved_in_BSS": 1048576,
         "crt_providers": manifests,
         "candidate_object_sha256": hashlib.sha256(combined.read_bytes()).hexdigest(),

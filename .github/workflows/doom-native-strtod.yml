@@ -1,0 +1,56 @@
+name: Doom freestanding strtod diagnostic and genuine engine link
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-strtod/**'
+      - '.github/workflows/doom-native-strtod.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare common conversions with host libc; record precision mismatches
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all -Dstrtod=warden_strtod -c tools/doom-native-strtod/strtod.c -o /tmp/warden-strtod-host.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_strtod.c -lm -o /tmp/test-strtod
+          LC_ALL=C /tmp/test-strtod
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_rounding.c -lm -o /tmp/test-strtod-rounding
+          LC_ALL=C /tmp/test-strtod-rounding
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_hex.c -lm -o /tmp/test-strtod-hex
+          LC_ALL=C /tmp/test-strtod-hex
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_errno_semantics.c -lm -o /tmp/test-strtod-errno
+          LC_ALL=C /tmp/test-strtod-errno
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/hexstress.c -lm -o /tmp/hexstress-strtod
+          LC_ALL=C /tmp/hexstress-strtod 100000
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/stress.c -lm -o /tmp/stress-strtod
+          LC_ALL=C /tmp/stress-strtod 2>&1 | tee /tmp/warden-strtod-precision-diagnostic.log
+          echo '::warning::Exact bounded decimal rounding is tested, but fallback, errno, locales, hex, fenv and length limits are NOT production libc.'
+          python3 -m unittest discover -s tools/doom-native-strtod -p test_verify.py -v
+      - name: Compile freestanding provider and inspect required guest-runtime import
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-strtod/strtod.c -o /tmp/warden-strtod-native.o
+          test "$(nm -P -g -u /tmp/warden-strtod-native.o | awk '{print $1}')" = '__errno_location'
+          test "$(nm -P -g --defined-only /tmp/warden-strtod-native.o | awk '{print $1}')" = 'strtod'
+      - name: Clone pinned original Doomgeneric source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Link actual Doom engine ET_REL and require precisely one resolved import
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-native-strtod
+          ld -r -o target/doom-native-strtod/engine-plus-prototype.o target/doom-native-strtod/all-objects.o /tmp/warden-strtod-native.o
+          python3 tools/doom-native-strtod/verify.py target/doom-native-strtod/all-objects.o target/doom-native-strtod/engine-plus-prototype.o target/doom-native-strtod/probe.json
+      - name: Archive diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-strtod-experiment
+          path: |
+            target/doom-native-strtod/probe.json
+            /tmp/warden-strtod-precision-diagnostic.log
+          if-no-files-found: ignore

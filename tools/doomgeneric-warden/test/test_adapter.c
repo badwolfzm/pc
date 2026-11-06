@@ -62,14 +62,27 @@ int main(void) {
     assert(current_ticks == 10U && yields == 3U);
     DG_SleepMs(0);
     assert(yields == 3U);
-    const uint8_t events[] = {0xe0, 0x48, 0xe0, 0xc8, 0x39, 0xb9};
+    /* Doomgeneric upstream doomkeys.h: KEY_UPARROW=0xad,
+     * KEY_USE=0xa2, KEY_FIRE=0xa3. Press and release must agree.
+     * Extended right Ctrl has the same action as left Ctrl.
+     */
+    const uint8_t events[] = {
+        0xe0, 0x48, 0xe0, 0xc8, /* arrow up */
+        0x39, 0xb9,             /* Space -> use */
+        0x1d, 0x9d,             /* left Ctrl -> fire */
+        0xe0, 0x1d, 0xe0, 0x9d /* right Ctrl -> fire */
+    };
+    const struct { int down; unsigned char code; } expected[] = {
+        {1, 0xad}, {0, 0xad}, {1, 0xa2}, {0, 0xa2},
+        {1, 0xa3}, {0, 0xa3}, {1, 0xa3}, {0, 0xa3}
+    };
     set_keys(events, sizeof events);
     int pressed = -1;
     unsigned char key = 0;
-    assert(DG_GetKey(&pressed, &key) == 1 && pressed == 1 && key == 0xad);
-    assert(DG_GetKey(&pressed, &key) == 1 && pressed == 0 && key == 0xad);
-    assert(DG_GetKey(&pressed, &key) == 1 && pressed == 1 && key == ' ');
-    assert(DG_GetKey(&pressed, &key) == 1 && pressed == 0 && key == ' ');
+    for (size_t i = 0; i < sizeof expected / sizeof expected[0]; ++i) {
+        assert(DG_GetKey(&pressed, &key) == 1);
+        assert(pressed == expected[i].down && key == expected[i].code);
+    }
     assert(DG_GetKey(&pressed, &key) == 0);
     DG_SetWindowTitle("Doom");
     assert(exit_requests == 0);

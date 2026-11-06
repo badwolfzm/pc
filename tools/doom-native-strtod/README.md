@@ -30,3 +30,21 @@ The exact path uses 512 32-bit limbs per big integer. GCC 14.2 reports approxima
 **Explicit nonclaims:** The ET_REL output is not an ET_EXEC, not a Warden guest, not a QEMU boot, not a working Doom game, not measured FPS, not 512 MiB guest/shared-GPU memory accounting, not Albion Online compatibility, and not a production-quality standards-conforming strtod. This diagnostic **must not be merged or integrated as the actual Warden runtime implementation**. Choose a correct, appropriately licensed libc implementation and independently review ABI/TLS/locale behavior before native game integration.
 
 Owned only new \`tools/doom-native-strtod/**\` and \`.github/workflows/doom-native-strtod.yml\` for #209. No edits to kernel, other CRT, WAD, security, graphics, shared runtime or coordination files.
+
+## Further bounded hexadecimal rounding proof (2026-11-06)
+
+A new isolated `exact_hex.h` uses the same fixed-capacity exact-integer midpoint comparison as the decimal path for **hexadecimal** significands and binary `p` exponents. It handles nearest-even rounding, normal/subnormal/overflow boundaries, optional sign and signed zero, within the existing maximum of 3,000 significant digits and a fixed 512-word bigint budget. Explicit out-of-budget fallback **remains approximate**. No allocation, syscalls or new runtime authorities are introduced.
+
+Local Debian x86-64 GCC 14.2 tests in this session: 100,000 deterministic hexadecimal strings (varying mantissa length, exponent and sign) versus glibc, **0 bitwise/endptr mismatches**; 28 adversarial boundary cases passed under AddressSanitizer/UBSan; freestanding `nm -P -g -u` still lists only `__errno_location`; native object text ~7,097 bytes, no data/BSS. These are host comparisons—not Warden/QEMU measurements, proof of exhaustive IEEE conformance or proof of 512 MiB gaming capability.
+
+Run the added tests with the renamed host object, e.g.:
+
+```sh
+cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all -Dstrtod=warden_strtod -c tools/doom-native-strtod/strtod.c -o /tmp/strtod-o.o
+cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/strtod-o.o tools/doom-native-strtod/test_hex.c -lm -o /tmp/strtod-test-hex
+LC_ALL=C /tmp/strtod-test-hex
+cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/strtod-o.o tools/doom-native-strtod/hexstress.c -lm -o /tmp/strtod-hexstress
+LC_ALL=C /tmp/strtod-hexstress 100000
+```
+
+The math, ABI/locale/errno and time bounds still need independent review before any merge or production use. The explicit `ready_for_runtime_integration:false` result is intentionally unchanged.

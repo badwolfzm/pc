@@ -1,0 +1,37 @@
+name: Warden network fabric (two QEMU nodes)
+
+on:
+  pull_request:
+    paths:
+      - 'tools/warden-cpu-fabric/**'
+      - '.github/workflows/warden-cpu-fabric.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secure-network:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and bare-metal build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils openssl curl
+          rustup target add x86_64-unknown-none
+      - name: Python unit and fake-QEMU contract tests
+        run: python3 -m unittest discover -s tools/warden-cpu-fabric -p 'test_*.py' -v
+      - name: Build actual Warden guest image
+        run: |
+          cargo build -q -p warden-kernel --target x86_64-unknown-none --release
+          objcopy -I elf64-x86-64 -O elf32-i386 target/x86_64-unknown-none/release/warden-kernel target/x86_64-unknown-none/release/warden-kernel.mb32
+          sha256sum target/x86_64-unknown-none/release/warden-kernel.mb32
+      - name: Two independent mTLS-connected Warden QEMU workers
+        run: |
+          bash tools/warden-cpu-fabric/two-node-ci.sh "$PWD/target/x86_64-unknown-none/release/warden-kernel.mb32"
+      - name: Report scope
+        run: |
+          echo "Verified: two host-side authenticated endpoints, four actual QEMU kernel-suite VM jobs, one vCPU each."
+          echo "Not verified: native in-guest Warden-to-Warden IPC, single-process remote SMP, Windows WHPX, or remote physical hosts."

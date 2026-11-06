@@ -1,0 +1,26 @@
+name: Doomgeneric adapter negative contract
+on:
+  pull_request:
+    paths:
+      - 'tests/doomgeneric-adapter-negative/**'
+      - 'tools/doomgeneric-warden/**'
+      - '.github/workflows/doomgeneric-adapter-negative.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  negative:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile strict C tests
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -DWARDEN_DOOM_TEST \
+            -Itools/doomgeneric-warden/test \
+            tools/doomgeneric-warden/doomgeneric_warden.c \
+            tests/doomgeneric-adapter-negative/test_negative.c -o negative
+      - name: Check errors and boundary behavior
+        run: ./negative

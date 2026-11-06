@@ -36,4 +36,4 @@ echo "Doom host reverse intervention: down-arrow press/release through merged Wa
 timeout 30s "$OUT/doom-host-frames" "$WAD" --reverse-input | tee "$EVIDENCE_DIR/reverse.log"
 python3 "$ROOT/tools/doom-host-frames/check_evidence.py" \
   "$EVIDENCE_DIR/control.log" "$EVIDENCE_DIR/intervention.log" \
-  "$EVIDENCE_DIR/controlled-input.json"
+  "$EVIDENCE_DIR/controlled-input.json" "$EVIDENCE_DIR/reverse.log"

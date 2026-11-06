@@ -22,10 +22,36 @@ jobs:
           test "$(git -C /tmp/upstream-doomgeneric rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
       - name: Compile original engine modules and collect undefined symbol inventory
         run: python3 tools/doom-upstream-compile/inventory.py --source /tmp/upstream-doomgeneric/doomgeneric --output target/doom-engine-inventory
+      - name: Fetch reviewed Warden Doomgeneric adapter at exact SHA
+        run: |
+          git fetch --quiet --no-tags origin refs/heads/feat/doomgeneric-native-platform-adapter-20261105
+          test "$(git rev-parse FETCH_HEAD)" = "c60e37f85a1f704290234ec95a1aae60622fbb51"
+          mkdir -p target/doom-engine-inventory
+          git show FETCH_HEAD:tools/doomgeneric-warden/doomgeneric_warden.c > target/doom-engine-inventory/warden-callbacks.c
+      - name: Link real engine with Warden callback implementation (HOST LINK ONLY — DO NOT RUN)
+        run: |
+          cc -std=gnu11 -O2 -D_DEFAULT_SOURCE -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
+            -I/tmp/upstream-doomgeneric/doomgeneric \
+            -c target/doom-engine-inventory/warden-callbacks.c -o target/doom-engine-inventory/warden-callbacks.o
+          cc -std=gnu11 -O2 -I/tmp/upstream-doomgeneric/doomgeneric \
+            -c tools/doom-upstream-compile/link_entry.c -o target/doom-engine-inventory/link_entry.o
+          cc -Wl,--no-undefined -Wl,-z,noexecstack \
+            target/doom-engine-inventory/obj/*.o \
+            target/doom-engine-inventory/warden-callbacks.o \
+            target/doom-engine-inventory/link_entry.o \
+            -lm -o target/doom-engine-inventory/doom-host-link-only
+          readelf -W -l target/doom-engine-inventory/doom-host-link-only > target/doom-engine-inventory/host-link-layout.txt
+          size target/doom-engine-inventory/doom-host-link-only > target/doom-engine-inventory/host-link-size.txt
+          nm -D -u target/doom-engine-inventory/doom-host-link-only > target/doom-engine-inventory/host-link-imports.txt || true
+          echo "LINK SUCCEEDED: original Doom engine + Warden callbacks; host libc remains, NOT a guest image"
       - name: Preserve inventory
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pinned-upstream-doom-engine-inventory
-          path: target/doom-engine-inventory/inventory.json
+          path: |
+            target/doom-engine-inventory/inventory.json
+            target/doom-engine-inventory/host-link-layout.txt
+            target/doom-engine-inventory/host-link-size.txt
+            target/doom-engine-inventory/host-link-imports.txt
           if-no-files-found: ignore

@@ -1,0 +1,17 @@
+name: Validated QEMU constrained launcher tests
+on:
+  pull_request:
+    paths:
+      - 'tools/qemu-onecore-512-launch/**'
+      - '.github/workflows/qemu-onecore-512-launch.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  subprocess-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run argument and real mock process negative tests
+        run: python3 -m unittest discover -s tools/qemu-onecore-512-launch -p 'test_*.py' -v

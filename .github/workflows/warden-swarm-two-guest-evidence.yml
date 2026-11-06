@@ -1,0 +1,21 @@
+name: Warden two-guest evidence verifier
+on:
+  push:
+    paths:
+      - 'tools/swarm-two-guest-evidence/**'
+      - '.github/workflows/warden-swarm-two-guest-evidence.yml'
+  pull_request:
+    paths:
+      - 'tools/swarm-two-guest-evidence/**'
+      - '.github/workflows/warden-swarm-two-guest-evidence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bounded manifest parser
+        run: cd tools/swarm-two-guest-evidence && python3 -m unittest discover -v -p 'test_*.py'

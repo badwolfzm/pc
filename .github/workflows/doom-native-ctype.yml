@@ -1,0 +1,42 @@
+name: Doom native C-locale toupper real-engine import closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-ctype/**'
+      - '.github/workflows/doom-native-ctype.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ctype:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host C-locale byte table UBSan test
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-ctype/doom_ctype.c tools/doom-native-ctype/test_ctype.c -o /tmp/test-doom-ctype
+          /tmp/test-doom-ctype
+      - name: Python closure negative tests
+        run: python3 -m unittest discover -s tools/doom-native-ctype -p 'test_*.py' -v
+      - name: Compile independent freestanding x86-64 object
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-ctype/doom_ctype.c -o /tmp/doom-ctype.o
+          nm -P -g /tmp/doom-ctype.o
+      - name: Fetch exact upstream Doom engine revision
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Genuine engine Warden adapter import closure (ET_REL only)
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-ctype
+          ld -r -o target/doom-ctype/with-ctype.o target/doom-ctype/all-objects.o /tmp/doom-ctype.o
+          python3 tools/doom-native-ctype/verify.py target/doom-ctype/all-objects.o target/doom-ctype/with-ctype.o /tmp/doom-ctype.o target/doom-ctype/closure.json
+      - name: Archive actual symbol closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-native-ctype-link
+          path: target/doom-ctype/closure.json
+          if-no-files-found: ignore

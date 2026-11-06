@@ -1,0 +1,34 @@
+name: Genuine pinned Doom host IO callsite audit
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-io-callsites/**'
+      - '.github/workflows/doom-native-io-callsites.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-io-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests for lexical scanner and negative fixtures
+        run: python3 -m unittest discover -s tools/doom-native-io-callsites -p 'test_*.py' -v
+      - name: Fetch exact original upstream source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/upstream-doomgeneric
+          git -C /tmp/upstream-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/upstream-doomgeneric rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Audit call candidates in every genuine source unit
+        run: |
+          python3 tools/doom-native-io-callsites/audit.py \
+            --source /tmp/upstream-doomgeneric/doomgeneric \
+            --output target/doom-native-io-callsites/audit.json
+      - name: Preserve audited source locations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-host-io-callsite-report
+          path: target/doom-native-io-callsites/audit.json
+          if-no-files-found: ignore

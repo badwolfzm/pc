@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warden Console</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0b1220;color:#f2f6ff}
+body{margin:0;display:grid;place-items:center;min-height:100vh}
+main{width:min(95vw,900px);padding:24px;box-sizing:border-box}
+h1{font-size:1.4rem;margin:0 0 6px}
+p{color:#a5b4cd;margin:0 0 18px}
+section{border:1px solid #344158;border-radius:14px;padding:18px;background:#111c2c}
+form{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+input,button{border-radius:8px;border:1px solid #5c6e89;padding:11px;font:inherit}
+input{flex:1;background:#0b1220;color:white;min-width:150px}
+button{background:#3468d8;color:white;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+canvas{width:100%;aspect-ratio:8/5;background:black;image-rendering:pixelated;touch-action:none;display:block;border:1px solid #344158}
+#stage[hidden],#login[hidden]{display:none}
+#status{font-size:.9rem;margin:10px 0;color:#b6c5df}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.controls button{min-width:56px;touch-action:none;user-select:none}
+small{display:block;color:#a5b4cd;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+<h1>Warden remote display</h1>
+<p>Canvas framebuffer · password login · one-use session token · input relay</p>
+<section>
+<form id="login"><input id="password" type="password" placeholder="Console password" autocomplete="current-password" required><button type="submit">Connect</button></form>
+<div id="stage" hidden>
+<canvas id="display" width="320" height="200" aria-label="Warden 320 by 200 display" tabindex="0"></canvas>
+<div class="controls">
+<button data-key="ArrowUp">↑</button><button data-key="ArrowLeft">←</button><button data-key="ArrowDown">↓</button><button data-key="ArrowRight">→</button>
+<button data-key="Space">Fire</button><button data-key="Enter">Enter</button><button data-key="Escape">Esc</button>
+<button id="disconnect">Disconnect</button>
+</div>
+<small>Keyboard: arrows, WASD, space, digits, Enter and Escape. Tap the display to send pointer input.</small>
+</div>
+<div id="status" role="status">Login required</div>
+</section>
+</main>
+<script>
+'use strict';
+const login=document.getElementById('login'),stage=document.getElementById('stage');
+const status=document.getElementById('status'),canvas=document.getElementById('display');
+const ctx=canvas.getContext('2d',{alpha:false});
+let ws=null;
+const data=ctx.createImageData(320,200);
+function setStatus(message){status.textContent=message;}
+function send(v){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(v));}
+function key(code,down){send({kind:'key',code,down});}
+function disconnect(){
+  if(ws){ws.close();ws=null;}
+  stage.hidden=true;login.hidden=false;
+  setStatus('Disconnected');document.getElementById('password').value='';
+}
+login.addEventListener('submit',async(e)=>{
+  e.preventDefault();setStatus('Authenticating…');
+  try {
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:document.getElementById('password').value}),cache:'no-store'});
+    if(!r.ok)throw Error('Login rejected ('+r.status+')');
+    const {token}=await r.json();
+    // Token is kept only in this JS closure and passed once as a WebSocket subprotocol.
+    const scheme=location.protocol==='https:'?'wss:':'ws:';
+    const socket=new WebSocket(scheme+'//'+location.host+'/ws',['warden.v1','warden.auth.'+token]);
+    socket.binaryType='arraybuffer';ws=socket;
+    socket.onopen=()=>{login.hidden=true;stage.hidden=false;canvas.focus();setStatus('Connected — 320×200 RGBA');};
+    socket.onmessage=({data:frame})=>{
+      if(!(frame instanceof ArrayBuffer)||frame.byteLength!==320*200*4)return;
+      data.data.set(new Uint8Array(frame));ctx.putImageData(data,0,0);
+    };
+    socket.onerror=()=>setStatus('Connection error');
+    socket.onclose=()=>{if(ws===socket)disconnect();};
+  } catch(err){setStatus(err.message);}
+});
+document.addEventListener('keydown',e=>{
+  if(stage.hidden||e.repeat||!(/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Space|Enter|Escape|Key[A-Z]|Digit[0-9])$/.test(e.code)))return;
+  e.preventDefault();key(e.code,true);
+});
+document.addEventListener('keyup',e=>{
+  if(stage.hidden||!(/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Space|Enter|Escape|Key[A-Z]|Digit[0-9])$/.test(e.code)))return;
+  e.preventDefault();key(e.code,false);
+});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)disconnect();});
+for(const b of document.querySelectorAll('button[data-key]')){
+ const code=b.dataset.key;
+ const down=e=>{e.preventDefault();b.setPointerCapture(e.pointerId);key(code,true);};
+ const up=e=>{e.preventDefault();key(code,false);};
+ b.addEventListener('pointerdown',down);b.addEventListener('pointerup',up);
+ b.addEventListener('pointercancel',up);b.addEventListener('lostpointercapture',up);
+}
+canvas.addEventListener('pointerdown',e=>{e.preventDefault();const rect=canvas.getBoundingClientRect();
+  const x=Math.max(0,Math.min(319,Math.floor((e.clientX-rect.left)*320/rect.width)));
+  const y=Math.max(0,Math.min(199,Math.floor((e.clientY-rect.top)*200/rect.height)));
+  send({kind:'pointer',x,y,buttons:1});
+});
+document.getElementById('disconnect').addEventListener('click',disconnect);
+</script>
+</body>
+</html>

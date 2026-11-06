@@ -1,0 +1,19 @@
+name: Doom freestanding C memory and string primitives
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-mini-crt/**'
+      - '.github/workflows/doom-mini-crt.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mini-crt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict host tests and freestanding no-external object
+        run: make -C tools/doom-mini-crt test freestanding
+      - name: Undefined behavior sanitizer regressions
+        run: make -C tools/doom-mini-crt sanitize

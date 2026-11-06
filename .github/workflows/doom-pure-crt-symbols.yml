@@ -1,0 +1,44 @@
+name: Real Doom pure freestanding CRT symbol closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-pure-crt-symbols/**'
+      - '.github/workflows/doom-pure-crt-symbols.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pure-crt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boundary tests for import verifier
+        run: python3 -m unittest discover -s tools/doom-pure-crt-symbols -p 'test_*.py' -v
+      - name: Compile and run pure C tests with undefined-behavior sanitizer
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fno-stack-protector \
+            -fsanitize=undefined -fno-sanitize-recover=all \
+            tools/doom-pure-crt-symbols/pure.c tools/doom-pure-crt-symbols/test_pure.c -lm -o /tmp/pure-test
+          /tmp/pure-test
+      - name: Require self-contained freestanding object
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -ffreestanding -fno-builtin -fno-stack-protector -fno-pie \
+            -c tools/doom-pure-crt-symbols/pure.c -o /tmp/warden-pure-crt.o
+          test -z "$(nm -u /tmp/warden-pure-crt.o)"
+      - name: Pin genuine upstream Doom
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric-pin
+          git -C /tmp/doomgeneric-pin checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomgeneric-pin rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Rebuild and partially link genuine Doom and Warden adapters
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doomgeneric-pin/doomgeneric --output target/doom-pure-crt-engine
+          python3 tools/doom-pure-crt-symbols/check_link.py --engine-objects target/doom-pure-crt-engine --pure-crt-object /tmp/warden-pure-crt.o --report target/doom-pure-crt-result.json
+      - name: Preserve exact linker evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pure-doom-real-upstream-symbol-link
+          path: target/doom-pure-crt-result.json
+          if-no-files-found: ignore

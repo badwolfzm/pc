@@ -1,0 +1,39 @@
+name: Genuine Doom selected-runtime unique-provider link gate
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-unique-provider-gate/**'
+      - '.github/workflows/doom-unique-provider-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unique:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests for duplicate definitions and import boundary
+        run: python3 -m unittest discover -s tools/doom-unique-provider-gate -p 'test_*.py' -v
+      - name: Verify four canonical runtime providers from merged main
+        run: |
+          test -f tools/doom-pure-crt-symbols/pure.c
+          test -f tools/doom-mini-crt/mini_extra.c
+          test -f tools/doom-native-heap-closure/heap_alias.c
+          test -f tools/doom-freestanding-arena/arena.c
+          test -f tools/doom-freestanding-arena/arena.h
+      - name: Fetch exactly pinned upstream Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-unique-upstream
+          git -C /tmp/doom-unique-upstream checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-unique-upstream rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Build real Doom freestanding objects and reject duplicate exported symbols
+        run: |
+          python3 tools/doom-unique-provider-gate/gate.py --source /tmp/doom-unique-upstream/doomgeneric --output target/doom-unique-provider-gate
+      - name: Save pinned ET_REL and symbol-map report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-doom-unique-provider-evidence
+          path: target/doom-unique-provider-gate/report.json
+          if-no-files-found: ignore

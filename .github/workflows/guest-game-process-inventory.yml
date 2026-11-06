@@ -1,0 +1,40 @@
+name: Guest game process-inventory evidence gate
+
+on:
+  pull_request:
+    paths:
+      - 'tools/guest-game-process-inventory/**'
+      - '.github/workflows/guest-game-process-inventory.yml'
+  push:
+    paths:
+      - 'tools/guest-game-process-inventory/**'
+      - '.github/workflows/guest-game-process-inventory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  process-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run stdlib unit tests
+        run: python3 -m unittest discover -s tools/guest-game-process-inventory -p 'test_*.py' -v
+      - name: Positive CLI smoke test and negative corrupted report
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          fixture={"schema":1,"source":"synthetic","boot_id":"a"*64,"complete":True,"vcpu_count":1,
+                   "events":[{"seq":0,"event":"boot"},{"seq":1,"event":"spawn","pid":5,"role":"game"},
+                             {"seq":2,"event":"exit","pid":5,"role":"game"},{"seq":3,"event":"end"}]}
+          Path('/tmp/valid-guest-inventory.json').write_text(json.dumps(fixture))
+          Path('/tmp/invalid-guest-inventory.json').write_text('{"schema":1,"schema":2}')
+          PY
+          python3 tools/guest-game-process-inventory/check.py /tmp/valid-guest-inventory.json
+          if python3 tools/guest-game-process-inventory/check.py /tmp/invalid-guest-inventory.json; then
+            echo 'Fail: accepted duplicate-key report' >&2
+            exit 1
+          fi

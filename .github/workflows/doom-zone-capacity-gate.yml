@@ -1,0 +1,32 @@
+name: Source-derived real Doom zone capacity gate
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-zone-capacity-gate/**'
+      - '.github/workflows/doom-zone-capacity-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pinned-doom-zone:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source-shape and capacity unit tests
+        run: python3 -m unittest discover -s tools/doom-zone-capacity-gate -p 'test_*.py' -v
+      - name: Fetch exact original Doom engine source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doom
+          git -C /tmp/pinned-doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/pinned-doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: PR238 1MiB arena must fail source-derived startup preflight
+        run: |
+          if python3 tools/doom-zone-capacity-gate/gate.py --source /tmp/pinned-doom/doomgeneric/i_system.c --commit e257a09527062bfb986b6e5e0780839b6cbd5b71 --arena-bytes 1048576; then
+            echo 'ERROR: undersized arena unexpectedly accepted' >&2
+            exit 1
+          fi
+      - name: Larger candidate meets necessary capacity, not boot
+        run: |
+          python3 tools/doom-zone-capacity-gate/gate.py --source /tmp/pinned-doom/doomgeneric/i_system.c --commit e257a09527062bfb986b6e5e0780839b6cbd5b71 --arena-bytes 8388608 --report /tmp/zone-report.json
+          cat /tmp/zone-report.json

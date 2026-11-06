@@ -32,10 +32,15 @@ jobs:
       - name: Compile and link original upstream w_file.c with Warden class
         run: |
           cd tools/doom-wad-class-bridge
-          cc -std=c11 -O2 -Wall -Wextra -Werror \
+          # Keep all warnings as errors in Warden-owned code. The pinned
+          # upstream w_file.c has one pre-existing signed/unsigned loop warning.
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wno-error=sign-compare \
             -Dstdc_wad_file=warden_doom_wad_class \
+            -I/tmp/warden-upstream-doom/doomgeneric \
+            -c /tmp/warden-upstream-doom/doomgeneric/w_file.c -o /tmp/warden-upstream-w_file.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
             -I/tmp/warden-upstream-doom/doomgeneric -I../doom-wad-stream -I. \
             doom_wad_bridge.c ../doom-wad-stream/wad_stream.c \
-            /tmp/warden-upstream-doom/doomgeneric/w_file.c test/test_upstream.c \
+            test/test_upstream.c /tmp/warden-upstream-w_file.o \
             -o test-upstream
           ./test-upstream

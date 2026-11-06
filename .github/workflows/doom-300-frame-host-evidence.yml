@@ -1,0 +1,49 @@
+name: Pinned genuine Doom 300 host frame timestamps and hashes
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-300-frame-host-evidence/**'
+      - '.github/workflows/doom-300-frame-host-evidence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  genuine-doom-300-frame-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Frame evidence verifier unit tests
+        run: python3 -m unittest discover -s tools/doom-300-frame-host-evidence -p 'test_*.py' -v
+      - name: Fetch pinned upstream Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric-pinned
+          git -C /tmp/doomgeneric-pinned checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomgeneric-pinned rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Fetch lawful Freedoom phase 1 WAD and verify exact known digest
+        run: |
+          curl --fail --location --retry 3 --max-time 90 \
+            https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip \
+            -o /tmp/freedoom.zip
+          python3 - <<'PY'
+          import zipfile,pathlib
+          with zipfile.ZipFile("/tmp/freedoom.zip") as z:
+              matches=[x for x in z.infolist() if x.filename.endswith("/freedoom1.wad") and not x.is_dir()]
+              if len(matches)!=1 or matches[0].file_size > 67108864:
+                  raise SystemExit("missing or oversized Freedoom phase-1 WAD")
+              with z.open(matches[0]) as src,open("/tmp/freedoom1.wad","wb") as dst:
+                  while True:
+                      buf=src.read(1048576)
+                      if not buf:break
+                      dst.write(buf)
+          PY
+          echo '7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  /tmp/freedoom1.wad' | sha256sum -c -
+      - name: Execute real game 300 frames on one Linux CPU
+        run: bash tools/doom-300-frame-host-evidence/run.sh /tmp/doomgeneric-pinned/doomgeneric /tmp/freedoom1.wad target/doom-300-frame-host
+      - name: Preserve frame trace and verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-300-frame-host-evidence
+          path: target/doom-300-frame-host/
+          if-no-files-found: ignore

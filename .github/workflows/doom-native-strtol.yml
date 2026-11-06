@@ -1,0 +1,40 @@
+name: Doom freestanding strtol genuine link closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-strtol/**'
+      - '.github/workflows/doom-native-strtol.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  strtol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare with host long-long parser and check errors
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-strtol/strtol.c tools/doom-native-strtol/test_strtol.c -o /tmp/test-warden-strtol
+          /tmp/test-warden-strtol
+      - name: Build freestanding x86-64 object
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-strtol/strtol.c -o /tmp/strtol-native.o
+          nm -u /tmp/strtol-native.o
+      - name: Fetch pinned genuine upstream Doom
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Actual Warden adapter and Doom ET_REL symbol-closure test
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-strtol
+          ld -r -o target/doom-strtol/with-strtol.o target/doom-strtol/all-objects.o /tmp/strtol-native.o
+          python3 tools/doom-native-strtol/verify.py target/doom-strtol/all-objects.o target/doom-strtol/with-strtol.o target/doom-strtol/closure.json
+      - name: Archive real link report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-strtol-link
+          path: target/doom-strtol/closure.json
+          if-no-files-found: ignore

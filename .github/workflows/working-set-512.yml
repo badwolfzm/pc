@@ -1,0 +1,22 @@
+name: Warden 512 MiB working-set trace model
+on:
+  push:
+    branches:
+      - agent/ordinary-pc-working-set-512-20261106
+  pull_request:
+    paths:
+      - 'tools/working-set-512/**'
+      - '.github/workflows/working-set-512.yml'
+  workflow_dispatch:
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bounded page-trace unit suite
+        run: python3 -m unittest discover -s tools/working-set-512 -p 'test_*.py' -v
+      - name: Fail-closed JSON example under strict 512 MiB profile
+        run: |
+          echo '{"events":[{"t_ms":0,"page":1},{"t_ms":15,"page":2},{"t_ms":20,"page":1}]}' > /tmp/trace.json
+          python3 tools/working-set-512/analyze.py /tmp/trace.json --ram-mib 512 --reserved-mib 128 > /tmp/report.json
+          python3 -c 'import json; x=json.load(open("/tmp/report.json")); assert x["profile"]["guest_ram_mib"]==512 and x["trace_events"]==3'

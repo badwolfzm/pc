@@ -126,11 +126,16 @@ def run(qemu, qemu_hash, kernel, kernel_hash, accel, timeout, log_path, report_p
             'serial_log_sha256': hashlib.sha256(result['log']).hexdigest(),
             'serial_log_bytes': len(result['log']), 'returncode': result['returncode'],
             'timed_out': result['timed_out'], 'log_overflow': result['log_overflow'],
+            'debug_exit_status': (result['returncode'] >> 1) if result['returncode'] is not None and result['returncode'] >= 0 and (result['returncode'] & 1) else None,
+            'warden_debug_exit_zero': (result['returncode'] == 1 and not result['timed_out'] and not result['log_overflow']),
             'guest_boot_verified': False, 'doom_executed_verified': False,
             'note': 'raw host execution only; serial logs need independent guest evidence validation',
         }
         report_handle.write((json.dumps(report, indent=2, sort_keys=True) + '\n').encode('utf-8'))
-    return 0 if result['returncode'] == 0 and not result['timed_out'] and not result['log_overflow'] else 1
+    # isa-debug-exit encodes the guest value as (value << 1) | 1.
+    # Warden's pong.sh recognizes QEMU status 1 as guest success, 3 as failure.
+    # Host status 0 is not a verified Warden guest debug-exit.
+    return 0 if result['returncode'] == 1 and not result['timed_out'] and not result['log_overflow'] else 1
 
 
 def main():

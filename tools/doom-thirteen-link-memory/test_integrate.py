@@ -41,7 +41,7 @@ class Contract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             file = pathlib.Path(td) / "test.o"
             data = bytearray(64 + 3*64 + 8)
-            data[:7] = b"\\x7fELF\\x02\\x01\\x01"
+            data[:7] = b"\x7fELF\x02\x01\x01"
             struct.pack_into("<HH", data, 16, 1, 62)
             struct.pack_into("<Q", data, 40, 64)
             struct.pack_into("<HH", data, 58, 64, 3)

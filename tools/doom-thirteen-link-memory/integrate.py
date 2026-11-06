@@ -87,7 +87,7 @@ def section_footprint(path):
     data = path.read_bytes()
     if len(data) < 64 or len(data) > 128 * 1024 * 1024:
         raise ValueError("ELF missing or oversized")
-    if data[:4] != b"\\x7fELF" or data[4] != 2 or data[5] != 1 or data[6] != 1:
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1 or data[6] != 1:
         raise ValueError("requires ELF64 little endian")
     typ, machine = struct.unpack_from("<HH", data, 16)
     if typ != 1 or machine != 62:

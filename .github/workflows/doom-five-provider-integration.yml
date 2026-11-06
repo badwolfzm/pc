@@ -1,0 +1,46 @@
+name: Genuine Doom five independent CRT providers
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-five-provider-integration/**'
+      - '.github/workflows/doom-five-provider-integration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  five-provider:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run symbol verifier unit tests
+        run: python3 -m unittest discover -s tools/doom-five-provider-integration -p 'test_*.py' -v
+      - name: Fetch original Doom engine, pinned revision
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-original
+          git -C /tmp/doom-original checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-original rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Fetch exact draft candidate sources without modifying main
+        run: |
+          git fetch --no-tags origin fae610a1f640e232499f6d86b980640e8559c420
+          test "$(git rev-parse FETCH_HEAD)" = fae610a1f640e232499f6d86b980640e8559c420
+          git show fae610a1f640e232499f6d86b980640e8559c420:tools/doom-native-errno/errno.c > /tmp/five-errno.c
+          git fetch --no-tags origin a3529e43aff95423d0f7c12d78e33ab9e55e3fda
+          test "$(git rev-parse FETCH_HEAD)" = a3529e43aff95423d0f7c12d78e33ab9e55e3fda
+          git show a3529e43aff95423d0f7c12d78e33ab9e55e3fda:tools/doom-native-format/doom_format.c > /tmp/five-format.c
+      - name: Compile genuine engine and four freestanding provider objects
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom-original/doomgeneric --output target/doom-five-provider
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-ctype/doom_ctype.c -o /tmp/five-ctype.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c /tmp/five-errno.c -o /tmp/five-errno.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-strtol/strtol.c -o /tmp/five-strtol.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c /tmp/five-format.c -o /tmp/five-format.o
+          ld -r -o target/doom-five-provider/combined.o target/doom-five-provider/all-objects.o /tmp/five-ctype.o /tmp/five-errno.o /tmp/five-strtol.o /tmp/five-format.o
+          python3 tools/doom-five-provider-integration/verify.py target/doom-five-provider/all-objects.o target/doom-five-provider/combined.o /tmp/five-ctype.o /tmp/five-errno.o /tmp/five-strtol.o /tmp/five-format.o target/doom-five-provider/closure.json
+      - name: Preserve genuine-link evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-five-closure
+          path: target/doom-five-provider/closure.json
+          if-no-files-found: ignore

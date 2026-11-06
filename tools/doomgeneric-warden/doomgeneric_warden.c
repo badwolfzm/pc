@@ -124,7 +124,7 @@ static unsigned char decode(unsigned int scan, int extended) {
         case 0x50: return 0xaf; /* Doom down */
         case 0x4b: return 0xac; /* Doom left */
         case 0x4d: return 0xae; /* Doom right */
-        case 0x1d: return 0x9d; /* right Ctrl */
+        case 0x1d: return 0xa3; /* KEY_FIRE (right Ctrl) */
         case 0x38: return 0xb8; /* right Alt */
         default: return 0;
         }
@@ -133,13 +133,13 @@ static unsigned char decode(unsigned int scan, int extended) {
     case 0x01: return 27;
     case 0x0f: return 9;
     case 0x1c: return 13;
-    case 0x39: return ' ';
+    case 0x39: return 0xa2; /* KEY_USE (Space) */
     case 0x11: return 'w';
     case 0x1e: return 'a';
     case 0x1f: return 's';
     case 0x20: return 'd';
     case 0x10: return 'q';
-    case 0x1d: return 0x9d;
+    case 0x1d: return 0xa3; /* KEY_FIRE (left Ctrl) */
     case 0x38: return 0xb8;
     case 0x2a: case 0x36: return 0xb6;
     case 0x48: return 0xad;

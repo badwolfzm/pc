@@ -54,3 +54,31 @@ These are data-validation safeguards, not proof of authentic guest telemetry.
 The file-size limit bounds input bytes, but a hostile report can still use
 CPU/memory during JSON parsing; run untrusted producers in an OS-isolated
 context and apply resource limits. The validator is not a sandbox.
+
+## Independent physical-frame event replay
+
+`frame_events.py` validates a bounded offline sequence of 4096-byte physical
+frame allocations and releases with explicit numeric frame IDs and mutually
+exclusive ownership categories. It reconstructs the **tracked** frame high-water
+mark from the submitted event stream. Run:
+
+```sh
+python3 tools/ordinary-game-memory-gate/frame_events.py \
+  tools/ordinary-game-memory-gate/sample-frame-events.json
+python3 -m unittest discover -s tools/ordinary-game-memory-gate -p 'test_*.py' -v
+```
+
+It fails on double allocation, stale/unknown free, mismatched category, invalid
+frame index, missing origin, reversed timestamps, malformed shapes, negative
+counts, and more than 100,000 events. JSON input remains capped at 4 MiB and
+duplicate keys are rejected by the shared parser.
+
+**Crucial:** the field `capture_started_empty=true` is a self-reported
+assertion, not evidence that instrumentation captured every allocation since
+boot. `peak_tracked_frame_bytes` counts only frames mentioned in the log; it
+must not be interpreted as the complete guest physical memory peak until a
+reviewed native Warden producer attests that all frame sources, reservations,
+graphics allocations and other memory are captured. This checker does not
+apply page replacement policies, enforce the guest memory limit, collect
+QEMU data or run Doom/Albion. Coordinate with guest instrumentation issue
+#153 and consolidation issue #155 to avoid parallel runtime changes.

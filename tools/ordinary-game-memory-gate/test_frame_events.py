@@ -104,6 +104,41 @@ class FrameEventTests(unittest.TestCase):
         x["initial_frames"] = [{"frame_id": 100, "kind": "kernel"}]
         self.bad(x)
 
+    def test_v3_sequential_events(self):
+        x = fixture()
+        x["schema_version"] = 3
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = []
+        x["boot_id"] = "a" * 64
+        for i, event in enumerate(x["events"]):
+            event["sequence"] = i
+        result = replay(x)
+        self.assertEqual(result["boot_id"], x["boot_id"])
+
+    def test_v3_missing_middle_event_rejected(self):
+        x = fixture()
+        x["schema_version"] = 3
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = []
+        x["boot_id"] = "a" * 64
+        for i, event in enumerate(x["events"]):
+            event["sequence"] = i
+        x["events"][1]["sequence"] = 2
+        self.bad(x)
+
+    def test_v3_requires_boot_id(self):
+        x = fixture()
+        x["schema_version"] = 3
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = []
+        x["boot_id"] = "bad"
+        for i, event in enumerate(x["events"]):
+            event["sequence"] = i
+        self.bad(x)
+
     def test_peak_and_end(self):
         out = replay(fixture())
         self.assertEqual(out["peak_tracked_frame_bytes"], 8192)

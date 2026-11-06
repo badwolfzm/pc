@@ -108,6 +108,8 @@ const server = http.createServer(async (req, res) => {
       ? crypto.scryptSync(parsed.password,salt,64) : Buffer.alloc(64);
     if (!crypto.timingSafeEqual(candidate,passwordHash)) {state.count++;attempts.set(ip,state);return reply(res,401,{error:'unauthorized'});}
     attempts.delete(ip);
+    for (const [id, expiry] of sessions) if (expiry < now) sessions.delete(id);
+    if (sessions.size >= 64) return reply(res,429,{error:'session limit'});
     const token=hexToken(); sessions.set(token,now+expiryMs);
     return reply(res,200,{token,expires_in:expiryMs/1000});
   }

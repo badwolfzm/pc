@@ -56,6 +56,18 @@ class EvidenceTests(unittest.TestCase):
     def test_boolean_bypass_rejected(self):
         self.runs[0]["vcpu"]=True
         self.assertTrue(self.check())
+    def test_duplicate_json_key_rejected(self):
+        self.manifest.write_text('{"runs":[],"runs":[]}')
+        self.assertTrue(verify(self.manifest))
+    def test_duplicate_nested_json_key_rejected(self):
+        self.manifest.write_text('{"runs":[{"node_id":"x","node_id":"y"},{}]}')
+        self.assertTrue(verify(self.manifest))
+    def test_oversized_evidence_rejected(self):
+        (self.root/"node1.log").write_bytes(b"x"*1048577)
+        self.assertTrue(self.check())
+    def test_zero_elapsed_rejected(self):
+        self.runs[0]["elapsed_ms"]=0
+        self.assertTrue(self.check())
     def test_schema_rejected(self):
         self.runs[0]["extra"]="bad"
         self.assertTrue(self.check())

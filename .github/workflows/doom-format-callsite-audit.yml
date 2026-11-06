@@ -1,0 +1,47 @@
+name: Genuine Doom printf-family callsite audit
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-format-callsite-audit/**'
+      - '.github/workflows/doom-format-callsite-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Adversarial source scanner tests
+        run: python3 -m unittest discover -s tools/doom-format-callsite-audit -p 'test_*.py' -v
+      - name: Fetch and verify original pinned Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-original
+          git -C /tmp/doom-original checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-original rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Inventory 79 real engine units and risky format calls
+        run: |
+          python3 tools/doom-format-callsite-audit/audit.py --source /tmp/doom-original/doomgeneric --output target/doom-format-callsite-audit/report.json
+          python3 -c 'import json; p=json.load(open("target/doom-format-callsite-audit/report.json")); assert p["real_engine_translation_units"] == 79 and p["source_scanner_not_full_c_parser"] and not p["native_guest_boot_verified"]'
+      - name: Print bounded manual-review findings from genuine source
+        run: |
+          python3 - <<'PY'
+          import json
+          report = json.load(open("target/doom-format-callsite-audit/report.json"))
+          flagged = [x for x in report["callsites"] if x["problems"]]
+          from collections import Counter
+          by_problem = Counter(p for row in flagged for p in row["problems"])
+          print("REVIEW_REASON_TOTALS", json.dumps(dict(sorted(by_problem.items()))))
+          for row in flagged[:30]:
+              print(json.dumps(row, sort_keys=True))
+          print("MANUAL_REVIEW_TOTAL", len(flagged))
+          print("FULL_SOURCE_DETAIL", "genuine-doom-format-callsites artifact")
+          PY
+      - name: Upload actual-source callsite evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-format-callsites
+          path: target/doom-format-callsite-audit/report.json
+          if-no-files-found: ignore

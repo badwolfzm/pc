@@ -1,0 +1,17 @@
+name: Controlled Doom QEMU runner host tests
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-controlled-runner/**'
+      - '.github/workflows/doom-controlled-runner.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run bounded subprocess tests (no QEMU)
+        run: python3 -m unittest discover -s tools/doom-controlled-runner -p 'test_*.py' -v

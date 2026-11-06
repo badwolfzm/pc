@@ -43,6 +43,25 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             validate(other, other)
 
+    def test_spoofed_executable_suffix(self):
+        other = BASE[:]
+        other[0] = "/tmp/evil-qemu-system-x86_64"
+        with self.assertRaises(PolicyError):
+            validate(other, other)
+
+    def test_ambiguous_memory_units(self):
+        other = BASE[:]
+        other[other.index("-m") + 1] = "512"
+        with self.assertRaises(PolicyError):
+            validate(other, other)
+
+    def test_malformed_input_types(self):
+        for candidate, approved in ((None, BASE), (BASE, None), ("bad", BASE),
+                                    (BASE, "bad"), (BASE + [None], BASE + [None])):
+            with self.subTest(candidate=candidate, approved=approved):
+                with self.assertRaises(PolicyError):
+                    validate(candidate, approved)
+
     def test_invalid_executable(self):
         other = BASE[:]
         other[0] = "/bin/sh"

@@ -1,0 +1,19 @@
+name: 512 MiB ordinary-PC game working-set model
+on:
+  pull_request:
+    paths:
+      - 'tools/game-working-set-probe/**'
+      - '.github/workflows/game-working-set-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  model-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bounded LRU trace replay regression
+        run: python3 -m unittest discover -s tools/game-working-set-probe -p 'test_*.py' -v
+      - name: Synthetic example (not a benchmark)
+        run: python3 tools/game-working-set-probe/replay.py tools/game-working-set-probe/example.json

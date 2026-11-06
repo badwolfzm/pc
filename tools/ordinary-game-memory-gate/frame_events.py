@@ -6,7 +6,8 @@ import sys
 from check import CAP, COMPONENTS, EvidenceError, integer, load_bounded, require
 
 PAGE_BYTES = 4096
-MAX_EVENTS = 100_000
+MAX_EVENTS = 300_000
+MAX_EVENT_BYTES = 32 * 1024 * 1024
 KINDS = frozenset(COMPONENTS)
 
 
@@ -24,7 +25,7 @@ def replay(doc):
     require(capacity <= CAP and capacity % PAGE_BYTES == 0, "invalid configured guest capacity")
     events = doc["events"]
     require(type(events) is list and 1 <= len(events) <= MAX_EVENTS,
-            "event count must be 1..100000")
+            "event count must be 1..300000")
     live = {}
     max_live = 0
     last_time = -1
@@ -67,7 +68,7 @@ def main(argv=None):
     ap.add_argument("report")
     args = ap.parse_args(argv)
     try:
-        out = replay(load_bounded(args.report))
+        out = replay(load_bounded(args.report, max_bytes=MAX_EVENT_BYTES))
     except (OSError, ValueError, TypeError, UnicodeError, RecursionError) as exc:
         print(json.dumps({"trace_consistent": False, "reason": str(exc)}, sort_keys=True))
         return 1

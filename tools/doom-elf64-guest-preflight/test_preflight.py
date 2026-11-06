@@ -55,7 +55,7 @@ class PreflightTests(unittest.TestCase):
     def test_alignment(self):
         self.bad(elf(align=3))
     def test_segment_past_eof(self):
-        self.bad(elf(filesz=0x3000))
+        self.bad(elf(filesz=0x3000)[:0x2000])
     def test_no_interp(self):
         self.bad(elf(ph_type=3))
     def test_no_dynamic_segment(self):

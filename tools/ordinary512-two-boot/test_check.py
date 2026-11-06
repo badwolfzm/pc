@@ -22,14 +22,16 @@ def log(hash_value='0x728c34136c73c14b', frames=503):
 class Tests(unittest.TestCase):
     def test_two_boots(self):
         result = combine(log(), log(frames=504), MANIFEST)
-        self.assertEqual(result['matched_screen_hash'], '0x728c34136c73c14b')
+        self.assertEqual(result['screen_hashes'], ['0x728c34136c73c14b'] * 2)
+        self.assertTrue(result['screen_hashes_equal'])
         self.assertEqual(len(result['runs']), 2)
     def test_identical_serial_is_allowed(self):
         # A deterministic guest can produce byte-identical output on genuine separate boots.
         self.assertEqual(combine(log(), log(), MANIFEST)['runs'][0]['kernel_checks_passed'], 15)
-    def test_screen_mismatch_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'hashes disagree'):
-            combine(log(), log(hash_value='0x1111111111111111'), MANIFEST)
+    def test_screen_mismatch_is_observed_not_rejected(self):
+        report = combine(log(), log(hash_value='0x1111111111111111'), MANIFEST)
+        self.assertFalse(report['screen_hashes_equal'])
+        self.assertEqual(report['screen_hashes'][1], '0x1111111111111111')
     def test_missing_run_fails(self):
         with self.assertRaises(ValueError):
             combine(log(), '', MANIFEST)

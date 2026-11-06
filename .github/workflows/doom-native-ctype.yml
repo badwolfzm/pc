@@ -1,0 +1,44 @@
+name: Native Doom C-locale uppercase import closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-ctype/**'
+      - '.github/workflows/doom-native-ctype.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ctype-closure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Independently compare C-locale mapping under UBSan
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -D__ctype_toupper_loc=warden___ctype_toupper_loc -c tools/doom-native-ctype/ctype.c -o /tmp/ctype-test.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-ctype/test_ctype.c /tmp/ctype-test.o -o /tmp/test-ctype
+          /tmp/test-ctype
+      - name: Symbol-closure synthetic positive/negative tests
+        run: python3 -m unittest discover -s tools/doom-native-ctype -p 'test_*.py' -v
+      - name: Compile pure freestanding object and refuse host imports
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-ctype/ctype.c -o /tmp/ctype-native.o
+          test -z "$(nm -g -u /tmp/ctype-native.o)"
+          nm -g --defined-only /tmp/ctype-native.o | grep -E ' T __ctype_toupper_loc$'
+      - name: Pin original upstream Doom engine source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Genuine freestanding Doom ET_REL link delta
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-ctype
+          ld -r -o target/doom-ctype/with-ctype.o target/doom-ctype/all-objects.o /tmp/ctype-native.o
+          python3 tools/doom-native-ctype/verify.py target/doom-ctype/all-objects.o target/doom-ctype/with-ctype.o target/doom-ctype/closure.json
+      - name: Preserve genuine-engine closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-ctype-closure
+          path: target/doom-ctype/closure.json
+          if-no-files-found: ignore

@@ -1,0 +1,21 @@
+name: Doom ELF load preflight
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-elf-load-gate/**'
+      - '.github/workflows/doom-elf-load-gate.yml'
+  push:
+    paths:
+      - 'tools/doom-elf-load-gate/**'
+      - '.github/workflows/doom-elf-load-gate.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s tools/doom-elf-load-gate -p 'test_*.py' -v

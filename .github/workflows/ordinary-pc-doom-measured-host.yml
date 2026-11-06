@@ -13,12 +13,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Stage pinned sampler dependency from unmerged PR 156
+      - name: Verify merged host sampler dependency from this checkout
         run: |
-          git fetch --quiet --depth=1 origin c188ef548f6bc926633223602da60f2549a7fceb
-          test "$(git rev-parse FETCH_HEAD)" = "c188ef548f6bc926633223602da60f2549a7fceb"
-          git restore --source=FETCH_HEAD -- tools/ordinary-pc-host-sampler
           test -f tools/ordinary-pc-host-sampler/sample.py
+          python3 -m unittest discover -s tools/ordinary-pc-host-sampler -p 'test_*.py' -v
       - name: Unit tests for provenance and fail-closed inputs
         run: python3 -m unittest discover -s tools/ordinary-pc-doom-measured-host -p 'test_*.py' -v
       - name: Fetch original pinned Doom engine source

@@ -130,9 +130,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "frame deadline exhausted: %u frames\n", frame_count);
         return 1;
     }
-    fprintf(stderr, "DOOM host game-state diagnostic: gamestate=%d level_frames=%u player_frames=%u xy_start=(%d,%d) xy_end=(%d,%d)\\n",
+    fprintf(stderr, "DOOM host game-state diagnostic: gamestate=%d level_frames=%u player_frames=%u xy_start=(%d,%d) xy_end=(%d,%d)\n",
             (int)gamestate, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y);
-    if (jumped != 1 || frame_count < 10 || gamestate != GS_LEVEL || level_frames < 10 || level_player_frames < 10 ||\n        (level_initial_x == level_last_x && level_initial_y == level_last_y) || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
+    if (jumped != 1 || frame_count < 10 || gamestate != GS_LEVEL || level_frames < 10 || level_player_frames < 10 ||
+        (level_initial_x == level_last_x && level_initial_y == level_last_y) || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
         fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
         return 1;
     }

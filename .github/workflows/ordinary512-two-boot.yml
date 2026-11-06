@@ -1,0 +1,55 @@
+name: Two real Warden Pong 512 MiB single-vCPU boots
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary512-two-boot/**'
+      - '.github/workflows/ordinary512-two-boot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  two-boot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 nasm binutils build-essential
+          rustup target add x86_64-unknown-none
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/ordinary512-two-boot -p 'test_*.py' -v
+      - name: Configure temporary Warden 512 MiB one-vCPU profile
+        run: python3 tools/ordinary512-native-qemu/prepare.py tests/kernel/pong.sh --manifest target/native512-profile.json
+      - name: Real Warden/QEMU boot A
+        env:
+          LOG: target/native512-serial-a.log
+          SCREENSHOT: target/native512-screen-a.ppm
+        run: |
+          timeout 240 bash tests/kernel/pong.sh
+          python3 tests/game/check_pong_guest.py target/native512-serial-a.log
+      - name: Real Warden/QEMU boot B
+        env:
+          LOG: target/native512-serial-b.log
+          SCREENSHOT: target/native512-screen-b.ppm
+        run: |
+          timeout 240 bash tests/kernel/pong.sh
+          python3 tests/game/check_pong_guest.py target/native512-serial-b.log
+      - name: Compare independently recorded native boot evidence
+        run: |
+          python3 tools/ordinary512-two-boot/check.py target/native512-serial-a.log target/native512-serial-b.log target/native512-profile.json --output target/native512-two-boot.json
+          python3 -c 'import json; r=json.load(open("target/native512-two-boot.json")); assert len(r["runs"]) == 2 and r["guest_vcpus_configured"] == 1'
+      - name: Save raw serial screenshots and combined evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-warden-pong-512m-two-boot
+          path: |
+            target/native512-profile.json
+            target/native512-serial-a.log
+            target/native512-serial-b.log
+            target/native512-screen-a.ppm
+            target/native512-screen-b.ppm
+            target/native512-two-boot.json
+          if-no-files-found: ignore

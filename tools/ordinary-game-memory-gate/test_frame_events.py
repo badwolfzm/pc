@@ -48,6 +48,62 @@ class FrameEventTests(unittest.TestCase):
         x["events"] = [x["events"][0]] * 300001
         self.bad(x)
 
+    def test_v2_initial_reservations_and_releases(self):
+        x = fixture()
+        x["schema_version"] = 2
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = [
+            {"frame_id": 100, "kind": "kernel"},
+            {"frame_id": 101, "kind": "paging"}
+        ]
+        x["events"].append(
+            {"time_ns": 5, "op": "free", "frame_id": 101, "kind": "paging"})
+        out = replay(x)
+        self.assertEqual(out["initial_frame_count"], 2)
+        self.assertEqual(out["peak_tracked_frame_bytes"], 4 * 4096)
+        self.assertEqual(out["end_tracked_frame_bytes"], 4096)
+
+    def test_v2_rejects_duplicate_initial_frame(self):
+        x = fixture()
+        x["schema_version"] = 2
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = [
+            {"frame_id": 100, "kind": "kernel"},
+            {"frame_id": 100, "kind": "game"}
+        ]
+        self.bad(x)
+
+    def test_v2_rejects_alloc_of_reserved_frame(self):
+        x = fixture()
+        x["schema_version"] = 2
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = [{"frame_id": 3, "kind": "kernel"}]
+        self.bad(x)
+
+    def test_v2_rejects_event_before_capture_start(self):
+        x = fixture()
+        x["schema_version"] = 2
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 2
+        x["initial_frames"] = [{"frame_id": 100, "kind": "kernel"}]
+        self.bad(x)
+
+    def test_v2_rejects_unbounded_initial_frame(self):
+        x = fixture()
+        x["schema_version"] = 2
+        x["capture_started_empty"] = False
+        x["capture_start_ns"] = 0
+        x["initial_frames"] = [{"frame_id": CAP // 4096, "kind": "kernel"}]
+        self.bad(x)
+
+    def test_v1_rejects_initial_inventory(self):
+        x = fixture()
+        x["initial_frames"] = [{"frame_id": 100, "kind": "kernel"}]
+        self.bad(x)
+
     def test_peak_and_end(self):
         out = replay(fixture())
         self.assertEqual(out["peak_tracked_frame_bytes"], 8192)

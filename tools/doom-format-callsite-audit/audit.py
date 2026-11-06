@@ -66,7 +66,7 @@ def fmt_problems(raw):
             i += 1
             continue
         directive = match.group()
-        conversion = match.group(1)
+        conversion = directive[-1]
         if conversion not in SUPPORTED:
             issues.append("unsupported-" + conversion)
         elif conversion == "%":

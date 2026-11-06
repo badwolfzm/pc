@@ -51,23 +51,33 @@ def lru_misses(pages, capacity):
     return faults
 
 def optimal_misses(pages, capacity):
-    """Belady MIN offline lower-bound on faults for this exact access order."""
+    """Future-knowing Belady MIN; O(N log N) lazy heap with validated versions."""
     if capacity < 1:
         raise TraceError('capacity must be positive')
     future = defaultdict(deque)
     for i, page in enumerate(pages):
         future[page].append(i)
-    resident = set()
+    resident = {}
+    heap = []
+    import heapq
     faults = 0
+    version = 0
     for i, page in enumerate(pages):
         future[page].popleft()
+        next_use = future[page][0] if future[page] else len(pages)
+        version += 1
         if page in resident:
-            continue
-        faults += 1
-        if len(resident) >= capacity:
-            victim = max(resident, key=lambda p:(future[p][0] if future[p] else len(pages), p))
-            resident.remove(victim)
-        resident.add(page)
+            resident[page] = version
+        else:
+            faults += 1
+            if len(resident) >= capacity:
+                while True:
+                    neg_next, _, candidate, expected = heapq.heappop(heap)
+                    if resident.get(candidate) == expected:
+                        del resident[candidate]
+                        break
+            resident[page] = version
+        heapq.heappush(heap, (-next_use, -page, page, version))
     return faults
 
 def windows(events, window_us):

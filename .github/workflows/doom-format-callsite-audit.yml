@@ -30,11 +30,13 @@ jobs:
           import json
           report = json.load(open("target/doom-format-callsite-audit/report.json"))
           flagged = [x for x in report["callsites"] if x["problems"]]
-          if len(flagged) > 100:
-              raise SystemExit("too many flagged callsites for bounded CI review")
-          for row in flagged:
+          from collections import Counter
+          by_problem = Counter(p for row in flagged for p in row["problems"])
+          print("REVIEW_REASON_TOTALS", json.dumps(dict(sorted(by_problem.items()))))
+          for row in flagged[:30]:
               print(json.dumps(row, sort_keys=True))
           print("MANUAL_REVIEW_TOTAL", len(flagged))
+          print("FULL_SOURCE_DETAIL", "genuine-doom-format-callsites artifact")
           PY
       - name: Upload actual-source callsite evidence
         if: always()

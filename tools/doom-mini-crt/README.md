@@ -22,3 +22,26 @@ Handoff: allocator owner of draft PR #113 and Doom engine linker owner.
 Select only needed functions in the final guest. Test the actual combined ELF,
 guest memory window/heap footprint and two -smp 1 QEMU runs before acceptance.
 No gameplay or license claims.
+
+
+## C-locale string expansion (follow-up to native Doom link gap)
+
+This directory additionally provides `strcasecmp`, `strncasecmp`,
+`strncpy`, and `strstr` in `mini_extra.c`. These are four real missing
+symbols in the merged freestanding whole-engine partial-link diagnostic #170.
+They do not require a heap, libc, syscalls or host OS. `strcasecmp` and
+`strncasecmp` implement **ASCII/C-locale only**, not arbitrary locale-specific
+case conversion; no locale state is supported. `strncpy` has standard
+non-overlap, valid-input preconditions, pads with zero bytes, and does not
+guarantee termination when the source length is at least `n`. `strstr`
+returns the first matching substring or the original haystack for an
+empty needle. Test sources are host-side and intentionally depend on libc for
+`assert` and `puts`, but both compiled library objects must have zero
+undefined symbols. Existing CI now runs both strict and UBSan test suites.
+
+**Do not mistake these four additional string definitions for resolution of
+Doom's remaining allocator, fortified formatting, file-system or process
+service imports.** Rebuild the exact combined freestanding object and compare
+`nm -u` on its new revision before counting eliminated linker gaps. This
+does not install the source into a native guest automatically. The guest owner
+must select the reviewed object and independently verify real QEMU execution.

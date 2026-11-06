@@ -8,6 +8,7 @@
 #include <string.h>
 #include <setjmp.h>
 #include "doomgeneric.h"
+#include "doomstat.h"
 #include "doom_wad_bridge.h"
 
 static jmp_buf completed;
@@ -16,6 +17,8 @@ static unsigned int startup_frames;
 static unsigned int game_started;
 static unsigned int key_press_sent, key_release_sent;
 static unsigned int key_press_consumed, key_release_consumed;
+static unsigned int level_frames, level_player_frames;
+static int level_initial_x, level_initial_y, level_last_x, level_last_y;
 static uint64_t ticks;
 static uint64_t first_hash, last_hash;
 static uint8_t *wad;
@@ -80,6 +83,15 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
             if (startup_frames > 200) longjmp(completed, 3);
             return 0;
         }
+        if (gamestate == GS_LEVEL) {
+            ++level_frames;
+            if (consoleplayer >= 0 && consoleplayer < MAXPLAYERS && players[consoleplayer].mo) {
+                int x = players[consoleplayer].mo->x, y = players[consoleplayer].mo->y;
+                if (!level_player_frames) { level_initial_x = x; level_initial_y = y; }
+                level_last_x = x; level_last_y = y;
+                ++level_player_frames;
+            }
+        }
         uint64_t hash = hash_pixels(pixels, 320U * 200U);
         if (frame_count == 0) first_hash = hash;
         last_hash = hash;
@@ -118,6 +130,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "frame deadline exhausted: %u frames\n", frame_count);
         return 1;
     }
+    fprintf(stderr, "DOOM host game-state diagnostic: gamestate=%d level_frames=%u player_frames=%u xy_start=(%d,%d) xy_end=(%d,%d)\\n",
+            (int)gamestate, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y);
     if (jumped != 1 || frame_count < 10 || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
         fprintf(stderr, "frame/input/hash gate failed: startup=%u gameplay=%u sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n", startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed);
         return 1;

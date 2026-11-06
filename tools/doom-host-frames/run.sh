@@ -26,7 +26,12 @@ cc "${FLAGS[@]}" -DWARDEN_DOOM_TEST -c "$ROOT/tools/doomgeneric-warden/doomgener
 cc "${FLAGS[@]}" -c "$ROOT/tools/doom-host-frames/game_smoke.c" -o "$OUT/game.o"
 cc "${OBJECTS[@]}" "$OUT/stream.o" "$OUT/bridge.o" "$OUT/backend.o" "$OUT/display.o" "$OUT/game.o" -lm -Wl,--wrap=DG_GetKey -o "$OUT/doom-host-frames"
 # Last resort timeout as Doom may hang during initialization; no QEMU involved.
+EVIDENCE_DIR="${DOOM_EVIDENCE_DIR:-$OUT/evidence}"
+mkdir -p "$EVIDENCE_DIR"
 echo "Doom host control: zero input, genuine level simulation"
-timeout 30s "$OUT/doom-host-frames" "$WAD" --no-input
+timeout 30s "$OUT/doom-host-frames" "$WAD" --no-input | tee "$EVIDENCE_DIR/control.log"
 echo "Doom host intervention: up-arrow press/release through merged Warden adapter"
-timeout 30s "$OUT/doom-host-frames" "$WAD"
+timeout 30s "$OUT/doom-host-frames" "$WAD" | tee "$EVIDENCE_DIR/intervention.log"
+python3 "$ROOT/tools/doom-host-frames/check_evidence.py" \
+  "$EVIDENCE_DIR/control.log" "$EVIDENCE_DIR/intervention.log" \
+  "$EVIDENCE_DIR/controlled-input.json"

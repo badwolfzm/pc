@@ -1,0 +1,49 @@
+name: Shared GPU 512 MiB budget accounting
+on:
+  pull_request:
+    paths:
+      - 'tools/shared-gpu-memory-budget/**'
+      - '.github/workflows/shared-gpu-memory-budget.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/shared-gpu-memory-budget/**'
+      - '.github/workflows/shared-gpu-memory-budget.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  budget:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run bounded host-side accounting tests
+        run: |
+          cd tools/shared-gpu-memory-budget
+          python3 -m unittest discover -p 'test_*.py' -v
+      - name: Run CLI acceptance and refusal fixtures
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+          import sys
+          import tempfile
+          example = {
+              "kernel_mib": 32, "game_mib": 300,
+              "personality_mib": 20, "graphics_mib": 96,
+              "paging_mib": 32, "other_mib": 16,
+              "gpu_shared_mib": 80, "gpu_shared_limit_mib": 512,
+              "gpu_dedicated_mib": 0, "vcpus": 1
+          }
+          script = "tools/shared-gpu-memory-budget/validate.py"
+          with tempfile.TemporaryDirectory() as d:
+              path = pathlib.Path(d) / "evidence.json"
+              for sample, expected in [(example, 0), ({**example, "game_mib": 400}, 1)]:
+                  path.write_text(json.dumps(sample), encoding="utf-8")
+                  run = subprocess.run([sys.executable, script, str(path)],
+                                       capture_output=True, text=True)
+                  assert run.returncode == expected, (expected, run.returncode, run.stdout, run.stderr)
+          PY

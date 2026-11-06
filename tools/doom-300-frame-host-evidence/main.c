@@ -67,9 +67,14 @@ int main(int argc, char **argv) {
     doomgeneric_Create(10, engine_argv);
     /* One genuine Doom tick/present per iteration. Deliberately paced at
        approximately 35 Hz; DO NOT present this as an uncapped benchmark. */
-    for (unsigned i = 0; i < REQUIRED_FRAMES; ++i) {
+    /* Upstream D_DoomMain can present during Create before returning.
+       Stop at an exact real framebuffer callback count, not tick count.
+       The attempt cap detects a stuck rendering path. */
+    unsigned attempts = 0;
+    while (frames < REQUIRED_FRAMES && attempts < REQUIRED_FRAMES + 30u) {
         doomgeneric_Tick();
         DG_SleepMs(28);
+        ++attempts;
     }
     printf("FRAME_COUNT,%u\n", frames);
     return frames == REQUIRED_FRAMES ? 0 : 8;

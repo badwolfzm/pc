@@ -1,0 +1,43 @@
+name: Genuine Doom Warden-native freestanding startup path
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-entry/**'
+      - '.github/workflows/doom-native-entry.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-entry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile mocked real native Create Tick exit call path
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -DWARDEN_DOOM_ENTRY_TEST -c tools/doom-native-entry/entry.c -o /tmp/warden-entry-test.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-entry/test_entry.c /tmp/warden-entry-test.o -o /tmp/warden-entry-test
+          /tmp/warden-entry-test
+      - name: Adversarial partial link checks
+        run: python3 -m unittest discover -s tools/doom-native-entry -p 'test_*.py' -v
+      - name: Compile actual freestanding entry with reviewed Warden thread exit
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -c tools/doom-native-entry/entry.c -o /tmp/warden-doom-entry.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -c tools/doom-native-safe-exit/exit.c -o /tmp/warden-doom-exit.o
+      - name: Fetch pinned original Doomgeneric source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Integrate actual native entry with 79-unit game engine
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-entry
+          ld -r -o target/doom-entry/real-engine-with-entry.o target/doom-entry/all-objects.o /tmp/warden-doom-entry.o /tmp/warden-doom-exit.o
+          python3 tools/doom-native-entry/verify.py target/doom-entry/all-objects.o target/doom-entry/real-engine-with-entry.o /tmp/warden-doom-entry.o /tmp/warden-doom-exit.o target/doom-entry/report.json
+      - name: Archive genuine engine and entry-link evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-native-entry-link
+          path: target/doom-entry/report.json
+          if-no-files-found: ignore

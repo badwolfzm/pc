@@ -9,3 +9,5 @@ Host differential tests compare 110 supported-format cases against glibc with un
 CI pins Doomgeneric e257a09527062bfb986b6e5e0780839b6cbd5b71 and compiles the original 79 real engine translation units with Warden adapters using merged tools/doom-native-link-gate/gate.py. It compiles this new provider freestanding and checks exact __isoc99_sscanf import closure via ld -r, requiring sensitive file/process operations remain unresolved.
 
 This does **not** build a complete executable, boot Doom inside Warden, verify 512 MiB RAM/512 MiB shared GPU or produce FPS. Independent review required. GPL considerations apply to upstream game code, which is not copied into this repo.
+
+The genuine-source CI also runs `audit_callsites.py` against the two authentic upstream importing modules. It requires the exact six format strings and real linker-object provenance; a different scanner format must fail rather than silently extend the advertised ABI. This audit is an intentionally narrow static check, not proof of arbitrary C parsing, call reachability, or user-input safety.

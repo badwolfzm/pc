@@ -134,8 +134,13 @@ pub struct Thread {
     pub personality: Personality,
     /// FS base (Linux TLS), loaded into the MSR before the thread runs.
     pub fs_base: u64,
-    /// SSE/x87 state, saved on every trap and restored before every run.
+    /// x87/SSE/AVX state. Saved only when another thread takes the FPU
+    /// (lazily, on that thread's first vector instruction), never on a trap.
     pub fx: arch::FxArea,
+    /// A native thread allowed to use SSE/AVX (the render service, games
+    /// using super-ops). Linux threads always are. A native thread without it
+    /// is killed by its first vector instruction (#NM), as before.
+    pub simd: bool,
     pub linux: linux::Proc,
 }
 
@@ -178,10 +183,11 @@ pub struct Kernel {
     /// freed again, but the ones taken fresh count against the high-water
     /// mark, so the end-of-run check allows for them.
     pub linux_run_frames: u64,
-    /// The Linux thread whose SSE/x87 state is live in the FPU, if any.
-    /// Native threads never own the FPU: they run with CR0.TS set and the
-    /// first SSE instruction kills them (#NM), so switching between native
-    /// threads saves and restores nothing.
+    /// The thread whose vector state is live in the FPU, if any. Every other
+    /// thread runs with CR0.TS set. Its first vector instruction traps (#NM):
+    /// a thread allowed vector state then takes the FPU (the owner's state is
+    /// saved, its own restored), any other native thread is killed. A thread
+    /// that never touches a vector register never costs a save or restore.
     pub fx_owner: Option<usize>,
     pub ts_set: bool,
     /// FS base currently in the MSR; written only when a thread differs.
@@ -205,7 +211,7 @@ impl Kernel {
         self.threads.push(Thread {
             name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(), deferred_exit: None,
             budget, budget_period: budget, death: None, expect, logs: 0,
-            personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), linux: linux::Proc::new(),
+            personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), simd: false, linux: linux::Proc::new(),
         });
         self.threads.len() - 1
     }
@@ -213,6 +219,33 @@ impl Kernel {
     fn pick_next(&mut self) -> Option<usize> {
         let n = self.threads.len();
         (1..=n).map(|i| (self.current + i) % n).find(|&i| self.threads[i].death.is_none() && self.threads[i].state == State::Runnable)
+    }
+
+    /// May thread `i` hold vector state?
+    fn may_use_fpu(&self, i: usize) -> bool {
+        self.threads[i].personality == Personality::Linux || self.threads[i].simd
+    }
+
+    /// #NM from thread `cur`: give it the FPU if it may have it. The owner's
+    /// state goes to its own area first, then `cur`'s is loaded with the full
+    /// enabled mask, so no register of the previous owner is left visible.
+    /// Returns false when `cur` may not use vector state.
+    fn take_fpu(&mut self, cur: usize) -> bool {
+        if !self.may_use_fpu(cur) {
+            return false;
+        }
+        arch::clear_ts();
+        self.ts_set = false;
+        if let Some(o) = self.fx_owner {
+            if o != cur && self.threads[o].death.is_none() {
+                arch::fxsave(&mut self.threads[o].fx);
+            }
+        }
+        if self.fx_owner != Some(cur) {
+            arch::fxrstor(&self.threads[cur].fx);
+        }
+        self.fx_owner = Some(cur);
+        true
     }
 
     fn any_alive(&self) -> bool {
@@ -315,6 +348,11 @@ impl Kernel {
             let _ = self.caps.delete(&mut self.threads[idx].cspace, slot);
         }
         self.reclaim();
+        // Its registers stay in the FPU until the next owner's XRSTOR
+        // overwrites all of them; nobody saves them again.
+        if self.fx_owner == Some(idx) {
+            self.fx_owner = None;
+        }
         let t = &mut self.threads[idx];
         t.death = Some(how);
         let ok = how == t.expect;
@@ -325,34 +363,19 @@ impl Kernel {
         crate::kprintln!("{} thread {:<22} stopped: {} (expected {})", if ok { "PASS" } else { "FAIL" }, t.name, how, t.expect);
     }
 
-    /// Enter thread `i`. The FPU and the FS base are touched only when the
-    /// thread differs from what the CPU holds, so a native thread resuming
-    /// after its own syscall, or following another native thread, pays
-    /// nothing for the Linux personality: no fxsave, no fxrstor, no wrmsr.
+    /// Enter thread `i`. CR0.TS is clear only for the FPU owner, so any other
+    /// thread's first vector instruction comes back as #NM (`take_fpu`). The
+    /// FS base is written only when it differs from what the MSR holds.
     fn run(&mut self, i: usize) -> ! {
         self.current = i;
-        if self.threads[i].personality == Personality::Linux {
+        if self.fx_owner == Some(i) {
             if self.ts_set {
                 arch::clear_ts();
                 self.ts_set = false;
             }
-            if self.fx_owner != Some(i) {
-                if let Some(o) = self.fx_owner {
-                    arch::fxsave(&mut self.threads[o].fx);
-                }
-                arch::fxrstor(&self.threads[i].fx);
-                self.fx_owner = Some(i);
-            }
-        } else {
-            if let Some(o) = self.fx_owner.take() {
-                // Leaving a Linux thread: bank its state. Its registers stay
-                // in the FPU but TS keeps every native thread away from them.
-                arch::fxsave(&mut self.threads[o].fx);
-            }
-            if !self.ts_set {
-                arch::set_ts();
-                self.ts_set = true;
-            }
+        } else if !self.ts_set {
+            arch::set_ts();
+            self.ts_set = true;
         }
         if self.threads[i].fs_base != self.fs_loaded {
             arch::set_fs_base(self.threads[i].fs_base);
@@ -733,6 +756,10 @@ pub extern "C" fn trap(frame: *mut TrapFrame) -> ! {
                 Ok(After::Block) => k.threads[cur].budget = k.threads[cur].budget_period,
                 Err(d) => k.kill(cur, d),
             }
+        }
+        arch::VEC_NM if k.take_fpu(cur) => {
+            // Retry the vector instruction, now with this thread's state.
+            k.run(cur)
         }
         v => {
             if v == 14 {

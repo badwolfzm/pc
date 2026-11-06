@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the Phase 1 kernel and run its in-guest escape suite under QEMU.
 # Exit 0 when every check held. Uses KVM when /dev/kvm exists, else TCG.
+# QEMU_CPU=max (TCG) or host (KVM) exposes XSAVE/AVX to exercise the AVX path.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -12,7 +13,7 @@ K="target/x86_64-unknown-none/$DIR/warden-kernel"
 objcopy -I elf64-x86-64 -O elf32-i386 "$K" "$K.mb32"
 ACCEL=tcg; [[ -w /dev/kvm ]] && ACCEL=kvm
 set +e
-timeout "${TIMEOUT:-120}" qemu-system-x86_64 -machine pc,accel="$ACCEL" -m 128M -display none -serial stdio \
+timeout "${TIMEOUT:-120}" qemu-system-x86_64 -machine pc,accel="$ACCEL" ${QEMU_CPU:+-cpu "$QEMU_CPU"} -m 128M -display none -serial stdio \
     -no-reboot -device isa-debug-exit,iobase=0xf4,iosize=0x04 -kernel "$K.mb32"
 RC=$?
 set -e

@@ -128,7 +128,7 @@ class PreflightTests(unittest.TestCase):
         self.bad(elf(segflags=4, memsz=0x800, second=second))
 
     def test_distinct_pages_with_distinct_permissions_allowed(self):
-        second = (1, 6, 0x2000, 0x401000, 0x401000, 1, 0x800, 0x1000)
+        second = (1, 6, 0x1000, 0x600000, 0x600000, 1, 0x800, 0x1000)
         report = self.ok(elf(memsz=0x800, second=second))
         self.assertEqual(report["load_segments"], 2)
 

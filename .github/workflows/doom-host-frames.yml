@@ -1,0 +1,51 @@
+name: Genuine Doom host game-loop frames (not Warden)
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-host-frames/**'
+      - '.github/workflows/doom-host-frames.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frames:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use reviewed merged Warden adapter and bounded WAD backend
+        run: |
+          test -f tools/doomgeneric-warden/doomgeneric_warden.c
+          test -f tools/doom-real-wfile-link/bridge_backend.c
+          # Refuse a stale adapter that reverses the action keys.
+          grep -F 'return 0xa2; /* KEY_USE (Space) */' tools/doomgeneric-warden/doomgeneric_warden.c
+          grep -F 'return 0xa3; /* KEY_FIRE (left Ctrl) */' tools/doomgeneric-warden/doomgeneric_warden.c
+          # Confirm no legacy adapter or backend checkout overrides.
+          git status --porcelain
+      - name: Fetch pinned genuine Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/genuine-doomgeneric
+          git -C /tmp/genuine-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Obtain legal Freedoom phase-one IWAD
+        run: |
+          curl --fail --location --retry 3 --max-time 120 \
+            https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip \
+            -o /tmp/freedoom.zip
+          unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$'
+          file="$(unzip -Z1 /tmp/freedoom.zip | grep -iE '(^|/)freedoom1[.]wad$' | head -n1)"
+          unzip -p /tmp/freedoom.zip "$file" > DOOM1.WAD
+          test "$(head -c4 DOOM1.WAD)" = IWAD
+          echo "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  DOOM1.WAD" | sha256sum --check
+      - name: Unit-test strict controlled-gameplay evidence validator
+        run: python3 -m unittest discover -s tools/doom-host-frames -p 'test_*.py' -v
+      - name: Run genuine Doom no-input vs arrow-input comparison (host only)
+        env:
+          DOOM_EVIDENCE_DIR: target/doom-host-frames-evidence
+        run: bash tools/doom-host-frames/run.sh /tmp/genuine-doomgeneric/doomgeneric DOOM1.WAD
+      - name: Archive two real engine runs and structured host-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-host-controlled-input
+          path: target/doom-host-frames-evidence/
+          if-no-files-found: ignore

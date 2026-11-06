@@ -1,0 +1,49 @@
+name: Genuine Doom selected-runtime unique-provider link gate
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-unique-provider-gate/**'
+      - '.github/workflows/doom-unique-provider-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unique:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests for duplicate definitions and import boundary
+        run: python3 -m unittest discover -s tools/doom-unique-provider-gate -p 'test_*.py' -v
+      - name: Pin merged PR 177 actual two-function source
+        run: |
+          git fetch --quiet --depth=1 origin 254b941d4c76e7dd91fb21354b1679f9291a74ab
+          test "$(git rev-parse FETCH_HEAD)" = 254b941d4c76e7dd91fb21354b1679f9291a74ab
+          git show FETCH_HEAD:tools/doom-pure-crt-symbols/pure.c > /tmp/pure-merged.c
+          cmp -s /tmp/pure-merged.c tools/doom-pure-crt-symbols/pure.c
+      - name: Stage exact unmerged candidate components only in temporary CI checkout
+        run: |
+          git fetch --quiet --depth=1 origin 6d6237735fad9b0f01f5e7e0064656560df3fc31
+          test "$(git rev-parse FETCH_HEAD)" = 6d6237735fad9b0f01f5e7e0064656560df3fc31
+          git restore --source=FETCH_HEAD -- tools/doom-mini-crt/mini_extra.c
+          git fetch --quiet --depth=1 origin e0b20c35a73a6e590c0b8dbe62910342f3d07527
+          test "$(git rev-parse FETCH_HEAD)" = e0b20c35a73a6e590c0b8dbe62910342f3d07527
+          git restore --source=FETCH_HEAD -- tools/doom-native-heap-closure/heap_alias.c
+          git fetch --quiet --depth=1 origin 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
+          test "$(git rev-parse FETCH_HEAD)" = 315cc925ebf67f67d883bfa4d507ebcbb6b84c10
+          git restore --source=FETCH_HEAD -- tools/doom-freestanding-arena/arena.c tools/doom-freestanding-arena/arena.h
+      - name: Fetch exactly pinned upstream Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom-unique-upstream
+          git -C /tmp/doom-unique-upstream checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom-unique-upstream rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Build real Doom freestanding objects and reject duplicate exported symbols
+        run: |
+          python3 tools/doom-unique-provider-gate/gate.py --source /tmp/doom-unique-upstream/doomgeneric --output target/doom-unique-provider-gate
+      - name: Save pinned ET_REL and symbol-map report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-doom-unique-provider-evidence
+          path: target/doom-unique-provider-gate/report.json
+          if-no-files-found: ignore

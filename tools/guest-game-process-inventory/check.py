@@ -14,7 +14,8 @@ def require(value, message):
     if not value:
         raise Invalid(message)
 
-def validate(doc):
+def validate(doc, *, strict_single_pid=False):
+    require(type(strict_single_pid) is bool, "strict_single_pid must be boolean")
     require(type(doc) is dict, "root must be an object")
     require(set(doc) == {"schema", "source", "boot_id", "complete", "vcpu_count", "events"}, "unexpected or missing root fields")
     require(type(doc["schema"]) is int and doc["schema"] == 1, "unsupported schema")
@@ -60,8 +61,11 @@ def validate(doc):
                 del alive[pid]
     require(phase == "ended", "missing end marker")
     require(len(game_pids) == 1, "expected exactly one game process for entire boot")
+    if strict_single_pid:
+        require(len(seen) == 1, "strict single-PID mode forbids all additional userspace processes")
     return {"status": "pass", "source": doc["source"], "peak_guest_userspace_processes": peak,
             "game_pid": next(iter(game_pids)), "events_checked": len(events),
+            "strict_single_pid": strict_single_pid,
             "limitations": "self-reported inventory; not independently authenticated guest telemetry or FPS/RAM measurement"}
 
 def unique_pairs(pairs):
@@ -76,8 +80,8 @@ def reject_constant(value):
     raise Invalid(f"nonfinite JSON number: {value}")
 
 def main(argv):
-    if len(argv) != 2:
-        print("usage: check.py REPORT.json", file=sys.stderr)
+    if len(argv) not in (2, 3) or (len(argv) == 3 and argv[2] != "--strict-single-pid"):
+        print("usage: check.py REPORT.json [--strict-single-pid]", file=sys.stderr)
         return 2
     try:
         path = Path(argv[1])
@@ -85,7 +89,7 @@ def main(argv):
             raw = f.read(LIMIT + 1)
         require(len(raw) <= LIMIT, "report exceeds 1 MiB")
         doc = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
-        result = validate(doc)
+        result = validate(doc, strict_single_pid=(len(argv) == 3))
         print(json.dumps(result, sort_keys=True))
         return 0
     except (Invalid, OSError, ValueError, UnicodeError, RecursionError) as e:

@@ -1,0 +1,17 @@
+name: Doom native ELF budget preflight
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-elf-budget/**'
+      - '.github/workflows/doom-elf-budget.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run strict ELF budget contract tests
+        run: python3 -m unittest discover -s tools/doom-elf-budget -p 'test_*.py' -v

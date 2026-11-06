@@ -17,14 +17,14 @@ The workflow downloads GPL Freedoom 0.13.0 from its release and verifies the
 No WAD content or upstream GPL engine sources are vendored into this repo.
 GPL license obligations still apply to a combined distribution.
 
-## Two independent real-engine process runs
+## Three independent real-engine process runs
 
 ```sh
 bash tools/doom-host-frames/run.sh /path/to/pinned/doomgeneric/doomgeneric /path/to/DOOM1.WAD
 ```
 
 The shell script builds an actual host executable from upstream Doom and
-Warden adapter/bridge components, then executes it **twice** with the same
+Warden adapter/bridge components, then executes it **three times** with the same
 source, game data, synthetic tick progression and 10 post-startup frames.
 
 1. **No-input control**: the mocked keyboard syscall always returns 0.
@@ -36,6 +36,24 @@ source, game data, synthetic tick progression and 10 post-startup frames.
    adapter; requires 10 frames in `GS_LEVEL`, a non-null player and changed
    world position and framebuffer hashes. The unchanged Warden adapter is
    linked in both runs; both processes start independently.
+
+3. **Reverse input intervention**: injects PS/2 down-arrow press and release
+   using the same frame schedule. The real Doom input poll must consume both,
+   player position must move in the **opposite X direction** from forward input,
+   and the final framebuffer hash must differ from the initial hash.
+
+The checker parses all three independent `DOOM_EVIDENCE_V1` records and
+rejects different starting conditions, missing input transitions, invalid
+frame digests, unchanged reverse image, or motion in the wrong direction.
+Its tests include 21 positive and adversarial cases. CI saves the three
+raw logs plus JSON result for independent review.
+
+**Three-run result:** identical initial X = -27262976. No input ends
+at -27262976; forward at -20321275; reverse at -32497008. Pinned actual
+engine/game assets and the same synthetic 10ms clock were used each run.
+[GitHub Actions 42267352906](https://github.com/badwolfzm/pc/actions/runs/42267352906)
+passed the 21 unit tests and all three real-engine host trials. These are
+signed 16.16 world-coordinate units, not RAM, FPS, or wall-clock metrics.
 
 Verified at source commit `319cdb17b3d023a5f96a73ea93b41e6d41f0228a`
 in [GitHub Actions run 42264761172](https://github.com/badwolfzm/pc/actions/runs/42264761172):

@@ -1,4 +1,3 @@
-import copy
 import unittest
 from check import CAP, COMPONENTS, EvidenceError, validate
 
@@ -18,7 +17,8 @@ def fixture():
             "complete": True, "vcpu_count": 1,
             "guest_physical_capacity_bytes": CAP,
             "host_peak_rss_bytes": 900000000,
-            "peak_total_bytes": max(s["total_bytes"] for s in samples),
+            "peak_total_bytes": max(s["total_bytes"] for s in samples) + 1000000,
+            "peak_method": "physical_frame_event_high_water",
             "samples": samples}
 
 
@@ -61,8 +61,27 @@ class GateTests(unittest.TestCase):
         f["samples"][0]["total_bytes"] += 1
         self.bad(f)
         f = fixture()
-        f["peak_total_bytes"] += 1
+        f["peak_total_bytes"] = 1
         self.bad(f)
+
+    def test_spike_missing_from_samples_but_exceeding_capacity(self):
+        f = fixture()
+        f["peak_total_bytes"] = CAP + 1
+        self.bad(f)
+
+    def test_peak_method_required(self):
+        f = fixture()
+        f["peak_method"] = "sample_max"
+        self.bad(f)
+        f = fixture()
+        del f["peak_method"]
+        self.bad(f)
+
+    def test_higher_event_peak_is_valid(self):
+        f = fixture()
+        f["peak_total_bytes"] = 100000000
+        out = validate(f)
+        self.assertGreater(out["event_peak_mib"], out["sampled_peak_mib"])
 
     def test_incomplete_and_bad_timestamps(self):
         f = fixture()

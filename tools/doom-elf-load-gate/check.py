@@ -49,10 +49,14 @@ def inspect(data, guest_bytes=MAX_GUEST, stack_bytes=MIB):
     for a, b in zip(segments, segments[1:]):
         if a[1] > b[0]:
             raise ValueError('overlapping PT_LOAD virtual extents')
+        # Even disjoint byte extents can share a page, causing loader
+        # permission conflicts or accidental cross-segment overwrites.
+        if (a[1] + 4095) // 4096 > b[0] // 4096:
+            raise ValueError('PT_LOAD segments share a virtual page')
     if not any(start <= entry < end and flags & 1 for start, end, flags, _ in segments):
         raise ValueError('entry point not within executable PT_LOAD')
     # Conservatively count page-rounded independent segments, not only file bytes.
-    pages = sum(((n + 4095) // 4096) * 4096 for _, _, _, n in segments)
+    pages = sum(((end + 4095) // 4096 - start // 4096) * 4096 for start, end, _, _ in segments)
     if pages + stack_bytes > guest_bytes:
         raise ValueError('PT_LOAD plus stack exceeds guest budget')
     return {'entry': hex(entry), 'segments': len(segments),

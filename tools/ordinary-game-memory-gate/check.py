@@ -81,13 +81,15 @@ def unique_object(pairs):
     return out
 
 
-def load_bounded(path):
+def load_bounded(path, max_bytes=MAX_JSON_BYTES):
+    require(type(max_bytes) is int and MAX_JSON_BYTES <= max_bytes <= 32 * 1024 * 1024,
+            "invalid JSON byte limit")
     source = Path(path)
-    if source.stat().st_size > MAX_JSON_BYTES:
-        raise EvidenceError("report exceeds 4 MiB input limit")
+    if source.stat().st_size > max_bytes:
+        raise EvidenceError("report exceeds permitted input limit")
     with source.open("rb") as stream:
-        payload = stream.read(MAX_JSON_BYTES + 1)
-    if len(payload) > MAX_JSON_BYTES:
+        payload = stream.read(max_bytes + 1)
+    if len(payload) > max_bytes:
         raise EvidenceError("report exceeds 4 MiB input limit")
     return json.loads(payload, object_pairs_hook=unique_object,
                       parse_constant=lambda value: (_ for _ in ()).throw(EvidenceError(value)))

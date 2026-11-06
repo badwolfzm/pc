@@ -1,0 +1,31 @@
+name: Genuine Doom freestanding compiler diagnostic
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-freestanding-probe/**'
+      - '.github/workflows/doom-freestanding-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/doom-freestanding-probe -p 'test_*.py' -v
+      - name: Get pinned original engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomnative
+          git -C /tmp/doomnative checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomnative rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile and retain real errors without claiming success
+        run: python3 tools/doom-freestanding-probe/probe.py --upstream /tmp/doomnative/doomgeneric --out /tmp/doom-probe-objects
+      - name: Preserve actual freestanding diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-freestanding-compiler-report
+          path: /tmp/doom-probe-objects/report.json
+          if-no-files-found: warn

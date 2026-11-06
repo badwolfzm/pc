@@ -29,7 +29,7 @@ class Frames(unittest.TestCase):
 
     def test_invalid_unicode_payload(self):
         with self.assertRaises(FrameError):
-            encode("offer", "n", "j", "\\ud800")
+            encode("offer", "n", "j", chr(0xD800))
 
     def test_invalid_kind_type(self):
         with self.assertRaises(FrameError):

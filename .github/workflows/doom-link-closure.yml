@@ -1,0 +1,28 @@
+name: Doom native link-gap symbol report
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-link-closure/**'
+      - '.github/workflows/doom-link-closure.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  symbol-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python tests
+        run: python3 -m unittest discover -s tools/doom-link-closure -p 'test_*.py' -v
+      - name: Check genuine candidate object definitions
+        run: |
+          printf 'void test_symbol(void) {}\n' > /tmp/symbol.c
+          cc -ffreestanding -fno-builtin -c /tmp/symbol.c -o /tmp/symbol.o
+          printf '{"unresolved_external_symbols":["test_symbol"]}\n' > /tmp/inventory.json
+          python3 tools/doom-link-closure/check.py --strict /tmp/inventory.json /tmp/symbol.o
+          printf '{"unresolved_external_symbols":["test_symbol","still_missing"]}\n' > /tmp/inventory.json
+          if python3 tools/doom-link-closure/check.py --strict /tmp/inventory.json /tmp/symbol.o; then
+            echo "missing symbol incorrectly accepted" >&2
+            exit 1
+          fi

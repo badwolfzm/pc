@@ -1,0 +1,49 @@
+name: Genuine Doom native entry + read-only FILE ET_REL join
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-entry-file-link-join/**'
+      - '.github/workflows/doom-entry-file-link-join.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  join:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run strict symbol closure adversarial tests
+        run: python3 -m unittest discover -s tools/doom-entry-file-link-join -p 'test_*.py' -v
+      - name: Fetch exact pinned genuine Doom engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/warden-real-doom
+          git -C /tmp/warden-real-doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/warden-real-doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Stage exact unmerged read-only FILE candidate from PR 264
+        run: |
+          git fetch --no-tags origin cd6e6fbc4b69320acc8cef5ca6ed5425d5de8909
+          test "$(git rev-parse FETCH_HEAD)" = cd6e6fbc4b69320acc8cef5ca6ed5425d5de8909
+          mkdir -p target/doom-entry-file-link-join
+          git show cd6e6fbc4b69320acc8cef5ca6ed5425d5de8909:tools/doom-readonly-file-crt/file.c > target/doom-entry-file-link-join/file.c
+      - name: Build genuine original Doom and all merged native runtime providers
+        run: |
+          python3 tools/doom-native-runtime-bundle/compose.py \
+            --source /tmp/warden-real-doom/doomgeneric \
+            --format-source tools/doom-native-format/doom_format.c \
+            --output target/doom-entry-file-link-join/runtime
+      - name: Link genuine runtime with already merged Warden entry and existing FILE candidate
+        run: |
+          python3 tools/doom-entry-file-link-join/join.py \
+            --runtime-object target/doom-entry-file-link-join/runtime/genuine-doom-with-native-runtime.o \
+            --file-source target/doom-entry-file-link-join/file.c \
+            --output target/doom-entry-file-link-join/result
+      - name: Archive genuine ET_REL and exact unresolved blockers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-entry-file-link-evidence
+          path: |
+            target/doom-entry-file-link-join/runtime/report.json
+            target/doom-entry-file-link-join/result/report.json
+          if-no-files-found: warn

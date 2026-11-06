@@ -32,6 +32,7 @@ jobs:
         run: |
           timeout 240 bash tests/kernel/pong.sh
           python3 tests/game/check_pong_guest.py target/native512-pong-serial.log
+          python3 tools/ordinary512-native-qemu/evidence.py target/native512-pong-serial.log target/native512-profile.json target/native512-evidence.json
       - name: Preserve configuration and native guest evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -39,6 +40,7 @@ jobs:
           name: native-warden-pong-512m-one-vcpu
           path: |
             target/native512-profile.json
+            target/native512-evidence.json
             target/native512-pong-serial.log
             target/native512-pong-screen.ppm
           if-no-files-found: ignore

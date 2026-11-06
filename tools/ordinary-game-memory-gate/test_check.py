@@ -1,5 +1,8 @@
 import unittest
-from check import CAP, COMPONENTS, EvidenceError, validate
+import json
+import tempfile
+from pathlib import Path
+from check import CAP, COMPONENTS, EvidenceError, validate, load_bounded
 
 
 def sample(time_ms, game=1000000):
@@ -26,6 +29,33 @@ class GateTests(unittest.TestCase):
     def bad(self, f):
         with self.assertRaises(EvidenceError):
             validate(f)
+
+    def test_bounded_file_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "evidence.json"
+            p.write_text(json.dumps(fixture()), encoding="utf-8")
+            self.assertTrue(validate(load_bounded(p))["accepted"])
+
+    def test_duplicate_keys_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "evidence.json"
+            p.write_text('{"vcpu_count":1,"vcpu_count":2}', encoding="utf-8")
+            with self.assertRaises(EvidenceError):
+                load_bounded(p)
+
+    def test_oversized_report_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "huge.json"
+            p.write_bytes(b" " * (4 * 1024 * 1024 + 1))
+            with self.assertRaises(EvidenceError):
+                load_bounded(p)
+
+    def test_nested_duplicate_keys_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "nested.json"
+            p.write_text('{"a":{"b":1,"b":0}}', encoding="utf-8")
+            with self.assertRaises(EvidenceError):
+                load_bounded(p)
 
     def test_good(self):
         result = validate(fixture())

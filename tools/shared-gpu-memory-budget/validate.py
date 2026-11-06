@@ -25,7 +25,11 @@ def validate(data):
         value = data[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(name + " must be numeric (not boolean)")
-        if not math.isfinite(value) or value < 0:
+        try:
+            finite = math.isfinite(value)
+        except (OverflowError, ValueError):
+            finite = False
+        if not finite or value < 0:
             raise ValueError(name + " must be finite and nonnegative")
     if data["vcpus"] != 1 or not isinstance(data["vcpus"], int):
         raise ValueError("exactly one integer guest vCPU required")
@@ -37,6 +41,11 @@ def validate(data):
         raise ValueError("shared GPU resident allocation exceeds its limit")
     if data["gpu_shared_mib"] > data["graphics_mib"]:
         raise ValueError("shared GPU resident bytes must be part of graphics_mib")
+    # Check each *nonnegative* bucket before summing, avoiding floating overflow
+    # and preserving the strict 512 MiB physical cap even for malicious inputs.
+    for name in BUCKETS:
+        if data[name] > 512:
+            raise ValueError(name + " exceeds 512 MiB")
     total = math.fsum(data[name] for name in BUCKETS)
     if total > 512:
         raise ValueError("resident guest total exceeds 512 MiB")

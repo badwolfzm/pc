@@ -1,0 +1,25 @@
+name: Warden browser Canvas console
+on:
+  pull_request:
+    paths:
+      - 'tools/warden-web-console/**'
+      - '.github/workflows/warden-web-console.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  console-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          node --check tools/warden-web-console/server.js
+          node --check tools/warden-web-console/demo.js
+          node --check tools/warden-web-console/test.js
+      - name: Authentication and protocol smoke test
+        run: node tools/warden-web-console/test.js

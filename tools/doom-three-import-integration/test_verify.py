@@ -64,7 +64,7 @@ class IntegrationContract(unittest.TestCase):
                 m.verify(original, bad, providers)
             bad_provider = build("bad_provider",
                 "extern int host(void);int __errno_location(void){return host();}")
-            with self.assertRaisesRegex(ValueError, "provider owns"):
+            with self.assertRaisesRegex(ValueError, "provider imports changed"):
                 m.verify(original, after, {**providers, "errno": bad_provider})
             masked = build("masked", "int system(const char*p){(void)p;return 0;}")
             masked_link = base / "masked.o"

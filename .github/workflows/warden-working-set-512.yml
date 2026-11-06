@@ -1,0 +1,19 @@
+name: 512 MiB ordinary PC game working-set trace analyzer
+on:
+  pull_request:
+    paths:
+      - 'tools/warden-working-set-512/**'
+      - '.github/workflows/warden-working-set-512.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  working-set-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic trace, pressure and fail-closed parsing tests
+        run: python3 -m unittest discover -s tools/warden-working-set-512 -p 'test_*.py' -v
+      - name: Analyze example with total guest RAM cap of 512 MiB
+        run: python3 tools/warden-working-set-512/analyze.py tools/warden-working-set-512/trace-example.csv --total-mib 512 --reserved-mib 128

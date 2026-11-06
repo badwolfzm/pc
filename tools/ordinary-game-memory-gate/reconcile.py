@@ -10,7 +10,7 @@ import json
 import sys
 
 from check import COMPONENTS, EvidenceError, load_bounded, require, validate
-from frame_events import MAX_EVENT_BYTES, PAGE_BYTES, replay
+from frame_events import MAX_EVENT_BYTES, PAGE_BYTES, replay, initial_inventory
 
 NANOSECONDS_PER_MILLISECOND = 1_000_000
 
@@ -24,16 +24,18 @@ def reconcile(snapshot, trace):
             events["peak_tracked_frame_bytes"], "declared high-water disagrees with event replay")
     require(snapshot["peak_method"] == "physical_frame_event_high_water",
             "missing physical frame-event high-water claim")
-    require(trace["capture_started_empty"] is True,
-            "frame events must cover all allocations from an empty state")
 
     # Sample at t means the state after ALL events with time_ns <= t*1e6.
-    live = {}
+    live, capture_start_ns = initial_inventory(trace)
     counts = {name: 0 for name in COMPONENTS}
+    for kind in live.values():
+        counts[kind] += 1
     cursor = 0
     event_list = trace["events"]
     for idx, sample in enumerate(snapshot["samples"]):
         boundary = sample["time_ms"] * NANOSECONDS_PER_MILLISECOND
+        require(boundary >= capture_start_ns,
+                f"sample {idx}: timestamp precedes trace capture start")
         while cursor < len(event_list) and event_list[cursor]["time_ns"] <= boundary:
             ev = event_list[cursor]
             frame, kind = ev["frame_id"], ev["kind"]

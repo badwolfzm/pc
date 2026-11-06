@@ -6,7 +6,7 @@ Doomgeneric with a permitted IWAD, using the actual Warden platform callbacks
 but *host-side mock syscalls* and the bounded WAD bridge. It injects a PS/2 up-arrow key-down and key-up through the genuine Warden
 callback, then requires ten presented 320×200 frames with different first and
 last framebuffer hashes. A host-link `--wrap=DG_GetKey` interception confirms the **real upstream\nDoom input loop** consumes one press and one release through the unchanged\nWarden adapter. Key injection is simulated, not physical hardware.
-The host frame count is NOT an FPS measurement. Frames have hashes but no displayed FPS or native RAM
+The updated fail-closed game-state gate additionally requires genuine Doom's\n`gamestate == GS_LEVEL`, a non-null active player entity on each of the ten\npost-startup frames, and **different initial and final in-level player\nworld coordinates**. A title-screen animation or consumed keys without\nadvancing an actual player can no longer pass this check. The test does not\nisolate causality to the synthetic keypress (other simulation effects can\nmove a player); it checks actual game-state advancement.\n\nThe host frame count is NOT an FPS measurement. Frames have hashes but no displayed FPS or native RAM
 measurements. A pass proves host-side gameplay/frame-loop initialization, not
 freestanding linkage or a QEMU game boot.
 

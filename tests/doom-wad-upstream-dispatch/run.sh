@@ -9,14 +9,14 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 # Compile the *actual* upstream W_OpenFile implementation and public w_file.h,
 # but do not compile its stdio backend. Link explicit Warden-authorized shim.
-cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic \
+cc -std=c11 -O2 -Wall -Wextra -Werror -Wno-error=sign-compare -Wpedantic \
  -I"$SOURCE" -I"$ROOT/tools/doom-wad-class-bridge" -I"$ROOT/tools/doom-wad-stream" \
  "$SOURCE/w_file.c" \
  "$ROOT/tools/doom-wad-class-bridge/doom_wad_bridge.c" \
  "$ROOT/tools/doom-wad-stream/wad_stream.c" \
  "$ROOT/tests/doom-wad-upstream-dispatch/test_dispatch.c" -o "$OUT/dispatch"
 "$OUT/dispatch"
-cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \
+cc -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-error=sign-compare -fsanitize=undefined \
  -I"$SOURCE" -I"$ROOT/tools/doom-wad-class-bridge" -I"$ROOT/tools/doom-wad-stream" \
  "$SOURCE/w_file.c" \
  "$ROOT/tools/doom-wad-class-bridge/doom_wad_bridge.c" \

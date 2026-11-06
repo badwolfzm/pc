@@ -64,5 +64,11 @@ def _validate(obj):
         if not all(c.isascii() and (c.isalnum() or c in "-_") for c in value):
             raise FrameError("invalid identifier")
     payload = obj["payload"]
-    if not isinstance(payload, str) or len(payload.encode("utf-8")) > MAX_PAYLOAD:
+    if not isinstance(payload, str):
+        raise FrameError("invalid payload")
+    try:
+        size = len(payload.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise FrameError("invalid Unicode payload") from exc
+    if size > MAX_PAYLOAD:
         raise FrameError("invalid payload")

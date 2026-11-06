@@ -27,6 +27,27 @@ class FrameEventTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             replay(x)
 
+    def test_full_512m_frame_population_and_release(self):
+        # 131072 distinct 4-KiB guest frames require MORE than 100000 events.
+        # Include releases to demonstrate a complete lifecycle can be replayed.
+        pages = CAP // 4096
+        x = fixture()
+        x["events"] = (
+            [{"time_ns": index, "op": "alloc", "frame_id": index, "kind": "game"}
+             for index in range(pages)] +
+            [{"time_ns": pages + index, "op": "free", "frame_id": index, "kind": "game"}
+             for index in range(pages)]
+        )
+        out = replay(x)
+        self.assertEqual(out["peak_tracked_frame_bytes"], CAP)
+        self.assertEqual(out["end_tracked_frame_bytes"], 0)
+        self.assertEqual(out["event_count"], 2 * pages)
+
+    def test_excessive_event_count_fails_closed(self):
+        x = fixture()
+        x["events"] = [x["events"][0]] * 300001
+        self.bad(x)
+
     def test_peak_and_end(self):
         out = replay(fixture())
         self.assertEqual(out["peak_tracked_frame_bytes"], 8192)

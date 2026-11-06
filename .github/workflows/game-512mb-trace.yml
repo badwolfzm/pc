@@ -1,0 +1,21 @@
+name: Offline 512 MiB game page-trace simulation
+on:
+  pull_request:
+    paths:
+      - 'tools/game-512mb-trace/**'
+      - '.github/workflows/game-512mb-trace.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  study:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trace parser, eviction and budget regressions
+        run: python3 -m unittest discover -s tools/game-512mb-trace -p 'test_*.py' -v
+      - name: Reproduce synthetic-only 512 MiB output
+        run: |
+          python3 tools/game-512mb-trace/sim.py tools/game-512mb-trace/example-synthetic.csv --total-mib 512 --reserve-mib 192 --read-us 100 --write-us 100 > /tmp/simulation.json
+          python3 -m json.tool /tmp/simulation.json >/dev/null

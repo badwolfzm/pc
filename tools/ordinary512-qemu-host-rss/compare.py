@@ -2,6 +2,7 @@
 """Two native Pong QEMU host-memory reports; do not equate RSS with guest RAM."""
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -21,6 +22,18 @@ def compare(a, b):
                 raise ValueError(f'boot {n}: missing {field}')
         if r['samples'] < 2 or r['qemu_host_peak_reported_hwm_bytes'] < r['qemu_host_peak_sampled_rss_bytes']:
             raise ValueError(f'boot {n}: inconsistent RSS observations')
+        for field in ('qemu_host_minor_fault_delta_observed',
+                      'qemu_host_major_fault_delta_observed',
+                      'qemu_host_cpu_ticks_delta_observed'):
+            if type(r.get(field)) is not int or r[field] < 0:
+                raise ValueError(f'boot {n}: invalid host counter {field}')
+        for field in ('qemu_observed_span_seconds',
+                      'launcher_elapsed_seconds_including_build'):
+            value = r.get(field)
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError(f'boot {n}: invalid duration {field}')
+        if r['qemu_observed_span_seconds'] > r['launcher_elapsed_seconds_including_build']:
+            raise ValueError(f'boot {n}: QEMU span exceeds launcher duration')
         sha = r.get('qemu_cmdline_sha256')
         if not isinstance(sha, str) or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha):
             raise ValueError(f'boot {n}: no command hash')
@@ -36,6 +49,11 @@ def compare(a, b):
         'min_host_peak_sampled_rss_bytes':min(rss),
         'host_peak_rss_spread_bytes':max(rss)-min(rss),
         'host_threads_peak_per_run':[a['qemu_host_peak_thread_count'],b['qemu_host_peak_thread_count']],
+        'host_minor_fault_deltas_per_run':[a['qemu_host_minor_fault_delta_observed'],b['qemu_host_minor_fault_delta_observed']],
+        'host_major_fault_deltas_per_run':[a['qemu_host_major_fault_delta_observed'],b['qemu_host_major_fault_delta_observed']],
+        'host_cpu_tick_deltas_per_run':[a['qemu_host_cpu_ticks_delta_observed'],b['qemu_host_cpu_ticks_delta_observed']],
+        'qemu_observed_spans_seconds':[a['qemu_observed_span_seconds'],b['qemu_observed_span_seconds']],
+        'launcher_elapsed_including_build_seconds':[a['launcher_elapsed_seconds_including_build'],b['launcher_elapsed_seconds_including_build']],
         'observations':[a,b],
         'scope':'Two real Pong QEMU host process samples; these host measurements do not equal guest physical residency, nor verify Doom, modern games, swap, total host process tree or full game FPS'
     }

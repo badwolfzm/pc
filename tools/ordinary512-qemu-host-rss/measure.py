@@ -24,6 +24,24 @@ def parse_status(s):
                 raise ValueError('invalid /proc status')
     return found
 
+def parse_proc_stat(raw):
+    """Read genuine Linux /proc/PID/stat despite spaces and ')' in comm."""
+    end = raw.rfind(')')
+    if end < 0 or '(' not in raw[:end]:
+        raise ValueError('bad /proc stat command')
+    fields = raw[end + 1:].split()
+    # Fields after comm start at field 3 (process state).
+    if len(fields) < 20:
+        raise ValueError('truncated /proc stat')
+    try:
+        vals = [int(fields[k]) for k in (7, 9, 11, 12, 19)]
+    except (ValueError, IndexError) as exc:
+        raise ValueError('invalid /proc stat counters') from exc
+    if any(x < 0 for x in vals):
+        raise ValueError('negative /proc stat counter')
+    return {'minor_faults':vals[0], 'major_faults':vals[1],
+            'cpu_ticks':vals[2] + vals[3], 'starttime_ticks':vals[4]}
+
 def verify_qemu(argv):
     def opt(key):
         hits = [i for i, v in enumerate(argv) if v == key]
@@ -73,6 +91,9 @@ def sample(script, manifest, log, report, interval_ms=20, timeout_sec=220):
     peak_rss = peak_hwm = peak_threads = 0
     cmd_sha = None
     timed_out = False
+    first_qemu_seen = last_qemu_seen = None
+    first_stat = last_stat = None
+    qemu_identity = None
     try:
         while child.poll() is None:
             if time.monotonic() - t0 > timeout_sec:
@@ -90,7 +111,18 @@ def sample(script, manifest, log, report, interval_ms=20, timeout_sec=220):
                     pid = candidate
                     cmd_sha = hashlib.sha256(raw).hexdigest()
                     status = parse_status((Path('/proc')/str(candidate)/'status').read_text())
+                    stat = parse_proc_stat((Path('/proc')/str(candidate)/'stat').read_text())
+                    identity = (candidate, stat['starttime_ticks'])
+                    if qemu_identity is not None and qemu_identity != identity:
+                        raise ValueError('QEMU process identity changed')
+                    qemu_identity = identity
                     if status.get('VmRSS',0) > 0 and status.get('Threads',0) > 0:
+                        now = time.monotonic()
+                        if first_qemu_seen is None:
+                            first_qemu_seen = now
+                            first_stat = stat
+                        last_qemu_seen = now
+                        last_stat = stat
                         samples += 1
                         peak_rss = max(peak_rss, status['VmRSS'])
                         peak_hwm = max(peak_hwm, status.get('VmHWM',0))
@@ -114,7 +146,12 @@ def sample(script, manifest, log, report, interval_ms=20, timeout_sec=220):
         'qemu_host_peak_thread_count':peak_threads,
         'samples':samples,'child_exit_code':child.returncode,'timed_out':timed_out,
         'elapsed_seconds':round(time.monotonic()-t0,3),
-        'scope':'QEMU HOST process RSS/HWM, not guest physical RAM, page faults, swap or game performance'
+        'launcher_elapsed_seconds_including_build':round(time.monotonic()-t0,3),
+        'qemu_observed_span_seconds':round(last_qemu_seen-first_qemu_seen,3) if first_qemu_seen is not None else None,
+        'qemu_host_minor_fault_delta_observed':last_stat['minor_faults']-first_stat['minor_faults'] if first_stat else None,
+        'qemu_host_major_fault_delta_observed':last_stat['major_faults']-first_stat['major_faults'] if first_stat else None,
+        'qemu_host_cpu_ticks_delta_observed':last_stat['cpu_ticks']-first_stat['cpu_ticks'] if first_stat else None,
+        'scope':'QEMU HOST process RSS/HWM plus host process CPU and host minor/major faults; not guest physical RAM, guest page faults, swap or game performance; observed QEMU span is only the polling interval, launcher elapsed also includes compiling Warden'
     }
     report.write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
     if timed_out or samples < 2 or child.returncode != 0:

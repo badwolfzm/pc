@@ -3,7 +3,7 @@
  */
 #include <stdarg.h>
 #include <stddef.h>
-#include <stdio.h>
+extern int vsnprintf(char *restrict, size_t, const char *restrict, va_list);
 
 #define WARDEN_PRINTF_BUFFER_BYTES 4096u
 

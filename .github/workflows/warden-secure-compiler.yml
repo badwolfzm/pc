@@ -1,0 +1,26 @@
+name: Secure MatrixOS optimization plan (no code execution)
+on:
+  pull_request:
+    paths:
+      - 'tools/warden-secure-compiler/**'
+      - '.github/workflows/warden-secure-compiler.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  security-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python syntax (never execute compiled user code)
+        run: python3 -m py_compile tools/warden-secure-compiler/secure_profiles.py tools/warden-secure-compiler/test_secure_profiles.py
+      - name: Run denied-input and profile unit tests
+        run: python3 -m unittest discover -s tools/warden-secure-compiler -p 'test_*.py' -v
+      - name: Verify plan-only behavior with a trusted synthetic C source
+        run: |
+          printf 'int f(void){return 1;}\n' > tools/warden-secure-compiler/fixture.c
+          python3 tools/warden-secure-compiler/secure_profiles.py \
+            --trusted-source-root tools/warden-secure-compiler --source fixture.c \
+            --profile runtime-fast --tier baseline > /tmp/warden-compiler-plan.json
+          python3 -c 'import json; p=json.load(open("/tmp/warden-compiler-plan.json")); assert p["mode"]=="plan-only" and p["executes_compiler"] is False and p["tier"]=="baseline"'

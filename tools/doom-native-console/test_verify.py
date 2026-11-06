@@ -44,7 +44,7 @@ class Tests(unittest.TestCase):
             output = c.inspect(base, full, provider)
             self.assertEqual(output["resolved_imports"], ["printf", "puts"])
             self.assertEqual(output["remaining_unresolved_count"], 10)
-            with self.assertRaisesRegex(ValueError, "both console"):
+            with self.assertRaisesRegex(ValueError, "baseline already defines"):
                 c.inspect(full, full, provider)
             with self.assertRaisesRegex(ValueError, "other than"):
                 c.inspect(base, base, provider)

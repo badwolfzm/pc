@@ -18,3 +18,11 @@ jobs:
         run: python3 -m unittest discover -s tools/mm-contiguous-source-repro -p 'test_*.py' -v
       - name: Compile real Rust allocator and report defect conditions
         run: python3 tools/mm-contiguous-source-repro/run.py
+
+      - name: Validate candidate while baseline is vulnerable, otherwise strict-test repaired kernel
+        run: |
+          if grep -Fq 'let first = self.alloc()?;' crates/warden-kernel/src/mm.rs; then
+            python3 tools/mm-contiguous-source-repro/run.py --proposed-fix --strict
+          else
+            python3 tools/mm-contiguous-source-repro/run.py --strict
+          fi

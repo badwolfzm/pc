@@ -10,7 +10,7 @@ int main(void){
  char s[100];
  assert(snprintf(s,sizeof(s),"%s %d %u %x","doom",-12,9U,255U)==13);
  assert(!strcmp(s,"doom -12 9 ff"));
- assert(snprintf(s,5,"abcdef")==6&&!strcmp(s,"abcd"));
+ assert(via_v(s,5,"abcdef")==6&&!strcmp(s,"abcd"));
  assert(snprintf(NULL,0,"%08x",42U)==8);
  assert(snprintf(s,sizeof(s),"%+08d",-42)==8&&!strcmp(s,"-0000042"));
  assert(snprintf(s,sizeof(s),"%-6.3s!","abcdef")==7&&!strcmp(s,"abc   !"));

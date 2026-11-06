@@ -70,8 +70,11 @@ fn main() {
 }
 """
 
-def run(strict=False):
+def run(strict=False, proposed_fix=False):
     fragment = extract_mm(MM.read_text())
+    if proposed_fix:
+        from proposed_fix import apply
+        fragment = apply(fragment)
     with tempfile.TemporaryDirectory(prefix="warden-mm-audit-") as d:
         rust_file = Path(d) / "probe.rs"
         executable = Path(d) / "probe"
@@ -90,6 +93,7 @@ def run(strict=False):
         raise RuntimeError("wrong probe output")
     report["scope"] = "Linux host extracted-source reproduction only; NOT a native Warden/QEMU test"
     report["issue"] = 160
+    report["implementation"] = "proposed_unmerged_patch" if proposed_fix else "repository_baseline"
     print(json.dumps(report, sort_keys=True))
     return 1 if strict and (report["zero_count_has_side_effect"] or
                             report["noncontiguous_failure_leaks_used"]) else 0
@@ -98,9 +102,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strict", action="store_true",
                         help="return failure if allocator defects persist (use after kernel fix)")
+    parser.add_argument("--proposed-fix", action="store_true",
+                        help="compile proposed safe bump-run implementation instead of the unmodified source")
     args = parser.parse_args()
     try:
-        return run(args.strict)
+        return run(args.strict, args.proposed_fix)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as err:
         print(json.dumps({"status": "ERROR", "reason": str(err)}))
         return 2

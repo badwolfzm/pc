@@ -1,0 +1,42 @@
+name: Doom genuine freestanding ctype import closure
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-ctype/**'
+      - '.github/workflows/doom-native-ctype.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ctype-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test strict C-locale toupper table and link oracle
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-ctype/ctype.c tools/doom-native-ctype/test_ctype.c -o /tmp/warden-doom-ctype
+          /tmp/warden-doom-ctype
+          python3 -m unittest discover -s tools/doom-native-ctype -p 'test_verify.py' -v
+      - name: Build freestanding native provider (no host import)
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-ctype/ctype.c -o /tmp/warden-doom-ctype.o
+          test -z "$(nm -g -u /tmp/warden-doom-ctype.o)"
+          nm -P -g --defined-only /tmp/warden-doom-ctype.o
+      - name: Clone immutable genuine Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile real engine and enforce exact symbol closure
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-native-ctype
+          ld -r -o target/doom-native-ctype/engine-with-ctype.o target/doom-native-ctype/all-objects.o /tmp/warden-doom-ctype.o
+          python3 tools/doom-native-ctype/verify.py target/doom-native-ctype/all-objects.o target/doom-native-ctype/engine-with-ctype.o target/doom-native-ctype/closure.json
+      - name: Archive real link result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-ctype-link
+          path: target/doom-native-ctype/closure.json
+          if-no-files-found: ignore

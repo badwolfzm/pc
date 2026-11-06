@@ -18,9 +18,15 @@ Original Doomgeneric GPL obligations remain.
 
 `bash tools/doom-host-frames/run.sh /path/to/pinned/doomgeneric /path/to/DOOM1.WAD`
 
-Depends on unmerged #88 native callback adapter at
-`c60e37f85a1f704290234ec95a1aae60622fbb51`, merged WAD class bridge and
-upstream WAD ABI shim #114. CI stages files from those exact commits. This
+Uses the **merged** Warden Doom callback adapter (#88, including
+Space/Ctrl action-key fixes #111), merged bounded WAD class bridge, and
+merged WAD file ABI backend from the checkout. CI no longer stages obsolete
+pre-merge callback or file-backend commits, and explicitly checks corrected
+`KEY_USE=0xa2` / `KEY_FIRE=0xa3` mappings before host gameplay. This gate
+was confirmed in [GitHub Actions run 42260455630](https://github.com/badwolfzm/pc/actions/runs/42260455630).
+Genuine Doom was in `GS_LEVEL` for all 10 post-startup frames; its player
+entity moved and the real Doom input poll consumed the simulated arrow-key
+press/release. This
 test does *not* claim one-vCPU execution (Linux and the CI host are distinct
 from QEMU), security endorsement, an acceptable 2 MiB guest VA window,
 low physical RAM, or Albion compatibility. Review security issues in WAD

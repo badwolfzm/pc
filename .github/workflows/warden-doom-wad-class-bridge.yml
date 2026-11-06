@@ -1,0 +1,46 @@
+name: Doom WAD class bridge host, upstream and freestanding checks
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-wad-class-bridge/**'
+      - 'tools/doom-wad-stream/**'
+      - '.github/workflows/warden-doom-wad-class-bridge.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host callback tests and freestanding object build
+        run: make -C tools/doom-wad-class-bridge test freestanding
+      - name: Undefined behavior sanitizer tests
+        run: |
+          cd tools/doom-wad-class-bridge
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \
+            -Itest -I../doom-wad-stream -I. \
+            doom_wad_bridge.c ../doom-wad-stream/wad_stream.c test/test_bridge.c \
+            -o test-ubsan
+          ./test-ubsan
+      - name: Fetch pinned genuine upstream Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/warden-upstream-doom
+          git -C /tmp/warden-upstream-doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/warden-upstream-doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Compile and link original upstream w_file.c with Warden class
+        run: |
+          cd tools/doom-wad-class-bridge
+          # Keep all warnings as errors in Warden-owned code. The pinned
+          # upstream w_file.c has one pre-existing signed/unsigned loop warning.
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wno-error=sign-compare \
+            -Dstdc_wad_file=warden_doom_wad_class \
+            -I/tmp/warden-upstream-doom/doomgeneric \
+            -c /tmp/warden-upstream-doom/doomgeneric/w_file.c -o /tmp/warden-upstream-w_file.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            -I/tmp/warden-upstream-doom/doomgeneric -I../doom-wad-stream -I. \
+            doom_wad_bridge.c ../doom-wad-stream/wad_stream.c \
+            test/test_upstream.c /tmp/warden-upstream-w_file.o \
+            -o test-upstream
+          ./test-upstream

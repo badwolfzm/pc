@@ -125,6 +125,10 @@ pub struct Thread {
     /// Exactly one kernel-generated exit notice may wait outside a saturated
     /// endpoint sender queue. Stored in the fixed thread record, not heap.
     pub deferred_exit: Option<(u32, Msg)>,
+    /// A blocking Linux CALL waiting for a paid slot in its personality
+    /// endpoint. The message stays in the thread's existing pending field.
+    /// At most one CALL can be outstanding per thread, with no heap growth.
+    pub deferred_call: Option<u32>,
     /// Timer ticks left (10 ms each). Refilled on yield.
     pub budget: u32,
     pub budget_period: u32,
@@ -203,7 +207,7 @@ impl Kernel {
             rip: entry, cs: USER_CS, rflags: 0x202, rsp: stack_top, ss: USER_SS, ..TrapFrame::default()
         };
         self.threads.push(Thread {
-            name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(), deferred_exit: None,
+            name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(), deferred_exit: None, deferred_call: None,
             budget, budget_period: budget, death: None, expect, logs: 0,
             personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), linux: linux::Proc::new(),
         });
@@ -248,11 +252,24 @@ impl Kernel {
         true
     }
 
-    /// A thread died: drop it from any endpoint queue.
+    /// A thread died: drop it from all endpoint queues. If removing a
+    /// sender makes space, admit the oldest available deferred Linux CALL.
+    /// No allocation: all queue slots and thread records exist already.
     fn unqueue(&mut self, idx: usize) {
-        for ep in self.endpoints.values_mut() {
+        self.threads[idx].deferred_call = None;
+        for (ep_id, ep) in self.endpoints.iter_mut() {
             ep.senders.retain(|&t| t != idx);
             ep.receivers.retain(|&t| t != idx);
+            if ep.senders.len() < ep.capacity {
+                if let Some(next) = self.threads.iter().position(|t| {
+                    t.death.is_none() && t.deferred_call == Some(*ep_id)
+                }) {
+                    let admitted = Endpoint::enqueue(&mut ep.senders, ep.capacity, next);
+                    debug_assert!(admitted);
+                    ep.peak_senders = ep.peak_senders.max(ep.senders.len());
+                    self.threads[next].deferred_call = None;
+                }
+            }
         }
     }
 
@@ -277,6 +294,19 @@ impl Kernel {
                         for t in &mut self.threads {
                             if t.deferred_exit.map(|(ep_id, _)| ep_id) == Some(id.0) {
                                 t.deferred_exit = None;
+                            }
+                            // Never deliver a parked syscall through a
+                            // destroyed/recycled request or reply endpoint.
+                            if t.deferred_call.is_some()
+                                && (t.deferred_call == Some(id.0)
+                                    || matches!(t.state, State::CallBlocked(rep) if rep == id.0))
+                            {
+                                t.deferred_call = None;
+                                if t.death.is_none() {
+                                    t.linux.pending = linux::Pending::None;
+                                    t.frame.rax = err(CapError::Revoked);
+                                    t.state = State::Runnable;
+                                }
                             }
                         }
                         self.ep_refused += ep.refused;
@@ -612,6 +642,16 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
     if op == SYS_RECV {
         if !ep.senders.is_empty() {
             let from = ep.senders.remove(0);
+            // FIFO handoff: reserve this newly freed paid slot for one
+            // previously blocked Linux caller before any new sender.
+            if let Some(next) = k.threads.iter().position(|t| {
+                t.death.is_none() && t.deferred_call == Some(ep_id)
+            }) {
+                let admitted = Endpoint::enqueue(&mut ep.senders, ep.capacity, next);
+                debug_assert!(admitted);
+                ep.peak_senders = ep.peak_senders.max(ep.senders.len());
+                k.threads[next].deferred_call = None;
+            }
             let msg = k.threads[from].pending;
             match k.threads[from].state {
                 // A caller whose message was queued now waits for the reply.
@@ -777,8 +817,10 @@ pub fn mint_to(k: &mut Kernel, from: usize, from_slot: usize, to: usize, to_slot
 
 /// CALL on behalf of `cur` (a Linux thread whose syscall the kernel is
 /// forwarding): deliver `msg` to a waiting receiver of endpoint `ep_id` and
-/// park `cur` on reply endpoint `rep`, or queue the message. The same steps
-/// `ipc` takes for SYS_CALL. False when a queue is full; nothing changed.
+/// park `cur` on reply endpoint `rep`, or queue the message. A full
+/// sender queue parks the blocking Linux call in its existing fixed thread
+/// record until a paid slot is freed. False only on an invalid endpoint or
+/// an already-deferred caller.
 pub fn call(k: &mut Kernel, cur: usize, ep_id: u32, rep: u32, msg: Msg) -> bool {
     if !k.endpoints.contains_key(&rep) {
         return false;
@@ -794,8 +836,16 @@ pub fn call(k: &mut Kernel, cur: usize, ep_id: u32, rep: u32, msg: Msg) -> bool 
     }
     let ep = k.endpoints.get_mut(&ep_id).unwrap();
     if !Endpoint::enqueue(&mut ep.senders, ep.capacity, cur) {
-        ep.refused += 1;
-        return false;
+        // Queue pressure is not an application error for a blocking Linux
+        // syscall. Only this caller's already-allocated thread record is
+        // retained; the eight-slot endpoint bound stays unchanged.
+        if k.threads[cur].deferred_call.is_some() {
+            return false;
+        }
+        k.threads[cur].pending = msg;
+        k.threads[cur].deferred_call = Some(ep_id);
+        k.threads[cur].state = State::CallBlocked(rep);
+        return true;
     }
     ep.peak_senders = ep.peak_senders.max(ep.senders.len());
     k.threads[cur].pending = msg;

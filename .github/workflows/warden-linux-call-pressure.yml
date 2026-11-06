@@ -1,0 +1,61 @@
+name: Warden Linux blocking-call pressure regression
+
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/thread.rs'
+      - 'crates/warden-kernel/src/linux.rs'
+      - '.github/workflows/warden-linux-call-pressure.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tcg-repeated-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install guest build and emulator tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm qemu-system-x86 binutils
+      - name: Install bare-metal Rust target
+        run: rustup target add x86_64-unknown-none
+      - name: Build real Warden multiboot image
+        run: |
+          cargo build -q -p warden-kernel --target x86_64-unknown-none --release
+          objcopy -I elf64-x86-64 -O elf32-i386 \
+            target/x86_64-unknown-none/release/warden-kernel \
+            target/x86_64-unknown-none/release/warden-kernel.mb32
+      - name: Repeat full BusyBox and IPC in-guest workload with one vCPU / 512 MiB
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=target/x86_64-unknown-none/release/warden-kernel.mb32
+          for i in {1..10}; do
+            set +e
+            timeout 120 qemu-system-x86_64 -accel tcg -machine pc \
+              -smp 1 -m 512M -display none -serial stdio -no-reboot \
+              -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+              -kernel "$image" > "warden-run-$i.log" 2>&1
+            status=$?
+            set -e
+            echo "TCG run $i: QEMU exit status $status"
+            tail -n 4 "warden-run-$i.log"
+            if [[ "$status" != 1 ]] \
+              || ! grep -q '^ALL HELD: 201 checks, 0 failed' "warden-run-$i.log" \
+              || ! grep -q 'PASS busybox sh -c: arithmetic, printf builtin, expansion got 1' "warden-run-$i.log" \
+              || ! grep -q 'PASS busybox cat without fs.read: Permission denied, exit 1 got 1' "warden-run-$i.log"; then
+              cat "warden-run-$i.log"
+              exit 1
+            fi
+          done
+      - name: Upload logs for independent review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: warden-linux-call-pressure-tcg
+          path: warden-run-*.log
+          if-no-files-found: ignore

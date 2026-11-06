@@ -1,0 +1,21 @@
+name: One-vCPU 512 MiB QEMU argv preflight
+on:
+  pull_request:
+    paths:
+      - 'tools/qemu-onecore-512-argv/**'
+      - '.github/workflows/qemu-onecore-512-argv.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  argv-negative-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Conservative command preflight tests
+        run: python3 -m unittest discover -s tools/qemu-onecore-512-argv -p 'test_*.py' -v
+      - name: Positive CLI smoke check
+        run: |
+          echo '["qemu-system-x86_64","-smp","1","-m","512M","-nographic"]' > /tmp/warden-argv.json
+          python3 tools/qemu-onecore-512-argv/check.py /tmp/warden-argv.json

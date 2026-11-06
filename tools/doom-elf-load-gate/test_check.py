@@ -52,7 +52,7 @@ class ElfGateTests(unittest.TestCase):
     def test_disjoint_byte_extents_share_page(self):
         # Page-sharing is prohibited even when segment bytes do not overlap.
         blob = bytearray(8196)
-        ident = b'\\x7fELF' + bytes([2, 1, 1]) + bytes(9)
+        ident = b'\x7fELF' + bytes([2, 1, 1]) + bytes(9)
         HEADER.pack_into(blob, 0, ident, 2, 62, 1, 0x400000, 64, 0, 0,
                          HEADER.size, PHDR.size, 2, 0, 0, 0)
         PHDR.pack_into(blob, 64, 1, 5, 4096, 0x400000, 0, 4, 2048, 4096)
@@ -62,7 +62,7 @@ class ElfGateTests(unittest.TestCase):
 
     def test_page_aligned_disjoint_segments(self):
         blob = bytearray(8196)
-        ident = b'\\x7fELF' + bytes([2, 1, 1]) + bytes(9)
+        ident = b'\x7fELF' + bytes([2, 1, 1]) + bytes(9)
         HEADER.pack_into(blob, 0, ident, 2, 62, 1, 0x400000, 64, 0, 0,
                          HEADER.size, PHDR.size, 2, 0, 0, 0)
         PHDR.pack_into(blob, 64, 1, 5, 4096, 0x400000, 0, 4, 4096, 4096)

@@ -1,0 +1,39 @@
+name: Game host envelope (Linux-only)
+on:
+  pull_request:
+    paths:
+      - 'tools/game-host-envelope/**'
+      - '.github/workflows/game-host-envelope.yml'
+  push:
+    paths:
+      - 'tools/game-host-envelope/**'
+      - '.github/workflows/game-host-envelope.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python source compiles
+        run: python3 -m py_compile tools/game-host-envelope/run.py tools/game-host-envelope/test_run.py
+      - name: Resource envelope unit tests
+        run: python3 -m unittest discover -s tools/game-host-envelope -p 'test_*.py' -v
+      - name: Command line smoke (use an allowed runner CPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(python3 -c 'import os;print(min(os.sched_getaffinity(0)))')"
+          python3 tools/game-host-envelope/run.py --memory-mib 256 --seconds 5 --cpu "$cpu" -- /bin/true > output.json
+          python3 - <<'PY'
+          import json
+          result = json.load(open("output.json", encoding="utf-8"))
+          assert result["exit_code"] == 0, result
+          assert result["timed_out"] is False, result
+          assert result["memory_limit_mib"] == 256, result
+          print(result)
+          PY

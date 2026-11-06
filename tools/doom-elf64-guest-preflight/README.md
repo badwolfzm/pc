@@ -16,3 +16,7 @@ Page-rounded loaded image footprint is only a conservative *static load-page est
 The CLI returns exit 0 for accepted preflight and exit 1 for rejected/missing files, with machine-readable JSON. No subprocess, WAD, network, kernel, process execution or Linux personality/syscall access. It is **not a security verifier**, authorization decision, or a substitute for independently reviewed loader security. It must not be wired into the privileged runtime without kernel-owner review.
 
 Task #192; parent Doom milestone #95. Paths owned: `tools/doom-elf64-guest-preflight/**`; no existing kernel/CRT/graphics code changed. Review and exact-head CI required before merging. Albion Online additionally requires legitimate Linux libraries, loader, GPU, audio, networking and title compatibility and may not fit this budget.
+
+## Related existing preflight (avoid duplication)
+
+Draft PR #101 (`tools/doom-elf-budget/**`) already checks placement inside the observed fixed 2 MiB Warden G0 loader window, with explicit stack and framebuffer reserves. This PR is **not a replacement**: it performs separate checks for a proposed final generic x86-64 ET_EXEC and a configurable 512 MiB whole-guest envelope. It now also runs an actual tiny freestanding linked executable in CI. A real Doom native guest must pass **both the exact current Warden loader placement gate and the whole-guest measured-memory gate**. The lead should consolidate any overlapping checks rather than retain redundant preflight implementations indefinitely.

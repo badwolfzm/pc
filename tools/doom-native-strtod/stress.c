@@ -7,7 +7,7 @@
 extern double warden_strtod(const char*,char**);
 int main(void){
     uint64_t state=0x1234567890abcdefULL;
-    int diff=0, n=100000;
+    int diff=0, n=1000000;
     for(int i=0;i<n;++i){
         char b[120]; int at=0;
         state=state*6364136223846793005ULL+1;
@@ -33,5 +33,5 @@ int main(void){
     }
     fprintf(stderr,"stressed %d long decimal, %d binary precision mismatches\n",n,diff);
     /* A successful diagnostic process does not mean a conforming parser. */
-    return 0;
+    return diff != 0;
 }

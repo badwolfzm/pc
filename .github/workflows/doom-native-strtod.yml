@@ -18,9 +18,11 @@ jobs:
           cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all -Dstrtod=warden_strtod -c tools/doom-native-strtod/strtod.c -o /tmp/warden-strtod-host.o
           cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_strtod.c -lm -o /tmp/test-strtod
           LC_ALL=C /tmp/test-strtod
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/test_rounding.c -lm -o /tmp/test-strtod-rounding
+          LC_ALL=C /tmp/test-strtod-rounding
           cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all /tmp/warden-strtod-host.o tools/doom-native-strtod/stress.c -lm -o /tmp/stress-strtod
           LC_ALL=C /tmp/stress-strtod 2>&1 | tee /tmp/warden-strtod-precision-diagnostic.log
-          echo '::warning::Experimental strtod is not correctly rounded and must not be integrated as a Warden libc provider.'
+          echo '::warning::Exact bounded decimal rounding is tested, but fallback, errno, locales, hex, fenv and length limits are NOT production libc.'
           python3 -m unittest discover -s tools/doom-native-strtod -p test_verify.py -v
       - name: Compile freestanding provider and inspect required guest-runtime import
         run: |

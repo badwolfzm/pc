@@ -1,6 +1,8 @@
-/* Bounded C-locale decimal/hex conversion prototype; not correctly rounded.
- * Proof-of-link only. NEVER integrate into a production libc without a
- * standards-conformance and independent math review.
+/* Bounded C-locale decimal/hex conversion diagnostic. The <=3000 digit
+ * decimal path uses exact integer comparisons for round-to-nearest-even;
+ * large inputs and hex use the known-imprecise fallback. This is not a
+ * conforming libc: locale, rounding modes, errno and length limits remain.
+ * NEVER integrate without an independent math and ABI review.
  *
  * No host I/O, allocation, locale, or process calls. Thread-local errno is
  * deliberately left as an unresolved requirement for the guest runtime.
@@ -90,6 +92,8 @@ static long double scale2(long double x, long exponent) {
     return x;
 }
 
+#include "exact_decimal.h"
+
 double strtod(const char *restrict nptr, char **restrict endptr) {
     const char *p = nptr;
     while (space((unsigned char)*p)) ++p;
@@ -118,6 +122,7 @@ double strtod(const char *restrict nptr, char **restrict endptr) {
         double val = __builtin_nan("");
         return negative ? -val : val;
     }
+    const char *number_start = p;
     int is_hex = p[0] == '0' && (p[1] == 'x' || p[1] == 'X') &&
         (hex((unsigned char)p[2]) >= 0 || (p[2] == '.' && hex((unsigned char)p[3]) >= 0));
     if (is_hex) p += 2;
@@ -149,6 +154,7 @@ double strtod(const char *restrict nptr, char **restrict endptr) {
         if (endptr) *endptr = (char *)nptr;
         return 0.0;
     }
+    const char *number_end = p;
     if ((!is_hex && (*p == 'e' || *p == 'E')) || (is_hex && (*p == 'p' || *p == 'P'))) {
         const char *q = p + 1;
         long e = parse_exp(&q);
@@ -156,6 +162,14 @@ double strtod(const char *restrict nptr, char **restrict endptr) {
     }
     if (endptr) *endptr = (char *)p;
     if (!significand) return negative ? -0.0 : 0.0;
+    if (!is_hex) {
+        double exact;
+        if (wb_exact_decimal(number_start, number_end, p, &exact)) {
+            if (exact == __builtin_inf() || exact == 0.0 ||
+                (exact > 0.0 && exact < DBL_MIN)) errno = ERANGE;
+            return negative ? -exact : exact;
+        }
+    }
     if (!is_hex && first_dropped >= 5) ++significand;
     long double ld = (long double)significand;
     ld = is_hex ? scale2(ld, exponent) : scale10(ld, exponent);

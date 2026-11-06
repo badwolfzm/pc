@@ -28,4 +28,44 @@ class SimTest(unittest.TestCase):
             for bad in ('page,op\n-1,R\n','page,op\n1,X\n','page,op\n','bad,op\n1,R\n','page,op\n0xZZ,R\n'):
                 p.write_text(bad,encoding='utf-8')
                 with self.assertRaises(ValueError): parse_trace(p)
+
+    def test_opt_matches_independent_exhaustive_oracle(self):
+        # Independent dynamic-programming proof on small traces. No reliance
+        # on the production lookahead heap or its replacement choices.
+        import itertools
+        from functools import lru_cache
+        @lru_cache(None)
+        def oracle(seq, cap, at, resident):
+            if at == len(seq):
+                return 0
+            page = seq[at]
+            if page in resident:
+                return oracle(seq, cap, at+1, resident)
+            if len(resident) < cap:
+                return 1 + oracle(seq, cap, at+1, tuple(sorted((*resident, page))))
+            return 1 + min(
+                oracle(seq, cap, at+1, tuple(sorted((set(resident)-{old}) | {page})))
+                for old in resident
+            )
+        for cap in (1,2,3):
+            for n in range(1,7):
+                for seq in itertools.product(range(3), repeat=n):
+                    oracle.cache_clear()
+                    expected=oracle(seq,cap,0,())
+                    rows=[(page,False) for page in seq]
+                    actual=simulate(rows,cap,'opt',1,1)['faults']
+                    self.assertEqual(actual,expected,(seq,cap))
+                    self.assertLessEqual(actual,simulate(rows,cap,'lru',1,1)['faults'])
+                    self.assertLessEqual(actual,simulate(rows,cap,'fifo',1,1)['faults'])
+    def test_invalid_policy_and_cost_are_rejected(self):
+        rows=[(1,False)]
+        for policy in ('unknown',''):
+            with self.assertRaises(ValueError):
+                simulate(rows,1,policy,1,1)
+        with self.assertRaises(ValueError):
+            simulate(rows,1,'lru',-1,1)
+        with self.assertRaises(ValueError):
+            simulate(rows,1,'lru',1,-1)
+        with self.assertRaises(ValueError):
+            simulate(rows,0,'lru',1,1)
 if __name__=='__main__':unittest.main()

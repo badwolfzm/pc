@@ -170,6 +170,22 @@ static void stream_release(int si) {
     s->used = 0;
 }
 static void fd_close(struct client *c, struct fd *f) {
+    /* Epoll watches in this personality are descriptor-number based, not
+     * open-file-description based. Purge them before fd_alloc can reuse a
+     * closed slot; otherwise a new, unrelated object inherits the old
+     * watch's events and user data. The table is deliberately bounded. */
+    int closed_fd = (int)(f - c->fds);
+    for (int i = 0; i < NFD; i++) {
+        if (i == closed_fd || c->fds[i].type != FD_EPOLL)
+            continue;
+        struct epoll *e = &epolls[c->fds[i].idx];
+        int dst = 0;
+        for (int src = 0; src < e->n; src++) {
+            if (e->items[src].fd != closed_fd)
+                e->items[dst++] = e->items[src];
+        }
+        e->n = dst;
+    }
     switch (f->type) {
     case FD_FILE:
         ofiles[f->idx].used = 0;

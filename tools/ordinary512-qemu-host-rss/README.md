@@ -37,3 +37,5 @@ The updated PR #165 workflow runs the existing native Warden Pong test **twice**
 ## Attribution of host overhead and page faults
 
 Each native QEMU run now records Linux `/proc/<pid>/stat` **host** minor/major page-fault deltas and CPU tick deltas, with process identity verified by `(pid, starttime)` to reject PID reuse. `qemu_observed_span_seconds` measures the sampled QEMU process interval, while `launcher_elapsed_seconds_including_build` also includes the Warden Rust compilation and shell setup. Neither is interchangeable with in-guest frame times. These are observed host process counters, not guest page-fault traces or whole-guest physical frame accounting.
+
+The canonical two-boot `compare.py` now requires validated, finite/nonnegative host CPU-tick and minor/major page-fault deltas and durations for *both* runs, rejects an observed QEMU span longer than its build-inclusive launcher time, and exposes the per-run metrics in the machine-readable comparison. All such counters still come from **Linux `/proc` outside Warden**, not guest memory fault telemetry.

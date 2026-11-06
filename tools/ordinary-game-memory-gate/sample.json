@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source": "warden_guest_physical",
+  "complete": true,
+  "vcpu_count": 1,
+  "guest_physical_capacity_bytes": 536870912,
+  "host_peak_rss_bytes": 900000000,
+  "peak_total_bytes": 8657200,
+  "samples": [
+    {
+      "time_ms": 0,
+      "components": {
+        "kernel": 3000000,
+        "runtime": 2000000,
+        "game": 1000000,
+        "framebuffer": 307200,
+        "paging": 200000,
+        "graphics": 100000,
+        "other": 50000
+      },
+      "total_bytes": 6657200
+    },
+    {
+      "time_ms": 16,
+      "components": {
+        "kernel": 3000000,
+        "runtime": 2000000,
+        "game": 2000000,
+        "framebuffer": 307200,
+        "paging": 200000,
+        "graphics": 100000,
+        "other": 50000
+      },
+      "total_bytes": 7657200
+    }
+  ],
+  "peak_method": "physical_frame_event_high_water"
+}

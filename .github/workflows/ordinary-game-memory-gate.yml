@@ -1,0 +1,38 @@
+name: Ordinary PC 512 MiB memory evidence gate
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary-game-memory-gate/**'
+      - '.github/workflows/ordinary-game-memory-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python schema unit tests
+        run: |
+          python3 -m unittest discover -s tools/ordinary-game-memory-gate -p 'test_*.py' -v
+      - name: Accepted synthetic fixture
+        run: |
+          python3 tools/ordinary-game-memory-gate/check.py tools/ordinary-game-memory-gate/sample.json
+      - name: Verify synthetic physical-frame event trace
+        run: |
+          python3 tools/ordinary-game-memory-gate/frame_events.py tools/ordinary-game-memory-gate/sample-frame-events.json
+      - name: Reject tampered and incomplete report
+        run: |
+          python3 - <<'PY'
+          import json
+          p = "tools/ordinary-game-memory-gate/sample.json"
+          d = json.load(open(p, encoding="utf-8"))
+          d["complete"] = False
+          with open("/tmp/invalid-512mb.json", "w", encoding="utf-8") as f:
+              json.dump(d, f)
+          PY
+          if python3 tools/ordinary-game-memory-gate/check.py /tmp/invalid-512mb.json; then
+            echo "invalid evidence was accepted" >&2
+            exit 1
+          fi

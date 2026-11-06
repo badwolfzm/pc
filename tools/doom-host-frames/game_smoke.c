@@ -12,6 +12,7 @@
 
 static jmp_buf completed;
 static unsigned int frame_count;
+static unsigned int key_press_sent, key_release_sent;
 static uint64_t ticks;
 static uint64_t first_hash, last_hash;
 static uint8_t *wad;
@@ -36,7 +37,19 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
     switch (num) {
     case 60: return (uint64_t)320 | ((uint64_t)240 << 16);
     case 63: return ++ticks; /* monotonic 10ms clock, synthetic host-time */
-    case 62: return 0;       /* no input events */
+    case 62:
+        /* PS/2 set-1 up-arrow press, then release. The actual Warden
+         * DG_GetKey callback decodes these into Doom key semantics.
+         */
+        if (frame_count >= 2 && !key_press_sent) {
+            key_press_sent = 1;
+            return 0x48;
+        }
+        if (frame_count >= 6 && !key_release_sent) {
+            key_release_sent = 1;
+            return 0xc8;
+        }
+        return 0;
     case 5: return 0;        /* yield */
     case 6:
         fprintf(stderr, "WARDEN ADAPTER EXIT code %llu\n", (unsigned long long)a);
@@ -48,7 +61,7 @@ uint64_t warden_doom_test_sys3(uint64_t num, uint64_t a, uint64_t b, uint64_t c)
         if (frame_count == 0) first_hash = hash;
         last_hash = hash;
         ++frame_count;
-        if (frame_count >= 3) longjmp(completed, 1);
+        if (frame_count >= 10) longjmp(completed, 1);
         return 0;
     }
     default:
@@ -81,12 +94,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "frame deadline exhausted: %u frames\n", frame_count);
         return 1;
     }
-    if (jumped != 1 || frame_count < 3) {
-        fprintf(stderr, "guest adapter error or no real frames: %u\n", frame_count);
+    if (jumped != 1 || frame_count < 10 || !key_press_sent || !key_release_sent || first_hash == last_hash) {
+        fprintf(stderr, "frame/input/hash gate failed: frames=%u down=%u up=%u\n", frame_count, key_press_sent, key_release_sent);
         return 1;
     }
-    printf("PASS real upstream Doom engine frames=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
-           frame_count, (unsigned long long)first_hash, (unsigned long long)last_hash);
+    printf("PASS real upstream Doom engine frames=%u keyboard_down=%u keyboard_up=%u first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
+           frame_count, key_press_sent, key_release_sent, (unsigned long long)first_hash, (unsigned long long)last_hash);
     warden_doom_wad_revoke();
     free(wad);
     return 0;

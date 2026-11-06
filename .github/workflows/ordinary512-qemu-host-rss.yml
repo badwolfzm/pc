@@ -22,12 +22,25 @@ jobs:
         run: python3 -m unittest discover -s tools/ordinary512-qemu-host-rss -p 'test_*.py' -v
       - name: Configure one-vCPU 512 MiB native Warden guest
         run: python3 tools/ordinary512-native-qemu/prepare.py tests/kernel/pong.sh --manifest target/native512-profile.json
-      - name: Run real Warden Pong and sample QEMU host RSS
+      - name: Run native Warden Pong twice and measure QEMU HOST RSS on each boot
         run: |
-          timeout 240 python3 tools/ordinary512-qemu-host-rss/measure.py --manifest target/native512-profile.json --log target/native512-host-rss-serial.log --report target/native512-host-rss.json
-          python3 tests/game/check_pong_guest.py target/native512-host-rss-serial.log
-          python3 tools/ordinary512-native-qemu/evidence.py target/native512-host-rss-serial.log target/native512-profile.json target/native512-guest-evidence.json
-          python3 -c 'import json; x=json.load(open("target/native512-host-rss.json")); assert x["samples"] >= 2 and x["qemu_host_peak_sampled_rss_bytes"] > 0 and x["child_exit_code"] == 0'
+          set -euo pipefail
+          for run in 1 2; do
+            timeout 240 python3 tools/ordinary512-qemu-host-rss/measure.py \
+              --manifest target/native512-profile.json \
+              --log "target/native512-host-rss-serial-${run}.log" \
+              --report "target/native512-host-rss-${run}.json"
+            python3 tests/game/check_pong_guest.py "target/native512-host-rss-serial-${run}.log"
+            python3 tools/ordinary512-native-qemu/evidence.py \
+              "target/native512-host-rss-serial-${run}.log" target/native512-profile.json \
+              "target/native512-guest-evidence-${run}.json"
+          done
+          python3 tools/ordinary512-qemu-host-rss/compare.py \
+            target/native512-host-rss-1.json target/native512-host-rss-2.json \
+            --output target/native512-host-rss-two-boot.json
+          python3 tools/ordinary512-native-qemu/compare.py \
+            target/native512-guest-evidence-1.json target/native512-guest-evidence-2.json \
+            target/native512-guest-two-boot.json
       - name: Preserve real host and guest evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -35,8 +48,10 @@ jobs:
           name: native-warden-qemu-host-rss
           path: |
             target/native512-profile.json
-            target/native512-host-rss-serial.log
-            target/native512-host-rss.json
-            target/native512-guest-evidence.json
+            target/native512-host-rss-serial-*.log
+            target/native512-host-rss-?.json
+            target/native512-host-rss-two-boot.json
+            target/native512-guest-evidence-?.json
+            target/native512-guest-two-boot.json
             target/qemu-rss-screen.ppm
           if-no-files-found: ignore

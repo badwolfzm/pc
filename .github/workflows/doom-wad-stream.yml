@@ -1,0 +1,24 @@
+name: Doom WAD bounded stream reference
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-wad-stream/**'
+      - '.github/workflows/doom-wad-stream.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  stream-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bounded stream tests
+        run: make -C tools/doom-wad-stream test
+      - name: Freestanding object
+        run: make -C tools/doom-wad-stream freestanding
+      - name: Undefined-behavior sanitizer tests
+        run: |
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic -fsanitize=undefined \
+            tools/doom-wad-stream/wad_stream.c tools/doom-wad-stream/test.c -o /tmp/doom-wad-ubsan
+          /tmp/doom-wad-ubsan

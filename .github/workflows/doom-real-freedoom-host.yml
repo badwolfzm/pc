@@ -1,0 +1,40 @@
+name: Real pinned Doom gameplay startup with free Freedoom data (host)
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-real-freedoom-host/**'
+      - '.github/workflows/doom-real-freedoom-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  game-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned genuine upstream engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/pinned-doomgeneric
+          git -C /tmp/pinned-doomgeneric checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/pinned-doomgeneric rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Fetch publicly released free Freedoom WAD, no commercial assets
+        run: |
+          curl --fail --location --retry 3 --max-time 90 \
+            https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip \
+            -o /tmp/freedoom.zip
+          python3 - <<'PY'
+          import hashlib,pathlib,zipfile
+          z=zipfile.ZipFile("/tmp/freedoom.zip")
+          options=[x for x in z.infolist() if x.filename.endswith("/freedoom1.wad") and not x.is_dir()]
+          if len(options)!=1 or options[0].file_size>67108864:raise SystemExit("missing or oversized Freedoom phase-1 WAD")
+          p=pathlib.Path("/tmp/freedoom1.wad")
+          with z.open(options[0]) as src,p.open("wb") as dst:
+              while True:
+                  b=src.read(1024*1024)
+                  if not b:break
+                  dst.write(b)
+          print("Freedoom IWAD bytes",p.stat().st_size,"sha256",hashlib.sha256(p.read_bytes()).hexdigest())
+          PY
+      - name: Actually initialize and tick real Doom with Freedoom game data
+        run: bash tools/doom-real-freedoom-host/run.sh /tmp/pinned-doomgeneric/doomgeneric /tmp/freedoom1.wad

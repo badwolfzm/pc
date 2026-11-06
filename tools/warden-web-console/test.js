@@ -40,6 +40,16 @@ function upgrade(token,origin=ORIGIN){
   setTimeout(()=>reject(Error('upgrade timeout')),3000).unref();
  });
 }
+function maskedText(obj){
+ const payload=Buffer.from(JSON.stringify(obj));
+ const mask=crypto.randomBytes(4);
+ const head=payload.length<126?Buffer.from([0x81,0x80|payload.length])
+   :Buffer.from([0x81,0xfe,payload.length>>8,payload.length&255]);
+ const data=Buffer.from(payload);
+ for(let i=0;i<data.length;i++)data[i]^=mask[i%4];
+ return Buffer.concat([head,mask,data]);
+}
+const pause=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
 (async()=>{
  try{
   const home=await untilReady();assert.equal(home.code,200);
@@ -58,13 +68,22 @@ function upgrade(token,origin=ORIGIN){
   assert.equal((await req('POST','/api/frame',image,{'Content-Length':image.length,'X-Warden-Ingest-Token':INGEST})).code,200);
   const ws=await upgrade(token);assert.match(ws.response,/101 Switching Protocols/);
   assert.match(ws.response,/Sec-WebSocket-Protocol: warden.v1/);
+  ws.sock.write(maskedText({kind:'key',code:'ArrowUp',down:true}));
+  await pause(40);
+  const accepted=await req('GET','/api/input',null,{'X-Warden-Ingest-Token':INGEST});
+  assert.equal(accepted.code,200);
+  assert.deepEqual(JSON.parse(accepted.body.toString()).events,[{kind:'key',code:'ArrowUp',down:true}]);
+  ws.sock.write(maskedText({kind:'key',code:'UnknownOSCommand',down:true}));
+  await pause(40);
+  const rejected=await req('GET','/api/input',null,{'X-Warden-Ingest-Token':INGEST});
+  assert.deepEqual(JSON.parse(rejected.body.toString()).events,[]);
   ws.sock.destroy();
   const replay=await upgrade(token);assert.match(replay.response,/403 Forbidden/);replay.sock.destroy();
   const invalid=await upgrade('0'.repeat(64),'https://attacker.invalid');
   assert.match(invalid.response,/403 Forbidden/);invalid.sock.destroy();
   const input=await req('GET','/api/input',null,{'X-Warden-Ingest-Token':INGEST});
   assert.equal(input.code,200);assert.deepEqual(JSON.parse(input.body.toString()).events,[]);
-  console.log('PASS: login/origin, token one-use, framebuffer size, ingest auth, WebSocket upgrade and input polling');
+  console.log('PASS: login/origin, token one-use, framebuffer size, ingest auth, WebSocket upgrade, masked key input filtering and polling');
  }catch(e){console.error('FAIL:',e);process.exitCode=1;}
  finally{server.kill('SIGTERM');}
 })();

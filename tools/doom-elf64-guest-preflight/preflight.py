@@ -8,7 +8,7 @@ import sys
 
 EHDR = struct.Struct("<16sHHIQQQIHHHHHH")
 PHDR = struct.Struct("<IIQQQQQQ")
-PT_LOAD, PT_DYNAMIC, PT_INTERP, PT_GNU_STACK = 1, 2, 3, 0x6474e551
+PT_LOAD, PT_DYNAMIC, PT_INTERP, PT_TLS, PT_GNU_STACK = 1, 2, 3, 7, 0x6474e551
 PF_X, PF_W = 1, 2
 MAX_INPUT = 64 * 1024 * 1024
 MAX_PH = 128
@@ -52,6 +52,8 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
         typ, pflags, offset, vaddr, paddr, filesz, memsz, align = PHDR.unpack_from(data, phoff + i * phentsize)
         if typ in (PT_INTERP, PT_DYNAMIC):
             raise InvalidELF("interpreter/dynamic loading not supported by this profile")
+        if typ == PT_TLS:
+            raise InvalidELF("ELF thread-local storage is unsupported in this single-thread freestanding profile")
         if typ == PT_GNU_STACK and (pflags & PF_X):
             raise InvalidELF("executable stack requested")
         if typ != PT_LOAD:

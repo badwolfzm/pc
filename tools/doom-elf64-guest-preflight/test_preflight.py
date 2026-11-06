@@ -111,6 +111,20 @@ class PreflightTests(unittest.TestCase):
         self.bad(elf(filesz=0x3000)[:0x2000])
     def test_no_interp(self):
         self.bad(elf(ph_type=3))
+    def test_no_elf_tls_program_header(self):
+        # PT_TLS may require a thread pointer and initialized TLS image,
+        # neither supplied by the current narrow freestanding Doom profile.
+        self.bad(elf(second=(7, 4, 0x1000, 0x600000, 0x600000, 4, 16, 1)))
+
+    def test_no_zero_length_tls_header(self):
+        # A formally empty TLS header must not accidentally bypass the gate.
+        self.bad(elf(second=(7, 4, 0, 0, 0, 0, 0, 1)))
+
+    def test_unknown_nonload_header_does_not_trigger_tls_gate(self):
+        # PT_NOTE is allowed by the narrow preflight and isn't PT_TLS.
+        report = self.ok(elf(second=(4, 4, 0, 0, 0, 0, 0, 1)))
+        self.assertEqual(report["load_segments"], 1)
+
     def test_no_dynamic_segment(self):
         self.bad(elf(ph_type=2))
     def test_executable_stack_rejected(self):

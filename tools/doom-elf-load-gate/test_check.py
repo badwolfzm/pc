@@ -39,5 +39,35 @@ class ElfGateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             inspect(elf(), stack_bytes=513*MIB)
 
+    def test_page_accounting_unaligned_start(self):
+        # A PT_LOAD that starts one byte into a page and spans 4096 bytes
+        # occupies TWO pages, not one.
+        blob = elf(memsz=4096, entry=0x400001, va=0x400001, off=4097,
+                   align=1)
+        result = inspect(blob)
+        self.assertEqual(result['segment_pages_bytes'], 8192)
+        with self.assertRaises(ValueError):
+            inspect(blob, guest_bytes=8192, stack_bytes=4096)
+
+    def test_disjoint_byte_extents_share_page(self):
+        # Page-sharing is prohibited even when segment bytes do not overlap.
+        blob = bytearray(8196)
+        ident = b'\\x7fELF' + bytes([2, 1, 1]) + bytes(9)
+        HEADER.pack_into(blob, 0, ident, 2, 62, 1, 0x400000, 64, 0, 0,
+                         HEADER.size, PHDR.size, 2, 0, 0, 0)
+        PHDR.pack_into(blob, 64, 1, 5, 4096, 0x400000, 0, 4, 2048, 4096)
+        PHDR.pack_into(blob, 64 + PHDR.size, 1, 6, 8192, 0x400800, 0, 4, 2048, 1)
+        with self.assertRaisesRegex(ValueError, 'share a virtual page'):
+            inspect(bytes(blob))
+
+    def test_page_aligned_disjoint_segments(self):
+        blob = bytearray(8196)
+        ident = b'\\x7fELF' + bytes([2, 1, 1]) + bytes(9)
+        HEADER.pack_into(blob, 0, ident, 2, 62, 1, 0x400000, 64, 0, 0,
+                         HEADER.size, PHDR.size, 2, 0, 0, 0)
+        PHDR.pack_into(blob, 64, 1, 5, 4096, 0x400000, 0, 4, 4096, 4096)
+        PHDR.pack_into(blob, 64 + PHDR.size, 1, 6, 8192, 0x401000, 0, 4, 4096, 4096)
+        self.assertEqual(inspect(bytes(blob))['segment_pages_bytes'], 8192)
+
 if __name__ == '__main__':
     unittest.main()

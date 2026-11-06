@@ -26,6 +26,12 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = cd6e6fbc4b69320acc8cef5ca6ed5425d5de8909
           mkdir -p target/doom-entry-file-link-join
           git show cd6e6fbc4b69320acc8cef5ca6ed5425d5de8909:tools/doom-readonly-file-crt/file.c > target/doom-entry-file-link-join/file.c
+      - name: Stage exact reviewed-capacity candidate PR 276 without merging it
+        run: |
+          git fetch --no-tags origin e1d8eab9d2bfdf066d60e12cc6959edbcff434e4
+          test "$(git rev-parse FETCH_HEAD)" = e1d8eab9d2bfdf066d60e12cc6959edbcff434e4
+          git show e1d8eab9d2bfdf066d60e12cc6959edbcff434e4:tools/doom-native-runtime-bundle/compose.py > tools/doom-native-runtime-bundle/compose.py
+          python3 -m unittest discover -s tools/doom-native-runtime-bundle -p 'test_*.py' -v
       - name: Build genuine original Doom and all merged native runtime providers
         run: |
           python3 tools/doom-native-runtime-bundle/compose.py \

@@ -63,15 +63,40 @@ fn main() {
     let before = fragmented.used;
     let failed = fragmented.alloc_contiguous(2);
     let leak = failed.is_none() && fragmented.used != before;
-    // This scenario must never accidentally return a noncontiguous range.
-    if failed.is_some() { panic!("non-contiguous allocation unexpectedly returned success"); }
-    println!("{{\"source\":\"actual FrameAlloc from mm.rs\",\"normal_contiguous_ok\":true,\"zero_count_has_side_effect\":{},\"noncontiguous_failure_leaks_used\":{},\"before_used\":{},\"after_used\":{},\"zero_after_used\":{}}}",
-        zero_side_effect, leak, before, fragmented.used, zero.used);
+    // A repaired allocator may correctly choose a new contiguous bump range.
+    // Its successful request must account for exactly two newly owned frames.
+    if let Some(start) = failed {
+        assert_eq!(fragmented.used, before + 2);
+        assert_eq!(start % 4096, 0);
+    }
+    // The reserved boot-module region may bisect the would-be run.
+    let mut reserved = backing.fa();
+    let base = backing.ptr as u64;
+    reserved.reserve(base + 2 * PAGE, base + 4 * PAGE);
+    let reserve_before = reserved.used;
+    let reserve_result = reserved.alloc_contiguous(3);
+    let reserve_leak = reserve_result.is_none() && reserved.used != reserve_before;
+    if let Some(start) = reserve_result {
+        assert!(start >= base + 4 * PAGE);
+        assert_eq!(reserved.used, reserve_before + 3);
+    }
+
+    let mut exhausted = backing.fa();
+    let exhaustion_before = exhausted.used;
+    let exhaustion_result = exhausted.alloc_contiguous(9);
+    let exhaustion_leak = exhaustion_result.is_none() && exhausted.used != exhaustion_before;
+    assert!(exhaustion_result.is_none());
+
+    println!("{{\"source\":\"actual FrameAlloc from mm.rs\",\"normal_contiguous_ok\":true,\"zero_count_has_side_effect\":{},\"noncontiguous_failure_leaks_used\":{},\"reserved_overlap_failure_leaks_used\":{},\"exhaustion_failure_leaks_used\":{},\"before_used\":{},\"after_used\":{},\"zero_after_used\":{}}}",
+        zero_side_effect, leak, reserve_leak, exhaustion_leak, before, fragmented.used, zero.used);
 }
 """
 
-def run(strict=False):
+def run(strict=False, proposed_fix=False):
     fragment = extract_mm(MM.read_text())
+    if proposed_fix:
+        from proposed_fix import apply
+        fragment = apply(fragment)
     with tempfile.TemporaryDirectory(prefix="warden-mm-audit-") as d:
         rust_file = Path(d) / "probe.rs"
         executable = Path(d) / "probe"
@@ -90,17 +115,22 @@ def run(strict=False):
         raise RuntimeError("wrong probe output")
     report["scope"] = "Linux host extracted-source reproduction only; NOT a native Warden/QEMU test"
     report["issue"] = 160
+    report["implementation"] = "proposed_unmerged_patch" if proposed_fix else "repository_baseline"
     print(json.dumps(report, sort_keys=True))
     return 1 if strict and (report["zero_count_has_side_effect"] or
-                            report["noncontiguous_failure_leaks_used"]) else 0
+                            report["noncontiguous_failure_leaks_used"] or
+                            report["reserved_overlap_failure_leaks_used"] or
+                            report["exhaustion_failure_leaks_used"]) else 0
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strict", action="store_true",
                         help="return failure if allocator defects persist (use after kernel fix)")
+    parser.add_argument("--proposed-fix", action="store_true",
+                        help="compile proposed safe bump-run implementation instead of the unmodified source")
     args = parser.parse_args()
     try:
-        return run(args.strict)
+        return run(args.strict, args.proposed_fix)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as err:
         print(json.dumps({"status": "ERROR", "reason": str(err)}))
         return 2

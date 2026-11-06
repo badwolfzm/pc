@@ -3,10 +3,12 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 
 CAP = 512 * 1024 * 1024
 COMPONENTS = ("kernel", "runtime", "game", "framebuffer", "paging", "graphics", "other")
 MAX_SAMPLES = 100_000
+MAX_JSON_BYTES = 4 * 1024 * 1024
 
 
 class EvidenceError(ValueError):
@@ -70,15 +72,35 @@ def validate(report):
             "samples": len(samples), "note": "self-reported evidence only; not independently measured or enforced"}
 
 
+def unique_object(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise EvidenceError(f"duplicate JSON key: {key}")
+        out[key] = value
+    return out
+
+
+def load_bounded(path):
+    source = Path(path)
+    if source.stat().st_size > MAX_JSON_BYTES:
+        raise EvidenceError("report exceeds 4 MiB input limit")
+    with source.open("rb") as stream:
+        payload = stream.read(MAX_JSON_BYTES + 1)
+    if len(payload) > MAX_JSON_BYTES:
+        raise EvidenceError("report exceeds 4 MiB input limit")
+    return json.loads(payload, object_pairs_hook=unique_object,
+                      parse_constant=lambda value: (_ for _ in ()).throw(EvidenceError(value)))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", help="JSON evidence file")
     args = parser.parse_args(argv)
     try:
-        with open(args.report, encoding="utf-8") as f:
-            report = json.load(f, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+        report = load_bounded(args.report)
         result = validate(report)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, TypeError, UnicodeError) as exc:
         print(json.dumps({"accepted": False, "reason": str(exc)}, sort_keys=True))
         return 1
     print(json.dumps(result, sort_keys=True))

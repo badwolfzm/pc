@@ -131,3 +131,23 @@ It does not independently measure or authenticate the kernel's boot memory
 reservations; omitting a reserved frame can still underreport memory.
 Until native Warden producer ownership (#153) establishes complete provenance,
 neither v1 nor v2 can support verified whole-guest RAM claims.
+
+## Boot identity and contiguous event sequence (schema v3)
+
+The latest frame-event schema v3 adds a `boot_id` (64 lowercase hex
+characters) and requires every event to carry a consecutive `sequence`
+integer starting at zero. A missing, duplicated, or reordered sequence
+number fails closed. The companion memory-snapshot schema v2 also contains
+`boot_id`, and `reconcile.py` requires that the two report values match.
+Legacy event schema v1/v2 continues to work with snapshot schema v1.
+
+A v3 frame trace declares `capture_start_ns`, `initial_frames` (which
+can be empty), and `capture_started_empty=false`; it accounts for both
+already-reserved physical frames and later allocation/free events.
+
+**Trust boundary:** A malicious or malfunctioning producer may fabricate
+matching identifiers, renumber a truncated trace, or omit initial reservations.
+Therefore sequence continuity and a matching boot ID improve internal
+consistency but are NOT proof of authentic guest provenance, complete memory
+accounting, a 512 MiB resident peak, or actual game execution. A reviewed
+native producer and independent boot-run provenance remain required (#153).

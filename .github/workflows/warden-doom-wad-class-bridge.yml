@@ -1,0 +1,26 @@
+name: Doom WAD class bridge host and freestanding checks
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-wad-class-bridge/**'
+      - 'tools/doom-wad-stream/**'
+      - '.github/workflows/warden-doom-wad-class-bridge.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host callback tests and freestanding object build
+        run: make -C tools/doom-wad-class-bridge test freestanding
+      - name: Undefined behavior sanitizer tests
+        run: |
+          cd tools/doom-wad-class-bridge
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=undefined \
+            -Itest -I../doom-wad-stream -I. \
+            doom_wad_bridge.c ../doom-wad-stream/wad_stream.c test/test_bridge.c \
+            -o test-ubsan
+          ./test-ubsan

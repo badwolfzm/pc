@@ -1,0 +1,43 @@
+name: Compose 16 genuine Doom native CRT imports in one ET_REL link
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-native-runtime-bundle/**'
+      - '.github/workflows/doom-native-runtime-bundle.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify strict symbol/overlap tests
+        run: python3 -m unittest discover -s tools/doom-native-runtime-bundle -p 'test_*.py' -v
+      - name: Fetch exact pinned upstream engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/warden-upstream-doom
+          git -C /tmp/warden-upstream-doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/warden-upstream-doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Stage exact pinned PR225 format implementation (not PR218)
+        run: |
+          git fetch -q origin refs/heads/agent/doom-native-bounded-format-20261106
+          test "$(git rev-parse FETCH_HEAD)" = "a3529e43aff95423d0f7c12d78e33ab9e55e3fda"
+          mkdir -p target/doom-runtime-bundle/staged
+          git show a3529e43aff95423d0f7c12d78e33ab9e55e3fda:tools/doom-native-format/doom_format.c > target/doom-runtime-bundle/staged/format.c
+      - name: Compile genuine Doom + all merged CRT providers and one pinned candidate
+        run: |
+          python3 tools/doom-native-runtime-bundle/compose.py \
+            --source /tmp/warden-upstream-doom/doomgeneric \
+            --format-source target/doom-runtime-bundle/staged/format.c \
+            --output target/doom-runtime-bundle/result
+      - name: Archive actual symbol and static size evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-native-runtime-bundle
+          path: |
+            target/doom-runtime-bundle/result/report.json
+            target/doom-runtime-bundle/result/et-rel-sections.txt
+          if-no-files-found: ignore

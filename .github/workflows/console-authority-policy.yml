@@ -1,0 +1,21 @@
+name: Warden console authority reference and current-kernel blocker
+on:
+  pull_request:
+    paths:
+      - 'tools/console-authority-policy/**'
+      - '.github/workflows/console-authority-policy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run actual compiled Rust authority predicate tests
+        run: |
+          rustc --edition=2021 --test tools/console-authority-policy/policy.rs -o /tmp/console-policy-tests
+          /tmp/console-policy-tests
+      - name: Report current kernel integration state without claiming security
+        run: python3 tools/console-authority-policy/check_kernel.py

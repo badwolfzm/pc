@@ -2,7 +2,6 @@
 """Fail-closed validation of self-reported WHOLE-GUEST physical RAM samples."""
 import argparse
 import json
-import math
 import sys
 
 CAP = 512 * 1024 * 1024
@@ -29,7 +28,7 @@ def validate(report):
     require(set(report) == {
         "schema_version", "source", "complete", "vcpu_count",
         "guest_physical_capacity_bytes", "host_peak_rss_bytes",
-        "peak_total_bytes", "samples"
+        "peak_total_bytes", "peak_method", "samples"
     }, "required report fields must be present with no unknown fields")
     require(report["schema_version"] == 1 and type(report["schema_version"]) is int,
             "schema_version must equal 1")
@@ -41,6 +40,9 @@ def validate(report):
     require(capacity <= CAP, "configured guest physical capacity exceeds 512 MiB")
     integer(report["host_peak_rss_bytes"], "host peak RSS", 1)
     peak = integer(report["peak_total_bytes"], "peak total guest memory")
+    require(report["peak_method"] == "physical_frame_event_high_water",
+            "peak must come from continuous physical-frame allocation/free event accounting")
+    require(peak <= capacity, "event high-water exceeds guest physical capacity")
     samples = report["samples"]
     require(type(samples) is list and 2 <= len(samples) <= MAX_SAMPLES,
             "two or more bounded physical memory samples required")
@@ -60,9 +62,10 @@ def validate(report):
         require(used == total, "reported sample total != component sum")
         require(total <= capacity, "sampled physical memory exceeds configured capacity")
         observed_peak = max(observed_peak, total)
-    require(observed_peak == peak, "reported peak must equal the maximum observed sample")
+    require(observed_peak <= peak, "event high-water must be at least the largest observed sample")
     return {"accepted": True, "configured_mib": round(capacity / 1048576, 3),
-            "observed_peak_mib": round(peak / 1048576, 3),
+            "event_peak_mib": round(peak / 1048576, 3),
+            "sampled_peak_mib": round(observed_peak / 1048576, 3),
             "margin_mib": round((capacity - peak) / 1048576, 3),
             "samples": len(samples), "note": "self-reported evidence only; not independently measured or enforced"}
 

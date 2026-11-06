@@ -1,0 +1,32 @@
+name: Genuine Doom 13 merged providers and ELF section footprint
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-thirteen-link-memory/**'
+      - '.github/workflows/doom-thirteen-link-memory.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  genuine-native-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail-closed validators and ELF64 negative fixtures
+        run: python3 -m unittest discover -s tools/doom-thirteen-link-memory -p 'test_*.py' -v
+      - name: Fetch pinned genuine Doom source
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile actual engine and link all 13 merged runtime providers
+        run: |
+          python3 tools/doom-thirteen-link-memory/integrate.py --source /tmp/doom/doomgeneric --output target/doom-thirteen
+      - name: Preserve real combined linker and allocatable-section report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-13-symbol-static-memory
+          path: target/doom-thirteen/report.json
+          if-no-files-found: ignore

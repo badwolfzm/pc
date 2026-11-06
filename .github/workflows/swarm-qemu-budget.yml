@@ -1,0 +1,22 @@
+name: Swarm QEMU argument guard
+on:
+  pull_request:
+    paths:
+      - 'tools/swarm-qemu-budget/**'
+      - '.github/workflows/swarm-qemu-budget.yml'
+  push:
+    paths:
+      - 'tools/swarm-qemu-budget/**'
+      - '.github/workflows/swarm-qemu-budget.yml'
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run resource argument unit tests
+        run: python3 -m unittest discover -s tools/swarm-qemu-budget -p 'test_*.py' -v

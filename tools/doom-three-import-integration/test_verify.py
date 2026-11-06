@@ -67,7 +67,7 @@ class IntegrationContract(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "provider imports changed"):
                 m.verify(original, after, {**providers, "errno": bad_provider})
             masked = build("masked", "int system(const char*p){(void)p;return 0;}")
-            masked_link = base / "masked.o"
+            masked_link = base / "masked-link.o"
             subprocess.run(["ld", "-r", "-o", str(masked_link), str(after), str(masked)], check=True)
             with self.assertRaisesRegex(ValueError, "unexpected change"):
                 m.verify(original, masked_link, providers)

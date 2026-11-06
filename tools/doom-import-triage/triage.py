@@ -4,10 +4,21 @@ import argparse
 import json
 from pathlib import Path
 
-HOST = {"fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "fprintf",
-        "printf", "perror", "puts", "remove", "rename", "stat", "fstat",
-        "opendir", "readdir", "system", "popen", "execve", "fork",
-        "socket", "connect", "open", "close", "read", "write", "mmap"}
+# Classification is a review aid, NOT a grant of capabilities.
+# Host I/O requires explicit Warden mediation; memory-only formatting does not.
+HOST = {"fopen", "fopen64", "freopen", "fdopen", "fclose", "fread", "fwrite",
+        "fseek", "fseeko", "ftell", "ftello", "fflush", "fprintf", "vfprintf",
+        "printf", "vprintf", "perror", "puts", "fgets", "fputs", "fgetc",
+        "fputc", "getc", "putc", "getchar", "putchar", "remove", "rename",
+        "stat", "lstat", "fstat", "opendir", "readdir", "closedir",
+        "system", "popen", "pclose", "execve", "execl", "execvp", "fork",
+        "vfork", "posix_spawn", "socket", "connect", "accept", "bind",
+        "listen", "send", "recv", "sendto", "recvfrom", "open", "open64",
+        "openat", "creat", "close", "read", "write", "pread", "pwrite",
+        "lseek", "unlink", "access", "mmap", "mprotect", "munmap",
+        "brk", "sbrk", "ioctl", "dlopen", "dlsym", "dlclose"}
+BOUNDED_FORMAT = {"snprintf", "vsnprintf"}
+UNBOUNDED_FORMAT = {"sprintf", "vsprintf"}
 ALLOC = {"malloc", "calloc", "realloc", "free", "aligned_alloc"}
 MATH = {"sin", "cos", "tan", "atan2", "sqrt", "pow", "floor", "ceil", "fabs"}
 LIBC_STATE = {"__errno_location", "__ctype_b_loc", "__ctype_tolower_loc",
@@ -46,8 +57,14 @@ def validate(report):
 
 
 def classify(sym):
-    if sym in HOST or (sym.startswith("__libc_") or (sym.startswith("__") and sym.endswith("_chk"))):
+    if sym in HOST or sym.startswith("__libc_"):
         return "privileged_host_boundary", "Require reviewed Warden capability mediation or safe removal; no host passthrough"
+    if sym in BOUNDED_FORMAT:
+        return "bounded_formatting", "Use a tested bounded freestanding formatter; no host I/O or implicit grants"
+    if sym in UNBOUNDED_FORMAT:
+        return "unsafe_formatting", "Audit format and destination bounds; prefer reviewed bounded replacement"
+    if sym.startswith("__") and sym.endswith("_chk"):
+        return "checked_runtime", "Implement verified bounds checks in guest; do not silently discard fortify semantics"
     if sym in ALLOC:
         return "bounded_memory", "Use independently reviewed bounded guest heap with real memory accounting"
     if sym in LIBC_STATE:
@@ -59,8 +76,10 @@ def classify(sym):
 
 def triage(report):
     symbols, prov = validate(report)
-    weights = {"privileged_host_boundary": 0, "guest_runtime_state": 1,
-               "bounded_memory": 2, "unclassified": 3, "numerical_runtime": 4}
+    weights = {"privileged_host_boundary": 0, "unsafe_formatting": 1,
+               "checked_runtime": 2, "guest_runtime_state": 3,
+               "bounded_memory": 4, "unclassified": 5,
+               "bounded_formatting": 6, "numerical_runtime": 7}
     rows = []
     for symbol in symbols:
         kind, action = classify(symbol)

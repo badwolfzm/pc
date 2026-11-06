@@ -27,6 +27,17 @@ class Frames(unittest.TestCase):
         with self.assertRaises(FrameError):
             decode(len(raw).to_bytes(4, "big") + raw)
 
+    def test_deep_nesting_fails_closed(self):
+        # Valid JSON but too deeply nested for Python's JSON decoder.
+        raw = b"[" * 2000 + b"0" + b"]" * 2000
+        with self.assertRaises(FrameError):
+            decode(len(raw).to_bytes(4, "big") + raw)
+
+    def test_trailing_json_is_rejected(self):
+        raw = b'{"version":1}{"version":1}'
+        with self.assertRaises(FrameError):
+            decode(len(raw).to_bytes(4, "big") + raw)
+
     def test_invalid_unicode_payload(self):
         with self.assertRaises(FrameError):
             encode("offer", "n", "j", chr(0xD800))

@@ -11,7 +11,7 @@ The independent dedicated CI checks runtime C tests under UBSan; confirms the ob
 Run the unit suite with:
 
 ```sh
-cc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-format/format.c tools/doom-native-format/test_format.c -o /tmp/test-doom-format
+cc -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all tools/doom-native-format/format.c tools/doom-native-format/test_format.c -o /tmp/test-doom-format
 /tmp/test-doom-format
 ```
 

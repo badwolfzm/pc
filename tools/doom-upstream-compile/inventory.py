@@ -27,7 +27,7 @@ def zone_defaults(system_source):
     """Read the pinned engine's hard allocator defaults, without guessing."""
     values = {}
     for name in ("DEFAULT_RAM", "MIN_RAM"):
-        match = re.search(r"(?m)^\\s*#\\s*define\\s+" + name + r"\\s+(\\d+)\\b", system_source)
+        match = re.search(r"(?m)^\s*#\s*define\s+" + name + r"\s+(\d+)\b", system_source)
         if match is None:
             raise ValueError("upstream allocator macro absent: " + name)
         value = int(match.group(1))

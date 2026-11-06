@@ -1,0 +1,22 @@
+name: Doom read-only granted FILE prototype
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-readonly-file-crt/**'
+      - '.github/workflows/doom-readonly-file-crt.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real C host negative and UBSan tests
+        run: python3 tools/doom-readonly-file-crt/run.py
+      - name: Freestanding exports and undefined imports
+        run: |
+          cc -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -c tools/doom-readonly-file-crt/file.c -o /tmp/doom-file.o
+          nm -P -g /tmp/doom-file.o
+          test -z "$(nm -g -u /tmp/doom-file.o)"

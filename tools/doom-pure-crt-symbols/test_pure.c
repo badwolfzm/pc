@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,12 +37,13 @@ int main(void) {
     assert(strstr("", "") != NULL);
     assert(strstr("", "x") == NULL);
     char a[8] = { 0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55 };
-    assert(strncpy(a, "hi", 5) == a);
+    char *(*volatile copy_n)(char *, const char *, size_t) = strncpy;
+    assert(copy_n(a, "hi", 5) == a);
     assert(a[0]=='h' && a[1]=='i' && a[2]==0 && a[3]==0 && a[4]==0 && a[5]==0x55);
     char b[4] = { 'x','x','x','x' };
-    assert(strncpy(b, "abcdef", 3) == b);
+    assert(copy_n(b, "abcdef", 3) == b);
     assert(b[0]=='a' && b[1]=='b' && b[2]=='c' && b[3]=='x');
-    assert(strncpy(b, "ignored", 0) == b);
+    assert(copy_n(b, "ignored", 0) == b);
     puts("PASS: 6 pure freestanding symbols and edge semantics");
     return 0;
 }

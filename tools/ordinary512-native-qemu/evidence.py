@@ -22,7 +22,7 @@ def extract(log, manifest):
         raise Invalid("512 MiB / one-vCPU manifest missing or invalid")
     if "PONG RUN FAILED" in log or re.search(r"(?m)^FAIL ", log):
         raise Invalid("kernel reported a failure")
-    if log.count(SUCCESS) != 1:
+    if len(re.findall(r"(?m)^" + re.escape(SUCCESS) + r"$", log)) != 1:
         raise Invalid("missing exactly one 15-check kernel success summary")
     end = END.findall(log)
     phases = PHASE.findall(log)

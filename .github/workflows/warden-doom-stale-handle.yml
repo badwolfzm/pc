@@ -1,0 +1,27 @@
+name: Doom stale WAD handle isolation regression
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-wad-class-bridge/**'
+      - '.github/workflows/warden-doom-stale-handle.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  stale-handle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Existing WAD bridge tests and freestanding build
+        run: make -C tools/doom-wad-class-bridge test freestanding
+      - name: Revocation and lifetime-bound checks under UBSan
+        run: |
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic \
+            -fsanitize=undefined -fno-sanitize-recover=all \
+            -Itools/doom-wad-class-bridge/test -Itools/doom-wad-stream \
+            -Itools/doom-wad-class-bridge \
+            tools/doom-wad-class-bridge/doom_wad_bridge.c \
+            tools/doom-wad-stream/wad_stream.c \
+            tools/doom-wad-class-bridge/test/test_stale.c -o /tmp/test-stale
+          /tmp/test-stale

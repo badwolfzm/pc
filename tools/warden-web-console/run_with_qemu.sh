@@ -98,6 +98,35 @@ if [[ ! -S "$QMP_SOCKET" ]]; then
   cat "$DIR/serial.log" >&2 || true
   exit 1
 fi
+# Wait until the local HTTP server is actually accepting requests before the
+# bridge starts posting frames. Merely having a live Node PID is not sufficient.
+READY=0
+for attempt in {1..50}; do
+  if python3 - "$WARDEN_WEB_PORT" <<'PY'
+import http.client,sys
+try:
+    connection=http.client.HTTPConnection('127.0.0.1',int(sys.argv[1]),timeout=0.5)
+    connection.request('GET','/')
+    response=connection.getresponse()
+    if response.status != 200:
+        raise SystemExit(1)
+except (OSError,TimeoutError):
+    raise SystemExit(1)
+PY
+  then
+    READY=1
+    break
+  fi
+  if ! kill -0 "$WEB_PID" 2>/dev/null; then
+    echo "Web server exited before it became ready." >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+if [[ "$READY" != 1 ]]; then
+  echo "Web server did not become ready; exiting instead of failing frame uploads." >&2
+  exit 1
+fi
 echo "Open $WARDEN_WEB_ORIGIN in your browser (NOT necessarily port 8787)."
 echo "The guest is the exact kernel image you supplied; this does not install Doom."
 echo "QEMU log: $DIR/serial.log (temporary; removed on exit)"

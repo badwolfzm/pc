@@ -4,7 +4,7 @@ Task: [issue #209](https://github.com/badwolfzm/pc/issues/209) (\`doom-freestand
 
 The purpose is to check a specific remaining C runtime import in **real pinned upstream Doomgeneric** with Warden's existing freestanding adapter/heap build, while **showing rather than hiding numerical correctness problems**.
 
-This independent C-locale prototype parses common decimal and hexadecimal numbers, inf/nan and signed zero without accessing host storage, spawning processes, or importing Linux syscalls. It is **not correctly rounded** in all cases. An initial local deterministic differential test on Debian/GCC 14.2 observed **34 wrong last-bit results out of 100,000 long decimal strings** vs the host libc. Common 389-case representative input tests passed. These are observations, not performance benchmarks or proof of broad conformance. Decimal to binary conversion drops trailing digits, so it is *unsuitable for general production libc or game runtime integration*.
+This independent C-locale prototype parses common decimal and hexadecimal numbers, inf/nan and signed zero without accessing host storage, spawning processes, or importing Linux syscalls. It is **not correctly rounded** in all cases. An initial local deterministic differential test on Debian/GCC 14.2 observed **34 wrong last-bit results out of 100,000 long decimal strings** vs the host libc. Common 394-case representative input tests passed. These are observations, not performance benchmarks or proof of broad conformance. Decimal to binary conversion drops trailing digits, so it is *unsuitable for general production libc or game runtime integration*.
 
 ## Checks
 

@@ -36,5 +36,16 @@ jobs:
           unzip -p /tmp/freedoom.zip "$file" > DOOM1.WAD
           test "$(head -c4 DOOM1.WAD)" = IWAD
           echo "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  DOOM1.WAD" | sha256sum --check
-      - name: Start genuine Doom and verify ten gameplay frames plus consumed keyboard transitions (host only)
+      - name: Unit-test strict controlled-gameplay evidence validator
+        run: python3 -m unittest discover -s tools/doom-host-frames -p 'test_*.py' -v
+      - name: Run genuine Doom no-input vs arrow-input comparison (host only)
+        env:
+          DOOM_EVIDENCE_DIR: target/doom-host-frames-evidence
         run: bash tools/doom-host-frames/run.sh /tmp/genuine-doomgeneric/doomgeneric DOOM1.WAD
+      - name: Archive two real engine runs and structured host-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-host-controlled-input
+          path: target/doom-host-frames-evidence/
+          if-no-files-found: ignore

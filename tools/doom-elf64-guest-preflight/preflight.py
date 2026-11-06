@@ -73,7 +73,9 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
         ranges.append((vaddr, end))
         page_permissions.append(((vaddr // 4096) * 4096, ((end + 4095) // 4096) * 4096, pflags))
         if pflags & PF_X:
-            executable.append((vaddr, end))
+            # The entry must identify file-backed instruction bytes rather
+            # than an executable segment's zero-filled BSS tail.
+            executable.append((vaddr, vaddr + filesz))
         file_bytes += filesz
     if not ranges:
         raise InvalidELF("no load segments")
@@ -86,7 +88,7 @@ def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
             if lo < other_hi and other_lo < hi and ((flags | other_flags) & (PF_X | PF_W)) == (PF_X | PF_W):
                 raise InvalidELF("load segments would share a writable+executable page")
     if not any(lo <= entry < hi for lo, hi in executable):
-        raise InvalidELF("entry point not in executable load segment")
+        raise InvalidELF("entry point not in file-backed executable load bytes")
     # This is an upper bound on direct loaded-image bytes, NOT real peak RSS:
     # page-rounded load regions can introduce extra consumption.
     page_ranges = sorted(((lo // 4096) * 4096, ((hi + 4095) // 4096) * 4096) for lo, hi in ranges)

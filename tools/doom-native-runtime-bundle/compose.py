@@ -13,6 +13,13 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE_PATH = ROOT / "tools/doom-native-link-gate/gate.py"
+FOOTPRINT_PATH = ROOT / "tools/doom-thirteen-link-memory/integrate.py"
+# Doom's pinned genuine I_ZoneBase mallocs 6 MiB by default. A 1 MiB
+# allocator passes ld -r but provably fails during game initialization.
+# The separately tested allocator needs an extra 1 MiB working allocation.
+ARENA_BYTES = 8 * 1024 * 1024
+STARTUP_ZONE_BYTES = 6 * 1024 * 1024
+SCRATCH_TEST_BYTES = 1 * 1024 * 1024
 FORMAT_MERGED_COMMIT = "4246bde3e786f1c51e3b047292a592cb5c057bf1"
 EXPECTED = {
     "abs", "fabs",
@@ -102,7 +109,25 @@ def closure(before, after):
     return sorted(before - after)
 
 
+def validate_profile(capacity):
+    # This canonical bundle offers exactly one HOST-validated profile.
+    # Other sizes need their own allocator/regression evidence.
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity != ARENA_BYTES:
+        raise ValueError("canonical Doom arena must use the reviewed 8 MiB profile")
+    if STARTUP_ZONE_BYTES + SCRATCH_TEST_BYTES >= capacity:
+        raise ValueError("Doom startup zone and scratch exceed safe arena capacity")
+    return capacity
+
+
+def section_footprint(path):
+    spec = importlib.util.spec_from_file_location("doom_runtime_elf_footprint", FOOTPRINT_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.section_footprint(path)
+
+
 def run(source, output, staged_format):
+    validate_profile(ARENA_BYTES)
     source = source.resolve()
     staged_format = staged_format.resolve()
     if not staged_format.is_file():
@@ -123,7 +148,7 @@ def run(source, output, staged_format):
         obj = output / (name + ".o")
         command = [
             "cc", *gate.CFLAGS,
-            "-DDOOM_ARENA_BYTES=1048576",
+            "-DDOOM_ARENA_BYTES=" + str(ARENA_BYTES),
             "-I" + str(ROOT / "tools/doom-freestanding-arena"),
             "-c", str(code), "-o", str(obj),
         ]
@@ -152,6 +177,11 @@ def run(source, output, staged_format):
     removed = closure(before, remaining)
     sections = exec_checked(["size", "-A", str(combined)])
     (output / "et-rel-sections.txt").write_text(sections)
+    section_metrics = section_footprint(combined)
+    if section_metrics["allocatable_nobits_bytes"] < ARENA_BYTES:
+        raise ValueError("actual ELF NOBITS does not reserve 8 MiB heap")
+    if section_metrics["allocatable_total_section_bytes"] >= 512 * 1024 * 1024:
+        raise ValueError("ELF static section bytes alone exceed 512 MiB ceiling")
     result = {
         "upstream_commit": gate.PIN,
         "original_engine_translation_units": base_report["real_upstream_source_count"],
@@ -159,7 +189,11 @@ def run(source, output, staged_format):
         "format_candidate_pr": 225,
         "format_candidate_exact_merged_commit": FORMAT_MERGED_COMMIT,
         "format_candidate_not_yet_merged": False,
-        "arena_bytes_reserved_in_BSS": 1048576,
+        "arena_bytes_reserved_in_BSS": ARENA_BYTES,
+        "pinned_default_doom_zone_bytes": STARTUP_ZONE_BYTES,
+        "verified_host_scratch_allocation_bytes": SCRATCH_TEST_BYTES,
+        "validated_arena_profile": "8 MiB C allocator tested under UBSan in dedicated CI; NOT actual game boot",
+        "static_elf_allocatable_section_metrics": section_metrics,
         "crt_providers": manifests,
         "candidate_object_sha256": hashlib.sha256(combined.read_bytes()).hexdigest(),
         "original_undefined_count": len(before),
@@ -173,7 +207,7 @@ def run(source, output, staged_format):
         "whole_guest_512m_measured": False,
         "fps_measured": None,
         "albion_compatibility_verified": False,
-        "note": "All providers combined; no unreviewed system/file operation substitutions. No runtime/callsite test.",
+        "note": "All providers combined; no unreviewed system/file operation substitutions. 8 MiB arena meets source-derived default zone capacity and separately tested allocation; no Doom game startup was executed.",
     }
     (output / "report.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps({

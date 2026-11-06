@@ -1,0 +1,22 @@
+name: Ordinary-PC 512 MiB offline trace analyzer
+on:
+  pull_request:
+    paths:
+      - 'tools/ordinary-pc-trace-512mb/**'
+      - '.github/workflows/ordinary-pc-trace-512mb.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  trace-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/ordinary-pc-trace-512mb -p 'test_*.py' -v
+      - name: Synthetic JSONL smoke
+        run: |
+          printf '%s\n' '{"t_us":0,"page":1,"write":false}' '{"t_us":16000,"page":2,"write":true}' > /tmp/trace.jsonl
+          python3 tools/ordinary-pc-trace-512mb/analyze.py /tmp/trace.jsonl --guest-ram-mib 512 --reserve-mib 64 > /tmp/report.json
+          python3 -c 'import json; r=json.load(open("/tmp/report.json")); assert r["trace"]["events"] == 2 and r["lru_model"]["faults"] == 2'

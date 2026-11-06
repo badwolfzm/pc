@@ -153,6 +153,10 @@ int main(int argc, char **argv) {
         }
         printf("PASS real Doom no-input control frames=%u player_stationary=1 position=(%d,%d) first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
                frame_count, level_initial_x, level_initial_y, (unsigned long long)first_hash, (unsigned long long)last_hash);
+        printf("DOOM_EVIDENCE_V1 mode=control frames=%u level_frames=%u player_frames=%u start_x=%d start_y=%d end_x=%d end_y=%d pressed=%u released=%u consumed_down=%u consumed_up=%u first_hash=%016llx last_hash=%016llx\n",
+               frame_count, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y,
+               key_press_sent, key_release_sent, key_press_consumed, key_release_consumed,
+               (unsigned long long)first_hash, (unsigned long long)last_hash);
     } else {
         if (!moved || !key_press_sent || !key_release_sent || !key_press_consumed || !key_release_consumed || first_hash == last_hash) {
             fprintf(stderr, "FAIL gameplay input/movement gate: moved=%d sent_down=%u sent_up=%u consumed_down=%u consumed_up=%u\n",
@@ -161,6 +165,10 @@ int main(int argc, char **argv) {
         }
         printf("PASS real upstream Doom engine startup_frames=%u gameplay_frames=%u keyboard_down=%u keyboard_up=%u consumed_down=%u consumed_up=%u level_frames=%u player_moved=1 first_hash=%016llx last_hash=%016llx (HOST MOCK ONLY)\n",
                startup_frames, frame_count, key_press_sent, key_release_sent, key_press_consumed, key_release_consumed, level_frames, (unsigned long long)first_hash, (unsigned long long)last_hash);
+        printf("DOOM_EVIDENCE_V1 mode=intervention frames=%u level_frames=%u player_frames=%u start_x=%d start_y=%d end_x=%d end_y=%d pressed=%u released=%u consumed_down=%u consumed_up=%u first_hash=%016llx last_hash=%016llx\n",
+               frame_count, level_frames, level_player_frames, level_initial_x, level_initial_y, level_last_x, level_last_y,
+               key_press_sent, key_release_sent, key_press_consumed, key_release_consumed,
+               (unsigned long long)first_hash, (unsigned long long)last_hash);
     }
     warden_doom_wad_revoke();
     free(wad);

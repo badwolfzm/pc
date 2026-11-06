@@ -1,6 +1,6 @@
 # Warden browser console — experimental host bridge
 
-**Status:** Host-side prototype on its own branch. Does **not** boot the Warden kernel, read QEMU VRAM, or display live Doom yet. The browser shows a synthetic source until a reviewed Warden framebuffer exporter is integrated.
+**Status:** Host-side prototype on its own branch. Does **not** boot the Warden kernel or display live Doom by itself. An optional QMP helper can capture an existing local QEMU VM. The browser can show a synthetic source, or QEMU screenshots using the optional trusted QMP helper; no native guest-to-web rendering path is claimed.
 
 ## Run locally (Node.js 18+)
 
@@ -18,6 +18,27 @@ node demo.js
 Open **http://localhost:8787/** in the same machine's browser and enter the configured password. The demo paints moving colored pixels (10 frames/s). Keyboard/touch inputs are returned to the demo via the authorized input polling endpoint. To run automated checks: `node tools/warden-web-console/test.js` from the repository root.
 
 For phone/tablet access, keep the server bound to loopback and place it behind a TLS reverse proxy or a secured VPN tunnel. Set `WARDEN_WEB_ORIGIN` to the exact public HTTPS origin of that proxy (including port if nonstandard). Use WSS over the public connection. Do **not** bind this prototype directly to the public internet. Authentication/session limits are deliberately modest and have not received an independent security audit.
+
+## Optional live QEMU screen relay (experimental)
+
+The host-side `qmp_bridge.py` can screenshot an **existing** QEMU VM through a **user-owned local UNIX QMP socket** and push frames into the browser console; it relays an allow-list of keyboard keys back through QMP. No Warden kernel modifications or untrusted access to QMP are required. Example:
+
+```sh
+# Terminal A: start Warden or a long-running QEMU guest with:
+# qemu-system-x86_64 ... -display none -vga std \
+#   -qmp unix:$HOME/warden/warden-qmp.sock,server=on,wait=off
+
+# Terminal B: start web server, with both WARDEN_* secrets exported
+node tools/warden-web-console/server.js
+
+# Terminal C: use the SAME WARDEN_INGEST_TOKEN:
+python3 tools/warden-web-console/qmp_bridge.py \
+  --qmp-socket "$HOME/warden/warden-qmp.sock" --fps 5
+```
+
+The existing G0 QEMU probe automatically exits after its 60 verified frames; it is **not a continuous game session**, so its screen will be short-lived. For an actual sustained interactive Warden display, a long-running guest and end-to-end QMP/device tests are still necessary. Captures are PPM screenshots resized to 320×200 (nearest-neighbor); this is a polling bridge with CPU and I/O overhead, not a zero-copy graphical backend. Mouse injection is not yet implemented; the Canvas pointer interface is defined but ignored by this QMP bridge.
+
+Never expose the QMP socket over TCP or to a remote browser. QMP is a highly privileged hypervisor control interface. Only this trusted local helper may connect to it. Browser viewers only receive RGBA frames and can send allow-listed input events.
 
 ## Wire protocol (for a future guest-to-host transport)
 

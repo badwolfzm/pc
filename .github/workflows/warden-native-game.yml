@@ -1,0 +1,38 @@
+name: Warden native graphical guest evidence
+on:
+  pull_request:
+    paths:
+      - 'crates/warden-kernel/src/pong.rs'
+      - 'crates/warden-kernel/guest/pong/**'
+      - 'tests/kernel/pong.sh'
+      - 'tests/game/check_pong_guest.py'
+      - '.github/workflows/warden-native-game.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  graphical-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU, NASM and binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 nasm binutils build-essential
+      - name: Install kernel target
+        run: rustup target add x86_64-unknown-none
+      - name: Run real native game in Warden/QEMU
+        run: |
+          mkdir -p target
+          timeout 240 bash tests/kernel/pong.sh
+          python3 tests/game/check_pong_guest.py target/pong-serial.log
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: warden-pong-guest-evidence
+          path: |
+            target/pong-serial.log
+            target/pong-screen.ppm
+          if-no-files-found: ignore

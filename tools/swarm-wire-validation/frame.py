@@ -55,7 +55,7 @@ def _validate(obj):
         raise FrameError("unknown or missing fields")
     if type(obj["version"]) is not int or obj["version"] != 1:
         raise FrameError("unsupported version")
-    if obj["kind"] not in KINDS:
+    if not isinstance(obj["kind"], str) or obj["kind"] not in KINDS:
         raise FrameError("unsupported kind")
     for field in ("node", "job"):
         value = obj[field]

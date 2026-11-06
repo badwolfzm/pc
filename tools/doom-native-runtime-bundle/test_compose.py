@@ -65,8 +65,8 @@ class ContractTests(unittest.TestCase):
             d = pathlib.Path(d)
             source = d / "arena.c"
             obj = d / "arena.o"
-            source.write_text("unsigned char bytes[8388608];\\n"
-                              "unsigned char *get(void){return bytes;}\\n")
+            source.write_text("unsigned char bytes[8388608];\n"
+                              "unsigned char *get(void){return bytes;}\n")
             subprocess.run(["cc", "-std=c11", "-ffreestanding", "-fno-builtin",
                             "-c", str(source), "-o", str(obj)], check=True)
             sections = bundle.section_footprint(obj)

@@ -18,3 +18,6 @@ jobs:
         run: python3 -m unittest discover -s tools/mm-contiguous-source-repro -p 'test_*.py' -v
       - name: Compile real Rust allocator and report defect conditions
         run: python3 tools/mm-contiguous-source-repro/run.py
+
+      - name: Confirm proposed implementation clears the two accounting defects
+        run: python3 tools/mm-contiguous-source-repro/run.py --proposed-fix --strict

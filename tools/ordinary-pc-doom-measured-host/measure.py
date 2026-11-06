@@ -26,7 +26,7 @@ def verify_source_and_asset(source, wad):
         raise ValueError(f"unapproved upstream source SHA {sha}")
     if not (12 <= wad.stat().st_size <= 64 * 1024 * 1024):
         raise ValueError("WAD size outside supported test range")
-    digest = hashlib.file_digest(wad.open("rb"), "sha256").hexdigest()
+    with wad.open("rb") as asset:\n        digest = hashlib.file_digest(asset, "sha256").hexdigest()
     if digest != FREEDOOM1_SHA256:
         raise ValueError(f"Freedoom asset SHA mismatch: {digest}")
     return digest

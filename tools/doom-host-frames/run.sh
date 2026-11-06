@@ -24,6 +24,6 @@ cc "${FLAGS[@]}" -c "$ROOT/tools/doom-wad-class-bridge/doom_wad_bridge.c" -o "$O
 cc "${FLAGS[@]}" -c "$ROOT/tools/doom-real-wfile-link/bridge_backend.c" -o "$OUT/backend.o"
 cc "${FLAGS[@]}" -DWARDEN_DOOM_TEST -c "$ROOT/tools/doomgeneric-warden/doomgeneric_warden.c" -o "$OUT/display.o"
 cc "${FLAGS[@]}" -c "$ROOT/tools/doom-host-frames/game_smoke.c" -o "$OUT/game.o"
-cc "${OBJECTS[@]}" "$OUT/stream.o" "$OUT/bridge.o" "$OUT/backend.o" "$OUT/display.o" "$OUT/game.o" -lm -o "$OUT/doom-host-frames"
+cc "${OBJECTS[@]}" "$OUT/stream.o" "$OUT/bridge.o" "$OUT/backend.o" "$OUT/display.o" "$OUT/game.o" -lm -Wl,--wrap=DG_GetKey -o "$OUT/doom-host-frames"
 # Last resort timeout as Doom may hang during initialization; no QEMU involved.
 timeout 30s "$OUT/doom-host-frames" "$WAD"

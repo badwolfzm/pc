@@ -1,0 +1,25 @@
+name: Native Warden game ELF layout preflight
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-elf-budget/**'
+      - '.github/workflows/warden-doom-elf-budget.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  layout-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/doom-elf-budget -p 'test_*.py' -v
+      - name: Reject ordinary host PIE executable
+        run: |
+          printf 'int main(void) { return 0; }\n' > /tmp/not-warden.c
+          cc /tmp/not-warden.c -o /tmp/not-warden
+          if python3 tools/doom-elf-budget/audit.py /tmp/not-warden; then
+            echo "Host PIE incorrectly accepted" >&2
+            exit 1
+          fi

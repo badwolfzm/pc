@@ -3,7 +3,8 @@ import pathlib
 import sys
 import tempfile
 import unittest
-from run import capture_command, check_file
+from unittest.mock import patch
+from run import capture_command, check_file, run
 
 
 class RunnerTests(unittest.TestCase):
@@ -46,6 +47,46 @@ class RunnerTests(unittest.TestCase):
                 check_file(p, '0'*64, 'test')
             with self.assertRaisesRegex(ValueError, 'digest'):
                 check_file(p, 'no', 'test')
+
+    def run_fixture(self, folder, log, report):
+        binary = pathlib.Path(folder) / 'qemu-system-x86_64'
+        kernel = pathlib.Path(folder) / 'kernel.mb32'
+        binary.write_bytes(b'fake qemu for test only')
+        kernel.write_bytes(b'fake kernel for test only')
+        digest_qemu = hashlib.sha256(binary.read_bytes()).hexdigest()
+        digest_kernel = hashlib.sha256(kernel.read_bytes()).hexdigest()
+        with patch('run.check_args', return_value={'vcpus_requested': 1}), \
+             patch('run.capture_command', return_value={'returncode': 0, 'timed_out': False,
+                                                        'log_overflow': False, 'log': b'guest log'}):
+            return run(binary, digest_qemu, kernel, digest_kernel, 'tcg', 2, log, report)
+
+    def test_exclusive_outputs_and_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = pathlib.Path(d) / 'out.log'
+            report = pathlib.Path(d) / 'out.json'
+            self.assertEqual(self.run_fixture(d, log, report), 0)
+            self.assertEqual(log.read_bytes(), b'guest log')
+            self.assertFalse(__import__('json').loads(report.read_text())['doom_executed_verified'])
+
+    def test_existing_log_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = pathlib.Path(d) / 'out.log'
+            report = pathlib.Path(d) / 'out.json'
+            log.write_text('keep this')
+            with self.assertRaises(FileExistsError):
+                self.run_fixture(d, log, report)
+            self.assertEqual(log.read_text(), 'keep this')
+            self.assertFalse(report.exists())
+
+    def test_symlink_log_never_follows_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = pathlib.Path(d) / 'private.txt'
+            target.write_text('untouched')
+            log = pathlib.Path(d) / 'out.log'
+            log.symlink_to(target)
+            with self.assertRaises(FileExistsError):
+                self.run_fixture(d, log, pathlib.Path(d) / 'out.json')
+            self.assertEqual(target.read_text(), 'untouched')
 
 
 if __name__ == '__main__':

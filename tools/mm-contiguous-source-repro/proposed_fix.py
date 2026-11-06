@@ -31,7 +31,7 @@ REPLACEMENT = r"""    pub fn alloc_contiguous(&mut self, n: u64) -> Option<u64> 
     }"""
 
 def apply(source):
-    if source.count(START) != 1 or source.count(END) != 1:
+    if source.count(START) != 1:
         raise ValueError("allocator function shape changed; do not patch automatically")
     before, remainder = source.split(START, 1)
     old, after = remainder.split(END, 1)

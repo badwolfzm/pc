@@ -17,7 +17,7 @@ def require(value, message):
 def validate(doc):
     require(type(doc) is dict, "root must be an object")
     require(set(doc) == {"schema", "source", "boot_id", "complete", "vcpu_count", "events"}, "unexpected or missing root fields")
-    require(doc["schema"] == 1, "unsupported schema")
+    require(type(doc["schema"]) is int and doc["schema"] == 1, "unsupported schema")
     require(doc["source"] in ("synthetic", "guest-reported"), "invalid source")
     require(type(doc["boot_id"]) is str and len(doc["boot_id"]) == 64 and all(c in "0123456789abcdef" for c in doc["boot_id"]), "invalid boot ID")
     require(doc["complete"] is True, "incomplete inventory")

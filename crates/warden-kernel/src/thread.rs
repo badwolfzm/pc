@@ -122,6 +122,9 @@ pub struct Thread {
     pub aspace: AddressSpace,
     pub state: State,
     pub pending: Msg,
+    /// Exactly one kernel-generated exit notice may wait outside a saturated
+    /// endpoint sender queue. Stored in the fixed thread record, not heap.
+    pub deferred_exit: Option<(u32, Msg)>,
     /// Timer ticks left (10 ms each). Refilled on yield.
     pub budget: u32,
     pub budget_period: u32,
@@ -200,7 +203,7 @@ impl Kernel {
             rip: entry, cs: USER_CS, rflags: 0x202, rsp: stack_top, ss: USER_SS, ..TrapFrame::default()
         };
         self.threads.push(Thread {
-            name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(),
+            name, frame, cspace: CSpace::new(16), aspace, state: State::Runnable, pending: Msg::default(), deferred_exit: None,
             budget, budget_period: budget, death: None, expect, logs: 0,
             personality: Personality::Native, fs_base: 0, fx: arch::FxArea::initial(), linux: linux::Proc::new(),
         });
@@ -269,6 +272,13 @@ impl Kernel {
                 }
                 ObjectKind::Endpoint => {
                     if let Some(ep) = self.endpoints.remove(&id.0) {
+                        // A notification for a destroyed endpoint must not
+                        // become visible if an object identifier is reused.
+                        for t in &mut self.threads {
+                            if t.deferred_exit.map(|(ep_id, _)| ep_id) == Some(id.0) {
+                                t.deferred_exit = None;
+                            }
+                        }
                         self.ep_refused += ep.refused;
                         if ep.peak_senders > ep.capacity {
                             self.ep_over_capacity += 1;
@@ -620,6 +630,17 @@ fn ipc(k: &mut Kernel, f: &TrapFrame) -> Result<After, Death> {
             // deliver() wrote the message into cur's frame; resume it.
             return Ok(After::Resume(0));
         }
+        // Normal queued senders take precedence. If a dying Linux guest
+        // encountered a full sender queue, its single exit message was
+        // retained inside its fixed thread record. Deliver it when space
+        // opens, without increasing the endpoint queue or losing exits.
+        if let Some(from) = k.threads.iter().position(|t| {
+            t.death.is_some() && t.deferred_exit.map(|(id, _)| id) == Some(ep_id)
+        }) {
+            let (_, msg) = k.threads[from].deferred_exit.take().unwrap();
+            k.deliver(cur, msg);
+            return Ok(After::Resume(0));
+        }
         if !Endpoint::enqueue(&mut ep.receivers, ep.capacity, cur) {
             ep.refused += 1;
             return Ok(After::Resume(E_QUEUE_FULL));
@@ -784,7 +805,9 @@ pub fn call(k: &mut Kernel, cur: usize, ep_id: u32, rep: u32, msg: Msg) -> bool 
 
 /// A one-way message from thread `t`, which may already be dead (a Linux
 /// thread's exit notice): delivered now if the server waits, queued
-/// otherwise. False when the queue is full.
+/// otherwise. If the queue is full, retain exactly one notification in the
+/// dying thread's fixed record; the next receiver drains it after queued sends.
+/// False only if the endpoint is missing or the thread already has a notice.
 pub fn notify(k: &mut Kernel, t: usize, ep_id: u32, msg: Msg) -> bool {
     let Some(ep) = k.endpoints.get_mut(&ep_id) else { return false };
     if !ep.receivers.is_empty() {
@@ -793,8 +816,13 @@ pub fn notify(k: &mut Kernel, t: usize, ep_id: u32, msg: Msg) -> bool {
         return true;
     }
     if !Endpoint::enqueue(&mut ep.senders, ep.capacity, t) {
-        ep.refused += 1;
-        return false;
+        // Do not count this as refused: the notification remains owned by
+        // the kernel and will be delivered exactly once on a later receive.
+        if k.threads[t].deferred_exit.is_some() {
+            return false;
+        }
+        k.threads[t].deferred_exit = Some((ep_id, msg));
+        return true;
     }
     ep.peak_senders = ep.peak_senders.max(ep.senders.len());
     k.threads[t].pending = msg;

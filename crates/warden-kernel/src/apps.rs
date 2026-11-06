@@ -126,7 +126,12 @@ pub fn setup(k: &mut Kernel) {
     // for every client, native and Linux, plus the server). The server keeps
     // only READ; a WRITE|GRANT copy in the boot CSpace hands out the badged
     // client copies and is deleted below.
-    let ep_capacity = (n_clients + 1) as u64;
+    // The global personality endpoint is a bounded queue, not one reserved
+    // message slot per client. Additional clients must observe EAGAIN and
+    // retry when it fills; an oversized capacity is rejected by the cap
+    // accountant and would panic at boot. Do not raise the security budget
+    // or ENDPOINT_MAX_QUEUE simply because another Linux guest was added.
+    let ep_capacity = (n_clients as u64).min(warden_caps::ENDPOINT_MAX_QUEUE);
     let before = (k.caps.budget(&k.threads[srv].cspace, SLOT_UNTYPED).unwrap(), k.endpoints.len(), k.caps.live_objects());
     let refused = thread::create_endpoint(k, srv, SLOT_UNTYPED, SLOT_SCRATCH, warden_caps::ENDPOINT_MAX_QUEUE + 1);
     check(k, "pricing: personality endpoint with an over-budget queue refused, nothing charged",

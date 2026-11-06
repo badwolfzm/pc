@@ -248,15 +248,20 @@ pub fn finish(k: &mut Kernel) -> ! {
         k.failures += 1;
         kprintln!("FAIL kernel heap high-water mark grew {carved} bytes during the run (limit {CARVE_LIMIT})");
     }
-    // Recorded before the endpoints were reclaimed with their holders: no
-    // queue ever held more threads than its creator paid for, and exactly the
-    // one sender over capacity was turned away (test 29).
+    // There is one deliberate flood refusal (CHECK 29). The ten Linux
+    // clients also legitimately receive bounded EAGAIN when their shared
+    // eight-slot endpoint saturates; scheduling affects how often this happens.
+    // An exact global refusal count is therefore NOT a liveness invariant.
+    // CHECK 29 proves the expected flood refusal, CHECK 111 proves all ten
+    // Linux exits reached the personality server, and the server exit is
+    // independently checked above. Do not accept a lost exit as backpressure.
+    // These counters are folded from reclaimed endpoints.
     k.checks += 1;
-    if k.ep_over_capacity == 0 && k.ep_refused == 1 {
-        kprintln!("PASS no endpoint queue exceeded its paid capacity; {} over-capacity IPC call refused", k.ep_refused);
+    if k.ep_over_capacity == 0 && k.ep_refused >= 1 {
+        kprintln!("PASS no endpoint queue exceeded its paid capacity; {} bounded IPC requests refused (at least one intentional flood)", k.ep_refused);
     } else {
         k.failures += 1;
-        kprintln!("FAIL {} endpoint queues exceeded capacity, {} IPC calls refused (want 1)", k.ep_over_capacity, k.ep_refused);
+        kprintln!("FAIL {} endpoint queues exceeded capacity, {} IPC requests refused (expected no overflow and at least one flood refusal)", k.ep_over_capacity, k.ep_refused);
     }
     kprintln!();
     kprintln!("{}: {} checks, {} failed, {} timer ticks, {} frames, heap {} bytes in use ({} carved)", if k.failures == 0 { "ALL HELD" } else { "KERNEL TEST FAILED" }, k.checks, k.failures, k.ticks, k.frames.used, heap::used(), heap::carved());

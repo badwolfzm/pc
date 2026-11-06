@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import unittest
+from unittest.mock import patch
 
 path = pathlib.Path(__file__).with_name("gate.py")
 spec = importlib.util.spec_from_file_location("link_gate", path)
@@ -25,6 +26,20 @@ class NativeLinkGateTests(unittest.TestCase):
     def test_unknown_nm_undefined_shape_fails_closed(self):
         with self.assertRaises(ValueError):
             gate.missing_symbols("00000000 U malformed\n")
+
+    def test_object_level_unresolved_provenance(self):
+        with patch.object(gate, "execute", side_effect=[" U malloc\n U DG_Init\n", " U fclose\n"]):
+            result = gate.unresolved_by_source(pathlib.Path("/nonexistent"), [
+                (None, "upstream_engine.o"), (None, "warden_bridge.o")
+            ])
+        self.assertEqual(result, {
+            "upstream_engine.o": ["DG_Init", "malloc"],
+            "warden_bridge.o": ["fclose"],
+        })
+
+    def test_fortify_disabled_for_freestanding(self):
+        self.assertIn("-U_FORTIFY_SOURCE", gate.CFLAGS)
+        self.assertIn("-D_FORTIFY_SOURCE=0", gate.CFLAGS)
 
     def test_pinned_revision_and_backends(self):
         self.assertEqual(len(gate.PIN), 40)

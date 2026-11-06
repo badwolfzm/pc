@@ -32,3 +32,23 @@ Kernel/loader owner: reject zero-length allocations without side effects,
 make contiguous allocation transactional on failure, test free-list
 fragmentation, and run kernel and QEMU security regressions. Independent
 security review is required before merging any **kernel change**.
+
+## Candidate patch experiment
+
+`proposed_fix.py` contains an **unmerged** implementation of
+`alloc_contiguous` that rejects zero-length requests and reserves a fresh
+contiguous bump-pointer range atomically. Its arithmetic and reserved boot
+module overlap are validated *before* changing `used` or `next`. It
+deliberately does not consume fragmented free-list frames. This is a safety
+and simplicity tradeoff, **not necessarily the best allocator for a 512 MiB
+production system**, because it can reject a large contiguous request even
+while enough individually free frames exist.
+
+```
+python3 tools/mm-contiguous-source-repro/run.py --proposed-fix --strict
+```
+
+The harness now also exercises allocation requests that span a reserved boot
+module and requests exceeding the available frame extent. The accepted
+production repair must pass those cases, preserve mappings, be reviewed by
+the kernel owner, and receive real QEMU and regression-test evidence.

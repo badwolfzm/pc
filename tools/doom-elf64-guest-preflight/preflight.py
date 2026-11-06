@@ -13,6 +13,7 @@ PF_X, PF_W = 1, 2
 MAX_INPUT = 64 * 1024 * 1024
 MAX_PH = 128
 MAX_U64 = (1 << 64) - 1
+MAX_GUEST_BYTES = 512 * 1048576
 
 class InvalidELF(ValueError):
     pass
@@ -23,9 +24,11 @@ def checked_end(start, size, label):
     return start + size
 
 def inspect(data, guest_ram_bytes, other_reserved_bytes=0):
-    if not isinstance(guest_ram_bytes, int) or not isinstance(other_reserved_bytes, int):
-        raise InvalidELF("memory budgets must be integer bytes")
-    if guest_ram_bytes <= 0 or guest_ram_bytes > MAX_U64 or other_reserved_bytes < 0 or other_reserved_bytes >= guest_ram_bytes:
+    if type(guest_ram_bytes) is not int or type(other_reserved_bytes) is not int:
+        raise InvalidELF("memory budgets must be integer bytes (not booleans)")
+    if guest_ram_bytes <= 0 or guest_ram_bytes > MAX_GUEST_BYTES:
+        raise InvalidELF("guest RAM exceeds strict 512 MiB physical memory target or is invalid")
+    if other_reserved_bytes < 0 or other_reserved_bytes >= guest_ram_bytes:
         raise InvalidELF("invalid guest/reserved budget")
     if len(data) > MAX_INPUT:
         raise InvalidELF("input exceeds 64 MiB")

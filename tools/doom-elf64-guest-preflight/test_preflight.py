@@ -29,6 +29,45 @@ class PreflightTests(unittest.TestCase):
         with self.assertRaises(module.InvalidELF):
             self.ok(data, reserved)
 
+    def test_strict_guest_ram_limit(self):
+        for mib in (513, 1024, 4096):
+            with self.subTest(mib=mib), self.assertRaisesRegex(module.InvalidELF, "512 MiB"):
+                module.inspect(elf(), mib * 1048576, 0)
+
+    def test_exact_512_mib_boundary(self):
+        report = module.inspect(elf(), 512 * 1048576, 0)
+        self.assertEqual(report["guest_ram_bytes_configured"], 512 * 1048576)
+
+    def test_boolean_budgets_fail_closed(self):
+        for guest, reserved in ((True, 0), (512 * 1048576, False),
+                                (False, 0), (512 * 1048576, True)):
+            with self.subTest(guest=guest, reserved=reserved), self.assertRaises(module.InvalidELF):
+                module.inspect(elf(), guest, reserved)
+
+    def test_invalid_guest_ram_limits(self):
+        for guest in (0, -1, 512 * 1048576 + 1):
+            with self.subTest(guest=guest), self.assertRaises(module.InvalidELF):
+                module.inspect(elf(), guest, 0)
+
+    def test_reserved_budget_must_leave_room(self):
+        with self.assertRaises(module.InvalidELF):
+            module.inspect(elf(), 512 * 1048576, 512 * 1048576)
+        with self.assertRaises(module.InvalidELF):
+            module.inspect(elf(), 512 * 1048576, -1)
+
+    def test_cli_rejects_oversized_guest(self):
+        import tempfile
+        from contextlib import redirect_stdout
+        from io import StringIO
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "valid.elf"
+            path.write_bytes(elf())
+            output = StringIO()
+            with redirect_stdout(output):
+                code = module.main([str(path), "--guest-mib", "1024", "--reserved-mib", "0"])
+            self.assertEqual(code, 1)
+            self.assertIn('"valid": false', output.getvalue().lower())
+
     def test_valid_static_exec(self):
         report = self.ok(elf())
         self.assertEqual(report["load_page_rounded_bytes"], 4096)

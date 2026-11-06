@@ -16,13 +16,15 @@ int main(void) {
     assert(strncasecmp("abc", "ABD", 3) < 0);
     assert(strncasecmp("a", "b", 0) == 0);
     assert(strncasecmp("a", "", 5) > 0);
+    /* Indirect call avoids host header fortify builtins in the test TU. */
+    char *(*volatile copy_fn)(char *, const char *, size_t) = strncpy;
     char buf[9];
     for (size_t i=0; i<sizeof(buf); ++i) buf[i]='X';
-    assert(strncpy(buf,"hi",5)==buf);
+    assert(copy_fn(buf,"hi",5)==buf);
     assert(buf[0]=='h' && buf[1]=='i' && buf[2]=='\0' && buf[4]=='\0' && buf[5]=='X');
-    assert(strncpy(buf,"abcdef",3)==buf);
+    assert(copy_fn(buf,"abcdef",3)==buf);
     assert(buf[0]=='a' && buf[1]=='b' && buf[2]=='c');
-    assert(strncpy(buf,"",0)==buf);
+    assert(copy_fn(buf,"",0)==buf);
     const char hay[]="ababa";
     assert(strstr(hay,"aba")==hay);
     assert(strstr(hay,"bab")==hay+1);

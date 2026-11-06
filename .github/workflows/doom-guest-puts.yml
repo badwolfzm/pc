@@ -1,0 +1,52 @@
+name: Doom guest bounded puts provider
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-guest-puts/**'
+      - '.github/workflows/doom-guest-puts.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  puts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host adapter tests and UBSan
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -O2 -ffreestanding -fno-builtin -fsanitize=undefined -fno-sanitize-recover=all -Dputs=warden_guest_puts -c tools/doom-guest-puts/puts.c -o /tmp/warden-puts-test.o
+          cc -std=c11 -Wall -Wextra -Werror -O2 -fsanitize=undefined -fno-sanitize-recover=all tools/doom-guest-puts/test_puts.c /tmp/warden-puts-test.o -o /tmp/test-warden-puts
+          /tmp/test-warden-puts
+      - name: Freestanding provider symbol and no imported libc gate
+        run: |
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-guest-puts/puts.c -o /tmp/warden-puts.o
+          python3 - <<'PY'
+          import subprocess
+          lines=subprocess.check_output(['nm','-P','-g','/tmp/warden-puts.o'],text=True).splitlines()
+          defined={p[0] for line in lines if (p:=line.split())[1] in ('T','D','B')}
+          undefined={p[0] for line in lines if (p:=line.split())[1]=='U'}
+          assert defined == {'puts','warden_doom_set_console_writer'}, (defined,undefined)
+          assert not undefined, undefined
+          PY
+      - name: Fetch original pinned Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Compile original engine and check exactly one unresolved import closure
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-guest-puts
+          ld -r -o target/doom-guest-puts/combined.o target/doom-guest-puts/all-objects.o /tmp/warden-puts.o
+          python3 - <<'PY'
+          import subprocess
+          def missing(path):
+              lines=subprocess.check_output(['nm','-g','-u',path],text=True).splitlines()
+              return {l.split()[-1] for l in lines if l.split()}
+          before=missing('target/doom-guest-puts/all-objects.o')
+          after=missing('target/doom-guest-puts/combined.o')
+          assert 'puts' in before, 'original genuine engine does not import puts'
+          assert after == before - {'puts'}, {'unexpected_resolution':before-after,'introduced':after-before}
+          assert {'system','fopen','fread','fwrite','remove','rename'} <= after
+          print('PASS original Doom unresolved puts closed alone; no native boot claimed')
+          PY

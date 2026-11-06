@@ -4,10 +4,20 @@ import argparse
 import json
 from pathlib import Path
 
-HOST = {"fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "fprintf",
-        "printf", "perror", "puts", "remove", "rename", "stat", "fstat",
-        "opendir", "readdir", "system", "popen", "execve", "fork",
-        "socket", "connect", "open", "close", "read", "write", "mmap"}
+# Known privileged services are never treated as pure helper functions. This is
+# a conservative triage inventory, not a replacement for source-level review.
+HOST = {"fopen", "fopen64", "freopen", "fdopen", "fclose", "fread", "fwrite",
+        "fseek", "fseeko", "ftell", "ftello", "fflush", "fprintf", "vfprintf",
+        "printf", "vprintf", "sprintf", "vsprintf", "snprintf", "vsnprintf",
+        "scanf", "fscanf", "sscanf", "fgets", "fputs", "fgetc", "fputc",
+        "getc", "putc", "getchar", "putchar", "perror", "puts", "gets",
+        "remove", "rename", "stat", "lstat", "fstat", "opendir", "readdir",
+        "closedir", "system", "popen", "pclose", "execve", "execl", "execvp",
+        "fork", "vfork", "posix_spawn", "socket", "connect", "accept", "bind",
+        "listen", "send", "recv", "sendto", "recvfrom", "open", "open64",
+        "openat", "creat", "close", "read", "write", "pread", "pwrite",
+        "lseek", "unlink", "access", "mmap", "mprotect", "munmap", "brk",
+        "sbrk", "ioctl", "dlopen", "dlsym", "dlclose"}
 ALLOC = {"malloc", "calloc", "realloc", "free", "aligned_alloc"}
 MATH = {"sin", "cos", "tan", "atan2", "sqrt", "pow", "floor", "ceil", "fabs"}
 LIBC_STATE = {"__errno_location", "__ctype_b_loc", "__ctype_tolower_loc",
@@ -46,7 +56,8 @@ def validate(report):
 
 
 def classify(sym):
-    if sym in HOST or (sym.startswith("__libc_") or (sym.startswith("__") and sym.endswith("_chk"))):
+    if (sym in HOST or sym.startswith(("__libc_", "__isoc99_", "__isoc23_"))
+            or (sym.startswith("__") and sym.endswith("_chk"))):
         return "privileged_host_boundary", "Require reviewed Warden capability mediation or safe removal; no host passthrough"
     if sym in ALLOC:
         return "bounded_memory", "Use independently reviewed bounded guest heap with real memory accounting"

@@ -1,0 +1,13 @@
+# Narrow read-only Doom stdio compatibility — isolated prototype
+
+Task [#259](https://github.com/badwolfzm/pc/issues/259), coordination [#95](https://github.com/badwolfzm/pc/issues/95). This original file-level prototype implements `fopen`, `fclose`, `fread`, `fseek`, and `ftell` for **one explicitly granted, exact-path, read-only asset**. The callback supplies an already authenticated and capability-authorized read-at operation, reporting 0 only when the full requested region was read. The provider is not permitted to discover or open arbitrary host files, and never grants itself any kernel rights. It refuses write modes, path traversals, oversize assets (>64 MiB), invalid/stale handles and offsets outside the grant. Handles are never reused during the image lifetime; after revoke, regrant is disallowed. This intentionally means at most 16 total opens and only one asset file, not a usable generic stdio layer.
+
+```sh
+python3 tools/doom-readonly-file-crt/run.py
+```
+
+The host test compiles `file.c` with just its five stdio symbols renamed, so host printf/glibc is not replaced. A genuinely pinned upstream Doomgeneric + existing Warden adapter and runtime-bundle ET_REL test compiles the original symbol names and checks the five imports disappear without hiding sensitive write/process APIs. These steps are source/object correctness tests only, not Warden kernel enforcement or a runnable guest.
+
+**Known integration limitations / required review:** the callback is a trusted provider, not a capability proof. Kernel/asset owner must bind only authorized immutable asset data and validate memory/rights on every read, including revocation and source identity. The opaque `FILE*` tokens are not a general libc FILE object, so calling upstream functions that inspect or use host FILE internals is unsupported. This prototype cannot open arbitrary configs, saves, directories or multiple assets. Using an existing freed token after the fixed lifetime or across independently loaded image generations requires a kernel-level address-space identity check beyond this C code. `fread` at EOF returns full items read and may consume an incomplete final element; callers must not treat consumed partial bytes as a full item. No `fwrite`, `system`, `remove`, `rename`, `mkdir`, `stdout`, `stderr` or file stream formatting support. No direct Warden syscall implementation, network, host libc access or game boot.
+
+Independent review, genuine Doom callsite audit and service integration are required before merging into any native runtime. Security-sensitive changes remain isolated in this new folder; no kernel, ABI, existing WAD bridge, CRT provider or engine source is edited.

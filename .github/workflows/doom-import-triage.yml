@@ -1,0 +1,59 @@
+name: Genuine Doom unresolved import triage
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-import-triage/**'
+      - '.github/workflows/doom-import-triage.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  genuine-doom-imports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate triage parser with adversarial fixtures
+        run: python3 -m unittest discover -s tools/doom-import-triage -p 'test_*.py' -v
+      - name: Validate genuine merged linker gate
+        run: python3 -m unittest discover -s tools/doom-native-link-gate -p 'test_*.py' -v
+      - name: Acquire immutable upstream Doomgeneric
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric-pinned
+          git -C /tmp/doomgeneric-pinned checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doomgeneric-pinned rev-parse HEAD)" = e257a09527062bfb986b6e5e0780839b6cbd5b71
+      - name: Build actual pinned Doom + Warden freestanding objects
+        run: |
+          python3 tools/doom-native-link-gate/gate.py \
+            --source /tmp/doomgeneric-pinned/doomgeneric \
+            --output target/doom-import-triage/link
+      - name: Produce genuine unresolved import provenance triage
+        run: |
+          python3 tools/doom-import-triage/triage.py \
+            --gate target/doom-import-triage/link/gate.json \
+            --output target/doom-import-triage/triage.json
+      - name: Assert exact real-symbol coverage without claiming executable
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          original = json.loads(Path("target/doom-import-triage/link/gate.json").read_text())
+          triage = json.loads(Path("target/doom-import-triage/triage.json").read_text())
+          assert len(original["unresolved_symbols"]) == len(triage["ranked_imports"])
+          assert set(original["unresolved_symbols"]) == {x["symbol"] for x in triage["ranked_imports"]}
+          for row in triage["ranked_imports"]:
+              assert row["importing_objects"] == sorted(original["unresolved_symbol_provenance"][row["symbol"]])
+          assert triage["analysis_only"] is True
+          assert triage["native_executable_built"] is False
+          assert triage["native_warden_boot_verified"] is False
+          assert triage["game_fps_measured"] is False
+          PY
+      - name: Archive linker + triage reports (never guest boot evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-real-import-triage-diagnostics
+          path: |
+            target/doom-import-triage/link/gate.json
+            target/doom-import-triage/triage.json
+          if-no-files-found: ignore

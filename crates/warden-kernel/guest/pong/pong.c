@@ -32,6 +32,8 @@ static int lscore, rscore;
 static int lpad_prev, rpad_prev, ball_px, ball_py;
 static int key_up, key_down;
 static uint64_t frames, presents, tiles_sent;
+/* Simulation is fixed at 60 Hz regardless of framebuffer presentation rate. */
+static uint64_t sim_next, sim_period, sim_steps, sim_dropped;
 
 static int sink(void *user, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint32_t *px, uint32_t stride) {
     (void)user; (void)stride;
@@ -116,7 +118,18 @@ static int poll_keys(void) {
 static uint64_t ticks(void) { return sys3(SYS_TICKS, SLOT_DISPLAY, 0, 0); }
 
 static void frame(void) {
-    step(); draw();
+    /* Run at most four overdue physics steps; reject an unbounded catch-up burst.
+     * Rendering can be uncapped without accelerating the ball or paddles. */
+    uint64_t now = rdtsc();
+    int count = 0;
+    while (now >= sim_next && count < 4) {
+        step(); sim_next += sim_period; sim_steps++; count++;
+    }
+    if (now >= sim_next) {
+        sim_dropped++;                 /* saturation metric, not silent catch-up */
+        sim_next = now + sim_period;  /* skip stale backlog, never speed up game */
+    }
+    draw();
     if (gc_present(&canvas, sink, 0) != 0) sys3(SYS_EXIT, 2, 0, 0);
     frames++; presents++;
     sys3(SYS_YIELD, 0, 0, 0);   /* refill the partition budget; a frame never spends it */
@@ -134,7 +147,12 @@ int pong_main(void) {
     /* calibrate rdtsc against the 100 Hz partition timer over 20 ticks */
     uint64_t t0 = ticks(); while (ticks() == t0) {} uint64_t c0 = rdtsc(), t1 = ticks();
     while (ticks() < t1 + 20) {} uint64_t tsc_per_tick = (rdtsc() - c0) / 20;
+    if (!tsc_per_tick || tsc_per_tick > UINT64_MAX / 100) return 5;
     sys3(SYS_REPORT, SLOT_CONSOLE, 2, tsc_per_tick);                /* 2: TSC cycles per 10 ms tick */
+    sim_period = tsc_per_tick * 100 / 60;  /* 60 Hz physics, NOT 60 FPS */
+    if (!sim_period) return 6;
+    sim_next = rdtsc();
+    sim_steps = 0; sim_dropped = 0;
     int quit = 0;
     /* phase A: gameplay paced to 30 fps, 300 ticks (3 s) */
     uint64_t period = tsc_per_tick * 100 / 30, next = rdtsc() + period, late = 0, worst = 0;
@@ -151,6 +169,7 @@ int pong_main(void) {
     sys3(SYS_REPORT, SLOT_CONSOLE, 12, (tiles_sent - tl0) / n);                        /* tiles per frame */
     sys3(SYS_REPORT, SLOT_CONSOLE, 13, worst * 1000000 / (tsc_per_tick * 100));        /* worst frame, us */
     sys3(SYS_REPORT, SLOT_CONSOLE, 14, late);                                          /* frames that missed their slot */
+    sys3(SYS_REPORT, SLOT_CONSOLE, 40, sim_steps);                                     /* phase A fixed physics updates */
     /* phase B: gameplay uncapped, 200 ticks */
     worst = 0; start = ticks(); f0 = frames; tl0 = tiles_sent; c_start = rdtsc();
     while (ticks() - start < 200 && !quit) { uint64_t a = rdtsc(); quit = poll_keys(); frame(); uint64_t d = rdtsc() - a; if (d > worst) worst = d; }
@@ -159,6 +178,7 @@ int pong_main(void) {
     sys3(SYS_REPORT, SLOT_CONSOLE, 21, (frames - f0) * 100 * tsc_per_tick * 100 / (el ? el : 1));
     sys3(SYS_REPORT, SLOT_CONSOLE, 22, (tiles_sent - tl0) / n);
     sys3(SYS_REPORT, SLOT_CONSOLE, 23, worst * 1000000 / (tsc_per_tick * 100));
+    sys3(SYS_REPORT, SLOT_CONSOLE, 41, sim_steps);                                     /* cumulative through B */
     /* phase C: every frame redraws the whole screen (all 300 tiles through SYS_PRESENT), 200 ticks */
     worst = 0; start = ticks(); f0 = frames; tl0 = tiles_sent; c_start = rdtsc();
     while (ticks() - start < 200 && !quit) { uint64_t a = rdtsc(); quit = poll_keys(); gc_invalidate_all(&canvas); frame(); uint64_t d = rdtsc() - a; if (d > worst) worst = d; }
@@ -167,6 +187,8 @@ int pong_main(void) {
     sys3(SYS_REPORT, SLOT_CONSOLE, 26, (frames - f0) * 100 * tsc_per_tick * 100 / (el ? el : 1));
     sys3(SYS_REPORT, SLOT_CONSOLE, 27, (tiles_sent - tl0) / n);
     sys3(SYS_REPORT, SLOT_CONSOLE, 28, worst * 1000000 / (tsc_per_tick * 100));
+    sys3(SYS_REPORT, SLOT_CONSOLE, 42, sim_steps);                                     /* cumulative through C */
+    sys3(SYS_REPORT, SLOT_CONSOLE, 43, sim_dropped);                                   /* overloaded catch-up events */
     sys3(SYS_REPORT, SLOT_CONSOLE, 30, lscore * 100 + rscore);       /* 30: score */
     sys3(SYS_REPORT, SLOT_CONSOLE, 31, gc_ghost_hash(&canvas));      /* 31: what the game believes is on screen */
     sys3(SYS_REPORT, SLOT_CONSOLE, 32, presents);                    /* 32: frames presented in total */

@@ -48,5 +48,31 @@ class EvidenceTests(unittest.TestCase):
     def test_negative_counters_rejected(self):
         with self.assertRaises(Rejected):compare(self.a,self.b.replace("released=1","released=-1"))
 
+
+    def reverse_sample(self):
+        return (self.b.replace("mode=intervention", "mode=reverse")
+                .replace("end_x=-20321275", "end_x=-32497008")
+                .replace("end_y=16779695", "end_y=16775042")
+                .replace("e85ea77b9b601676", "100bb942a9496fd4"))
+    def test_three_directional_arms(self):
+        r = compare(self.a, self.b, self.reverse_sample())
+        self.assertTrue(r["opposite_direction_control_verified"])
+        self.assertLess(r["reverse_displacement_fixed_units"]["dx"], 0)
+    def test_reverse_missing_consumption_rejected(self):
+        with self.assertRaises(Rejected):
+            compare(self.a, self.b, self.reverse_sample().replace("consumed_up=1", "consumed_up=0"))
+    def test_reverse_wrong_start_rejected(self):
+        with self.assertRaises(Rejected):
+            compare(self.a, self.b, self.reverse_sample().replace("start_y=16777216", "start_y=16777217"))
+    def test_reverse_static_image_rejected(self):
+        with self.assertRaises(Rejected):
+            compare(self.a, self.b, self.reverse_sample().replace("100bb942a9496fd4", "6aa1d0936967b953"))
+    def test_reverse_same_direction_rejected(self):
+        with self.assertRaises(Rejected):
+            compare(self.a, self.b, self.b.replace("mode=intervention", "mode=reverse"))
+    def test_reverse_wrong_mode_rejected(self):
+        with self.assertRaises(Rejected):
+            compare(self.a, self.b, self.reverse_sample().replace("mode=reverse", "mode=control"))
+
 if __name__ == "__main__":
     unittest.main()

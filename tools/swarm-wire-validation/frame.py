@@ -42,7 +42,7 @@ def decode(frame):
             return out
         obj = json.loads(raw, object_pairs_hook=unique,
                          parse_constant=lambda _: (_ for _ in ()).throw(FrameError("nonfinite")))
-    except (UnicodeError, ValueError, TypeError) as exc:
+    except (UnicodeError, ValueError, TypeError, RecursionError) as exc:
         raise FrameError("invalid JSON") from exc
     _validate(obj)
     if encode(obj["kind"], obj["node"], obj["job"], obj["payload"])[4:] != frame[4:]:

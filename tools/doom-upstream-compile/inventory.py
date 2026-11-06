@@ -23,6 +23,25 @@ def object_list(makefile):
         raise ValueError("expected platform backend absent")
     return [w[:-2] + ".c" for w in words if w not in EXCLUDED]
 
+def zone_defaults(system_source):
+    """Read the pinned engine's hard allocator defaults, without guessing."""
+    values = {}
+    for name in ("DEFAULT_RAM", "MIN_RAM"):
+        match = re.search(r"(?m)^\\s*#\\s*define\\s+" + name + r"\\s+(\\d+)\\b", system_source)
+        if match is None:
+            raise ValueError("upstream allocator macro absent: " + name)
+        value = int(match.group(1))
+        if not 1 <= value <= 4096:
+            raise ValueError("unreasonable upstream allocator macro " + name)
+        values[name] = value
+    return {
+        "default_zone_bytes": values["DEFAULT_RAM"] * 1048576,
+        "minimum_zone_bytes": values["MIN_RAM"] * 1048576,
+        "default_zone_mib": values["DEFAULT_RAM"],
+        "minimum_zone_mib": values["MIN_RAM"],
+        "notice": "Source-level allocator default, not a measured resident RAM or guest address-space requirement; -mb override is possible but unproven."
+    }
+
 def nm_symbols(output):
     defs, unresolved = set(), set()
     for line in output.splitlines():
@@ -57,6 +76,7 @@ def build(root, out, cc):
         "translation_units_compiled": len(built),
         "omitted_backend": sorted(EXCLUDED),
         "compiler": cc, "flags": flags, "files": built,
+        "upstream_zone_allocator": zone_defaults((root / "i_system.c").read_text()),
         "unresolved_external_symbols": sorted(needs - defs),
         "notice": "Host object compilation only; no native Warden link/boot, no WAD, no FPS/RAM proof. Symbols may be resolved by a platform backend or libc."
     }

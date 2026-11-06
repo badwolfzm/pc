@@ -1,0 +1,43 @@
+name: Genuine Doom three distinct native import providers
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-three-import-integration/**'
+      - '.github/workflows/doom-three-import-integration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  combined-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Adversarial binary import contract test
+        run: python3 -m unittest discover -s tools/doom-three-import-integration -p 'test_*.py' -v
+      - name: Fetch exact pinned Doom upstream engine
+        run: |
+          git clone --quiet https://github.com/ozkl/doomgeneric.git /tmp/doom
+          git -C /tmp/doom checkout --quiet --detach e257a09527062bfb986b6e5e0780839b6cbd5b71
+          test "$(git -C /tmp/doom rev-parse HEAD)" = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
+      - name: Stage exact reviewed candidate errno dependency without changing main
+        run: |
+          git fetch --no-tags origin fae610a1f640e232499f6d86b980640e8559c420
+          test "$(git rev-parse FETCH_HEAD)" = "fae610a1f640e232499f6d86b980640e8559c420"
+          git show fae610a1f640e232499f6d86b980640e8559c420:tools/doom-native-errno/errno.c > /tmp/doom-native-errno.c
+          test -s /tmp/doom-native-errno.c
+      - name: Build original engine and exact three independent providers
+        run: |
+          python3 tools/doom-native-link-gate/gate.py --source /tmp/doom/doomgeneric --output target/doom-three-import
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-ctype/doom_ctype.c -o /tmp/doom-ctype.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c /tmp/doom-native-errno.c -o /tmp/doom-errno.o
+          cc -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -c tools/doom-native-strtol/strtol.c -o /tmp/doom-strtol.o
+          ld -r -o target/doom-three-import/with-three.o target/doom-three-import/all-objects.o /tmp/doom-ctype.o /tmp/doom-errno.o /tmp/doom-strtol.o
+          python3 tools/doom-three-import-integration/verify.py target/doom-three-import/all-objects.o target/doom-three-import/with-three.o /tmp/doom-ctype.o /tmp/doom-errno.o /tmp/doom-strtol.o target/doom-three-import/closure.json
+      - name: Preserve actual combined source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-doom-three-closure
+          path: target/doom-three-import/closure.json
+          if-no-files-found: ignore

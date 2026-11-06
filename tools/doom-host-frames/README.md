@@ -1,33 +1,65 @@
-# Real Doom game-loop host smoke (G1 groundwork)
+# Genuine Doom in-level host integration: controlled keyboard causality
 
-**Not a native Warden execution test.** This probe attempts actual
-`doomgeneric_Create()` and `doomgeneric_Tick()` from pinned genuine upstream
-Doomgeneric with a permitted IWAD, using the actual Warden platform callbacks
-but *host-side mock syscalls* and the bounded WAD bridge. It injects a PS/2 up-arrow key-down and key-up through the genuine Warden
-callback, then requires ten presented 320×200 frames with different first and
-last framebuffer hashes. A host-link `--wrap=DG_GetKey` interception confirms the **real upstream\nDoom input loop** consumes one press and one release through the unchanged\nWarden adapter. Key injection is simulated, not physical hardware.
-The updated fail-closed game-state gate additionally requires genuine Doom's\n`gamestate == GS_LEVEL`, a non-null active player entity on each of the ten\npost-startup frames, and **different initial and final in-level player\nworld coordinates**. A title-screen animation or consumed keys without\nadvancing an actual player can no longer pass this check. The test does not\nisolate causality to the synthetic keypress (other simulation effects can\nmove a player); it checks actual game-state advancement.\n\nThe host frame count is NOT an FPS measurement. Frames have hashes but no displayed FPS or native RAM
-measurements. A pass proves host-side gameplay/frame-loop initialization, not
-freestanding linkage or a QEMU game boot.
+**Host-side only, not native Warden/QEMU Doom.** The harness compiles the 80
+original Doomgeneric upstream translation units at pinned source
+`ozkl/doomgeneric@e257a09527062bfb986b6e5e0780839b6cbd5b71`.
+It uses the **merged** Warden Doom callback adapter, the bounded authorized
+WAD bridge and the upstream WAD class backend, but substitutes explicitly
+simulated host syscalls for the Warden kernel and uses host libc.
 
-CI obtains GPL Freedoom 0.13.0 release game data (phase 1) at an exact release
-URL; the WAD is **not stored or redistributed** in Warden. CI still depends
-on hosting of a release asset and currently does not embed a cryptographic
-release file digest, so production asset provenance must be pinned separately.
-Original Doomgeneric GPL obligations remain.
+The workflow downloads GPL Freedoom 0.13.0 from its release and verifies the
+**extracted Freedoom Phase 1 IWAD** SHA-256:
 
-`bash tools/doom-host-frames/run.sh /path/to/pinned/doomgeneric /path/to/DOOM1.WAD`
+```text
+7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d  DOOM1.WAD
+```
 
-Uses the **merged** Warden Doom callback adapter (#88, including
-Space/Ctrl action-key fixes #111), merged bounded WAD class bridge, and
-merged WAD file ABI backend from the checkout. CI no longer stages obsolete
-pre-merge callback or file-backend commits, and explicitly checks corrected
-`KEY_USE=0xa2` / `KEY_FIRE=0xa3` mappings before host gameplay. This gate
-was confirmed in [GitHub Actions run 42260455630](https://github.com/badwolfzm/pc/actions/runs/42260455630).
-Genuine Doom was in `GS_LEVEL` for all 10 post-startup frames; its player
-entity moved and the real Doom input poll consumed the simulated arrow-key
-press/release. This
-test does *not* claim one-vCPU execution (Linux and the CI host are distinct
-from QEMU), security endorsement, an acceptable 2 MiB guest VA window,
-low physical RAM, or Albion compatibility. Review security issues in WAD
-bridge and kernel before game integration.
+No WAD content or upstream GPL engine sources are vendored into this repo.
+GPL license obligations still apply to a combined distribution.
+
+## Two independent real-engine process runs
+
+```sh
+bash tools/doom-host-frames/run.sh /path/to/pinned/doomgeneric/doomgeneric /path/to/DOOM1.WAD
+```
+
+The shell script builds an actual host executable from upstream Doom and
+Warden adapter/bridge components, then executes it **twice** with the same
+source, game data, synthetic tick progression and 10 post-startup frames.
+
+1. **No-input control**: the mocked keyboard syscall always returns 0.
+   Requires genuine `GS_LEVEL`, 10 frames with a non-null player object,
+   unchanged player X/Y position and zero sent or consumed arrow transitions.
+2. **Input intervention**: injects PS/2 set-1 up-arrow press at gameplay
+   frame 2 and release at frame 6. Linker `--wrap=DG_GetKey` captures the
+   actual upstream input loop consuming both transitions through the merged
+   adapter; requires 10 frames in `GS_LEVEL`, a non-null player and changed
+   world position and framebuffer hashes. The unchanged Warden adapter is
+   linked in both runs; both processes start independently.
+
+Verified at source commit `319cdb17b3d023a5f96a73ea93b41e6d41f0228a`
+in [GitHub Actions run 42264761172](https://github.com/badwolfzm/pc/actions/runs/42264761172):
+
+- No input: player (-27262976,16777216) → (-27262976,16777216)
+- Arrow press/release: player (-27262976,16777216) → (-20321275,16779695)
+- Both runs: 10 genuine in-level gameplay frames; intervention run:
+  one press and release sent and consumed
+- This supports a **controlled keyboard→movement inference under this
+  deterministic host setup**, not proof about physical keyboard hardware,
+  actual guest wall-clock accuracy or arbitrary game behavior.
+
+The merged action-key mappings are checked as a CI precondition:
+`KEY_USE=0xa2` for Space and `KEY_FIRE=0xa3` for Ctrl. No obsolete
+callback adapter or WAD backend SHA is restored over reviewed main modules.
+
+## Non-claims and native dependencies
+
+Host-rendered frames, fake 10ms ticks and Linux-host libc are **not Warden
+kernel execution**. The 10-frame trial is not an FPS benchmark, does not
+exercise the one-vCPU 512 MiB QEMU profile, does not account for actual
+guest physical frames, and does not demonstrate unmodified Linux/Albion
+compatibility. Current genuine native Doom work still requires a complete
+freestanding link, reviewed runtime/allocator, larger loader/user virtual
+memory mapping, authorized WAD grant at boot, and two real Warden QEMU boots.
+Coordinate with native-link audit PR #171, allocator PR #168 and existing
+loader/security owners. Review before merging this draft PR.

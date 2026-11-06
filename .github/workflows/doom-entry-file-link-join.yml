@@ -42,6 +42,7 @@ jobs:
         run: |
           python3 tools/doom-entry-file-link-join/join.py \
             --runtime-object target/doom-entry-file-link-join/runtime/genuine-doom-with-native-runtime.o \
+            --runtime-report target/doom-entry-file-link-join/runtime/report.json \
             --file-source target/doom-entry-file-link-join/file.c \
             --output target/doom-entry-file-link-join/result
       - name: Archive genuine ET_REL and exact unresolved blockers

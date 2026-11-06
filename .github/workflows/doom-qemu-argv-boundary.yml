@@ -1,0 +1,19 @@
+name: Doom QEMU strict one-core 512 MiB argv
+on:
+  pull_request:
+    paths:
+      - 'tools/doom-qemu-argv-boundary/**'
+      - '.github/workflows/doom-qemu-argv-boundary.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests for strict argv profile
+        run: |
+          cd tools/doom-qemu-argv-boundary
+          python3 -m unittest discover -p 'test_*.py' -v

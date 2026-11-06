@@ -148,9 +148,12 @@ server.on('upgrade',(req,socket) => {
   const accept=crypto.createHash('sha1').update(key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+'\r\nSec-WebSocket-Protocol: warden.v1\r\n\r\n');
   clients.add(socket);
+  // A successful one-use token grants an expiring connection, not a perpetual session.
+  const expiryTimer = setTimeout(() => socket.destroy(), Math.max(1, expiry - Date.now()));
+  expiryTimer.unref();
   socket.on('data',chunk=>receiveWs(socket,chunk));
-  socket.on('close',()=>clients.delete(socket));
-  socket.on('error',()=>clients.delete(socket));
+  socket.on('close',()=>{ clearTimeout(expiryTimer); clients.delete(socket); });
+  socket.on('error',()=>{ clearTimeout(expiryTimer); clients.delete(socket); });
   websocketSend(socket,2,currentFrame);
 });
 server.listen(PORT,HOST,()=>console.log(`Warden web console listening at http://${HOST}:${PORT}; browser origin ${ORIGIN}; host-side only`));

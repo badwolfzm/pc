@@ -37,7 +37,7 @@ class Tests(unittest.TestCase):
                 subprocess.run(["ld","-r","-o",str(linked),
                                 str(base),str(entry),str(ex)],check=True)
                 v.verify(base,linked,entry,ex)
-            with self.assertRaisesRegex(ValueError, "unexpected"):
+            with self.assertRaisesRegex(ValueError, "entry or exit absent"):
                 v.verify(base,base,entry,ex)
             bad=build("bad", "void rogue(void){}")
             with self.assertRaisesRegex(ValueError, "native entry"):

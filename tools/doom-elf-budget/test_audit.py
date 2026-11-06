@@ -48,7 +48,7 @@ class AuditTests(unittest.TestCase):
         self.assertIn('empty/invalid', ' '.join(self.check(HEADER.replace('0x002000 R E', '0x000000 R E'))))
 
     def test_filesz_gt_mem(self):
-        self.assertIn('empty/invalid', ' '.join(self.check(HEADER.replace('0x001000 0x070000 RW', '0x080000 0x070000 RW')))
+        self.assertIn('empty/invalid', ' '.join(self.check(HEADER.replace('0x001000 0x070000 RW', '0x080000 0x070000 RW'))))
 
 if __name__ == '__main__':
     unittest.main()

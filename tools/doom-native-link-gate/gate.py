@@ -25,6 +25,7 @@ COMPONENTS = [
 CFLAGS = [
     "-std=gnu11", "-O2", "-ffreestanding", "-fno-builtin",
     "-fno-stack-protector", "-fno-pic", "-fno-pie",
+    "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=0",
     "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
     "-DDOOMGENERIC_RESX=320", "-DDOOMGENERIC_RESY=200",
     "-D_DEFAULT_SOURCE", "-DNORMALUNIX", "-DLINUX", "-DSNDSERV",
@@ -95,6 +96,20 @@ def compile_real_engine(source, output):
     return selected, files
 
 
+def unresolved_by_source(output, files):
+    """Report true unresolved symbols for each C translation unit.
+
+    A symbol required by one TU may be supplied by another; callers must
+    distinguish source-level requirements from combined-object blockers.
+    """
+    mapping = {}
+    for _, name in files:
+        syms = missing_symbols(execute(["nm", "-g", "-u", str(output / name)]))
+        if syms:
+            mapping[name] = syms
+    return mapping
+
+
 def run(source, output):
     source = source.resolve()
     revision = execute(["git", "-C", str(source), "rev-parse", "HEAD"]).strip()
@@ -104,6 +119,13 @@ def run(source, output):
     selected, files = compile_real_engine(source, output)
     combined = output / "all-objects.o"
     undefined = missing_symbols(execute(["nm", "-g", "-u", str(combined)]))
+    source_imports = unresolved_by_source(output, files)
+    source_provenance = {
+        symbol: sorted(obj for obj, syms in source_imports.items() if symbol in syms)
+        for symbol in undefined
+    }
+    if any(not owners for owners in source_provenance.values()):
+        raise RuntimeError("unresolved symbol has no source-level provenance")
     symbols = classify(undefined)
     result = {
         "upstream_commit": PIN,
@@ -115,6 +137,7 @@ def run(source, output):
         "combined_object_sha256": hashlib.sha256(combined.read_bytes()).hexdigest(),
         "unresolved_symbol_count": len(undefined),
         "unresolved_symbols": undefined,
+        "unresolved_symbol_provenance": source_provenance,
         "unresolved_categories": symbols,
         "native_executable_built": False,
         "native_warden_boot_verified": False,

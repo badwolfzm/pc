@@ -100,6 +100,33 @@ def call(cmd):
     return result.stdout
 
 
+
+def final_link_probe(combined, missing, executable):
+    """Attempt actual ET_EXEC link with native _start, never fabricate providers."""
+    if not missing:
+        raise ValueError('negative final-link gate requires unresolved genuine imports')
+    if executable.exists():
+        raise ValueError('refuse to overwrite an existing executable')
+    args = ['ld', '-nostdlib', '-static', '--no-undefined', '-e', '_start',
+            '-Ttext', '0x800000', '-o', str(executable), str(combined)]
+    result = subprocess.run(args, text=True, capture_output=True, timeout=60,
+                            check=False)
+    if result.returncode == 0 or executable.exists():
+        raise ValueError('unexpected executable/link success: independent review required')
+    stderr = result.stderr[:16384]
+    if 'undefined reference' not in stderr:
+        raise ValueError('final linker failed without genuine missing-symbol evidence')
+    return {
+        'entry': '_start',
+        'attempted': True,
+        'linker_exit_code': result.returncode,
+        'executable_built': False,
+        'remaining_imports': sorted(missing),
+        'stderr_excerpt': stderr,
+        'address_assumption_not_loader_approved': '0x800000',
+    }
+
+
 def run(runtime, runtime_report, output, entry, exit_source, file_source, scanner_report=None,
         console_source=None, no_shell_source=None):
     if console_source is None or no_shell_source is None:
@@ -133,6 +160,7 @@ def run(runtime, runtime_report, output, entry, exit_source, file_source, scanne
     call(['ld', '-r', '-o', str(combined), str(runtime), *(str(p) for p in objects)])
     combined_defs, after = inspect(combined)
     closed = verify(before, after, base_defs, extras)
+    final_probe = final_link_probe(combined, after, output / 'doom-native-candidate.elf')
     if '_start' not in combined_defs:
         raise ValueError('entry symbol lost in partial link')
     result = {
@@ -142,6 +170,7 @@ def run(runtime, runtime_report, output, entry, exit_source, file_source, scanne
                                          ('exit', exit_source), ('file', file_source),
                                          ('console', console_source), ('no_shell', no_shell_source)]},
         'combined_sha256': hashlib.sha256(combined.read_bytes()).hexdigest(),
+        'final_link_probe': final_probe,
         'removed_imports': closed,
         'remaining_imports': sorted(after),
         'guest_boot_verified': False,
@@ -170,5 +199,5 @@ if __name__ == '__main__':
         print(json.dumps(run(args.runtime_object, args.runtime_report, args.output, args.entry,
                              args.exit_source, args.file_source, args.scanner_report,
                              args.console_source, args.no_shell_source), sort_keys=True))
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
         p.error(str(exc))

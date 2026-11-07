@@ -22,3 +22,10 @@ The aim is to verify seven additional resolved imports against the original 16-p
 ## Merged console + no-shell addition
 
 The integration gate also compiles and links existing **merged** `tools/doom-native-console/console.c` (two defined exports `printf` and `puts`, explicit Warden console capability required) and `tools/doom-native-no-shell/no_shell.c` (one defined export `system`, always denies command execution). These are not new providers. Exact expected link closure expands by three imports; `fwrite`, `remove`, and `rename` remain deliberately unresolved. Missing FILE capability grants and kernel console identity checks are still separate runtime gates. Any actual `system()` request must fail; no shell or ambient filesystem authority is introduced.
+
+
+## Actual native `_start` ET_EXEC final-link attempt (negative gate)
+
+After the genuine 79-unit original engine and existing Warden providers have formed the combined ET_REL, this integration **invokes the real static ELF64 linker**, `ld -nostdlib -static --no-undefined -e _start -Ttext 0x800000`, on that precise object. The provisional `0x800000` text address is a diagnostic assumption only, not a kernel-loader or memory-permission authorization. A successful link is explicitly **not** treated as success in this negative gate: the workflow refuses unexpected linker success or any produced executable pending independent security and loader review. It requires an actual unresolved-reference diagnostic and archives the genuine remaining imports, input object SHA-256, linker exit code and capped stderr. No libc, host stub, permissive shell, or fake FILE implementation is supplied. This extends, rather than replaces, the earlier merged final-link diagnostic #246, which targets the previous 16-provider object and a different entry point.
+
+Final ELF mapping, WAD capabilities, actual guest startup, full static/runtime RAM and frame measurements remain unverified.

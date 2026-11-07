@@ -1,5 +1,8 @@
 import unittest
-from join import EXPECTED, PROTECTED, symbols, verify, verify_runtime_report
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch, Mock
+from join import EXPECTED, PROTECTED, symbols, verify, verify_runtime_report, final_link_probe
 
 BASE = set(EXPECTED) | set(PROTECTED) | {'printf', 'doom_missing'}
 AFTER = BASE - EXPECTED
@@ -71,6 +74,51 @@ class JoinTests(unittest.TestCase):
     def test_no_shell_is_exactly_one_provider(self):
         with self.assertRaises(ValueError):
             verify(BASE, AFTER | {'system'}, set(), EXTRAS)
+
+    def test_real_final_link_negative_gate(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / 'native-doom.elf'
+            fake_failure = Mock(returncode=1, stderr='ld: undefined reference to `stderr\'')
+            with patch('join.subprocess.run', return_value=fake_failure) as runner:
+                report = final_link_probe(Path(directory) / 'genuine.o',
+                                          {'stderr', 'fwrite'}, output)
+            self.assertEqual(report['entry'], '_start')
+            self.assertEqual(report['remaining_imports'], ['fwrite', 'stderr'])
+            self.assertFalse(report['executable_built'])
+            cmd = runner.call_args.args[0]
+            self.assertIn('_start', cmd)
+            self.assertIn('--no-undefined', cmd)
+            self.assertNotIn('-lc', cmd)
+
+    def test_final_link_rejects_false_success(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / 'native-doom.elf'
+            with patch('join.subprocess.run',
+                       return_value=Mock(returncode=0, stderr='')):
+                with self.assertRaises(ValueError):
+                    final_link_probe(Path(directory) / 'genuine.o', {'stderr'}, output)
+
+    def test_final_link_rejects_unrelated_failure(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / 'native-doom.elf'
+            with patch('join.subprocess.run',
+                       return_value=Mock(returncode=1, stderr='unknown linker option')):
+                with self.assertRaises(ValueError):
+                    final_link_probe(Path(directory) / 'genuine.o', {'stderr'}, output)
+
+    def test_final_link_rejects_output_overwrite(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / 'native-doom.elf'
+            output.write_bytes(b'protected')
+            with self.assertRaises(ValueError):
+                final_link_probe(Path(directory) / 'genuine.o', {'stderr'}, output)
+            self.assertEqual(output.read_bytes(), b'protected')
+
+    def test_final_link_refuses_fabricated_complete_input(self):
+        with TemporaryDirectory() as directory:
+            with self.assertRaises(ValueError):
+                final_link_probe(Path(directory) / 'genuine.o', set(),
+                                 Path(directory) / 'candidate.elf')
 
     def test_nm_parse(self):
         self.assertEqual(symbols('_start T 0 12\nfopen U\n'), ({'_start'}, {'fopen'}))
